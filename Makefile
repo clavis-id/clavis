@@ -57,6 +57,10 @@ test-postgres: ## Run the store tests against a throwaway PostgreSQL container
 	CLAVIS_TEST_POSTGRES_DSN="postgres://postgres:clavis@127.0.0.1:$(POSTGRES_PORT)/postgres?sslmode=disable" \
 		$(MAKE) --no-print-directory test-store
 
+.PHONY: test-go-import
+test-go-import: ## Test the Cloudflare Worker that serves the clavisid.org/clavis import path (needs Node.js)
+	node --test deploy/cloudflare/go-import/index.test.mjs
+
 .PHONY: cover
 cover: ## Run tests and write a coverage profile
 	CGO_ENABLED=$(RACE_CGO) $(GO) test -race -shuffle=on -covermode=atomic -coverprofile=$(COVER_PROFILE) ./...

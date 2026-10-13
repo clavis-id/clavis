@@ -1,0 +1,12 @@
+// Worker that serves the clavisid.org/clavis Go import path.
+// Deploy with: npx wrangler deploy --config deploy/cloudflare/go-import/wrangler.jsonc
+{
+  "name": "clavis-go-import",
+  "main": "index.mjs",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "routes": [
+    { "pattern": "clavisid.org", "custom_domain": true }
+  ],
+  "observability": { "enabled": true }
+}
