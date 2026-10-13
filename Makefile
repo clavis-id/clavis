@@ -101,6 +101,11 @@ tidy-check: ## Fail if any go.mod or go.sum is not tidy
 .PHONY: check
 check: tidy-check lint vuln test ## Run the checks that CI runs on every pull request
 
+.PHONY: release-snapshot
+release-snapshot: ## Build release archives and images locally, without signing or publishing
+	$(call TOOL,goreleaser) check
+	$(call TOOL,goreleaser) release --snapshot --clean --skip=sign,sbom
+
 .PHONY: clean
 clean: ## Remove build and test artifacts
 	rm -rf bin dist $(COVER_PROFILE) clavis.db clavis.db-shm clavis.db-wal
