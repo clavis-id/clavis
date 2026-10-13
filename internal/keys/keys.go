@@ -31,6 +31,9 @@ import (
 	"uuid"
 
 	"github.com/go-jose/go-jose/v4"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/clavis-id/clavis/kek"
 	"github.com/clavis-id/clavis/store"
@@ -123,6 +126,9 @@ type Config struct {
 	Logger    *slog.Logger
 	Now       func() time.Time
 	NewID     func() uuid.UUID
+	// MeterProvider records rotation metrics. When nil, metrics are
+	// discarded.
+	MeterProvider metric.MeterProvider
 }
 
 // Manager creates, rotates, publishes and loads signing keys. It is safe for
@@ -134,6 +140,9 @@ type Manager struct {
 	logger    *slog.Logger
 	now       func() time.Time
 	newID     func() uuid.UUID
+
+	created  metric.Int64Counter
+	failures metric.Int64Counter
 
 	mu      sync.Mutex
 	signers map[uuid.UUID]crypto.Signer // decrypted private keys by record ID
@@ -147,6 +156,21 @@ func NewManager(cfg Config) (*Manager, error) {
 	if cfg.Store == nil || cfg.Encrypter == nil || cfg.Logger == nil || cfg.Now == nil || cfg.NewID == nil {
 		return nil, errors.New("keys: Store, Encrypter, Logger, Now and NewID are required")
 	}
+	mp := cfg.MeterProvider
+	if mp == nil {
+		mp = noop.NewMeterProvider()
+	}
+	meter := mp.Meter("github.com/clavis-id/clavis/internal/keys")
+	created, err := meter.Int64Counter("clavis.signing_keys.created",
+		metric.WithDescription("Signing keys created by rotation."), metric.WithUnit("{key}"))
+	if err != nil {
+		return nil, fmt.Errorf("keys: creating metric: %w", err)
+	}
+	failures, err := meter.Int64Counter("clavis.signing_keys.rotation_failures",
+		metric.WithDescription("Background rotation runs that failed."), metric.WithUnit("{run}"))
+	if err != nil {
+		return nil, fmt.Errorf("keys: creating metric: %w", err)
+	}
 	return &Manager{
 		store:     cfg.Store,
 		encrypter: cfg.Encrypter,
@@ -154,6 +178,8 @@ func NewManager(cfg Config) (*Manager, error) {
 		logger:    cfg.Logger,
 		now:       cfg.Now,
 		newID:     cfg.NewID,
+		created:   created,
+		failures:  failures,
 		signers:   make(map[uuid.UUID]crypto.Signer),
 	}, nil
 }
@@ -169,6 +195,7 @@ func (m *Manager) Run(ctx context.Context, interval time.Duration) {
 			return
 		case <-ticker.C:
 			if err := m.RotateAll(ctx); err != nil && ctx.Err() == nil {
+				m.failures.Add(ctx, 1)
 				m.logger.LogAttrs(ctx, slog.LevelError, "signing key rotation failed", slog.String("error", err.Error()))
 			}
 		}
@@ -278,6 +305,7 @@ func (m *Manager) create(ctx context.Context, tenantID uuid.UUID, alg string, ge
 	case err != nil:
 		return fmt.Errorf("keys: storing key: %w", err)
 	}
+	m.created.Add(ctx, 1, metric.WithAttributes(attribute.String("algorithm", alg)))
 	m.logger.LogAttrs(ctx, slog.LevelInfo, "created signing key",
 		slog.String("tenant_id", tenantID.String()),
 		slog.String("algorithm", alg),
