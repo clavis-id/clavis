@@ -32,9 +32,6 @@ const readinessTimeout = 2 * time.Second
 // successor key before it starts signing.
 const jwksMaxAge = 5 * time.Minute
 
-// defaultKeyCheckInterval is how often signing key rotation runs.
-const defaultKeyCheckInterval = time.Hour
-
 // Config configures a Clavis server.
 type Config struct {
 	// Issuer is the base URL that identifies this Clavis instance, for
@@ -78,15 +75,16 @@ type SigningKeyPolicy struct {
 	Algorithms []string
 	// RotationPeriod is how long each key signs. Default: 30 days.
 	RotationPeriod time.Duration
-	// PublishAhead is how long a new key is published before it starts
-	// signing, so clients that cache the JWK set learn it in time. Default:
-	// 24 hours.
+	// PublishAhead is the minimum time a new key is published before it
+	// starts signing, so clients that cache the JWK set learn it in time. At
+	// least 15 minutes. Default: 24 hours.
 	PublishAhead time.Duration
 	// Retention is how long a retired key stays published so tokens it
 	// signed can still be verified. Default: 48 hours.
 	Retention time.Duration
-	// CheckInterval is how often rotation runs. It must be shorter than
-	// PublishAhead. Default: 1 hour.
+	// CheckInterval is how often rotation runs. It must not exceed
+	// PublishAhead, and successors are created PublishAhead plus
+	// CheckInterval before they sign. Default: 1 hour.
 	CheckInterval time.Duration
 }
 
@@ -130,10 +128,9 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	if cfg.KeyEncrypter == nil {
 		return nil, errors.New("clavis: Config.KeyEncrypter is required")
 	}
-	policy, interval := cfg.SigningKeys.withDefaults()
-	if interval <= 0 || interval >= policy.PublishAhead {
-		return nil, fmt.Errorf("clavis: SigningKeys.CheckInterval (%s) must be positive and shorter than PublishAhead (%s)",
-			interval, policy.PublishAhead)
+	policy := cfg.SigningKeys.withDefaults()
+	if err := policy.Validate(); err != nil {
+		return nil, fmt.Errorf("clavis: invalid SigningKeys: %w", err)
 	}
 	logger := cfg.Logger
 	if logger == nil {
@@ -148,12 +145,8 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		meter = otel.GetMeterProvider()
 	}
 
+	// Everything is validated before the first write to the store.
 	deps := app.Deps{Store: cfg.Store, Logger: logger, Now: time.Now, NewID: uuid.NewV7}
-	tenant, err := app.EnsureDefaultTenant(ctx, deps)
-	if err != nil {
-		return nil, fmt.Errorf("clavis: %w", err)
-	}
-
 	manager, err := keys.NewManager(keys.Config{
 		Store:         cfg.Store,
 		Encrypter:     cfg.KeyEncrypter,
@@ -163,6 +156,10 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		NewID:         deps.NewID,
 		MeterProvider: meter,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("clavis: %w", err)
+	}
+	tenant, err := app.EnsureDefaultTenant(ctx, deps)
 	if err != nil {
 		return nil, fmt.Errorf("clavis: %w", err)
 	}
@@ -184,7 +181,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	s.handler = s.routes()
 	go func() {
 		defer close(s.done)
-		manager.Run(bgCtx, interval)
+		manager.Run(bgCtx)
 	}()
 	return s, nil
 }
@@ -285,9 +282,9 @@ func (s *Server) internalError(w http.ResponseWriter, r *http.Request, action st
 	_, _ = w.Write([]byte("internal error\n"))
 }
 
-// withDefaults returns the rotation policy and check interval with defaults
-// applied to zero fields. Other values pass through and are validated later.
-func (p SigningKeyPolicy) withDefaults() (keys.Policy, time.Duration) {
+// withDefaults returns the rotation policy with keys.DefaultPolicy applied to
+// zero fields. Other values pass through and are validated by the caller.
+func (p SigningKeyPolicy) withDefaults() keys.Policy {
 	policy := keys.DefaultPolicy()
 	if len(p.Algorithms) > 0 {
 		policy.Algorithms = p.Algorithms
@@ -301,9 +298,8 @@ func (p SigningKeyPolicy) withDefaults() (keys.Policy, time.Duration) {
 	if p.Retention != 0 {
 		policy.Retention = p.Retention
 	}
-	interval := defaultKeyCheckInterval
 	if p.CheckInterval != 0 {
-		interval = p.CheckInterval
+		policy.CheckInterval = p.CheckInterval
 	}
-	return policy, interval
+	return policy
 }

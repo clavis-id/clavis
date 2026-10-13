@@ -16,9 +16,10 @@ that the change fits the [roadmap](docs/roadmap.md) and the
 - Node.js, only to test the Cloudflare Worker in `deploy/cloudflare/go-import`
   (`make test-go-import`).
 
-Every other tool (golangci-lint, govulncheck, gitleaks, actionlint) is pinned in its own module
-under `tools/` and runs through `go tool`; nothing else needs to be installed. Clavis does not
-use CGo, so no C toolchain is required either.
+Every other tool (golangci-lint, govulncheck, gitleaks, actionlint, goreleaser) is pinned in its
+own module under `tools/` and runs through `go tool`; nothing else needs to be installed.
+Clavis itself does not use CGo. On Linux, `make test` enables the race detector, which needs a C
+compiler such as gcc; on macOS no C toolchain is needed.
 
 ## Common tasks
 

@@ -3,6 +3,7 @@ package kek
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -168,4 +169,27 @@ func FuzzDecrypt(f *testing.F) {
 			t.Fatalf("Decrypt() accepted forged data and returned %q", got)
 		}
 	})
+}
+
+// TestDecryptsStoredFormat pins the storage format: a random 96-bit nonce,
+// then the AES-256-GCM ciphertext and tag. The vector was produced by the
+// first implementation, so data stored by any release stays readable.
+func TestDecryptsStoredFormat(t *testing.T) {
+	t.Parallel()
+	secret := make([]byte, SecretSize)
+	for i := range secret {
+		secret[i] = byte(i)
+	}
+	data, err := hex.DecodeString("000102030405060708090a0b3770bf6da491a73be624eeabdc880c08f1bfe658da3b6f4dc135e0cc9b3520d51bb728f7")
+	if err != nil {
+		t.Fatalf("decoding vector: %v", err)
+	}
+	l := mustLocal(t, secret)
+	got, err := l.Decrypt(t.Context(), Ciphertext{KeyID: l.PrimaryKeyID(), Data: data}, []byte("clavis/test"))
+	if err != nil {
+		t.Fatalf("Decrypt() unexpected error: %v", err)
+	}
+	if string(got) != "private key material" {
+		t.Errorf("Decrypt() = %q, want %q", got, "private key material")
+	}
 }

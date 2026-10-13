@@ -15,6 +15,7 @@ import (
 
 	"clavisid.org/clavis/internal/app"
 	"clavisid.org/clavis/internal/issuer"
+	"clavisid.org/clavis/internal/keys"
 	"clavisid.org/clavis/kek"
 	"clavisid.org/clavis/store"
 	"clavisid.org/clavis/store/sqlite"
@@ -98,7 +99,7 @@ func TestNewRejectsInvalidSigningKeyPolicy(t *testing.T) {
 	tests := map[string]SigningKeyPolicy{
 		"missing RS256":               {Algorithms: []string{"ES256"}},
 		"unsupported algorithm":       {Algorithms: []string{"RS256", "HS256"}},
-		"check interval too long":     {CheckInterval: 24 * time.Hour},
+		"check interval too long":     {CheckInterval: 25 * time.Hour},
 		"negative check interval":     {CheckInterval: -time.Minute},
 		"publish ahead beyond period": {RotationPeriod: time.Hour, PublishAhead: 2 * time.Hour, CheckInterval: time.Minute},
 		"negative retention":          {Retention: -time.Hour},
@@ -306,5 +307,31 @@ func TestCloseStopsBackgroundWork(t *testing.T) {
 	}
 	if rec := serve(t, s.Handler(), http.MethodGet, "/oauth2/jwks"); rec.Code != http.StatusOK {
 		t.Errorf("GET /oauth2/jwks after Close() status = %d, want 200", rec.Code)
+	}
+}
+
+func TestNewValidatesBeforeWriting(t *testing.T) {
+	t.Parallel()
+
+	st := openStore(t)
+	cfg := testConfig(t, st)
+	cfg.SigningKeys = SigningKeyPolicy{Algorithms: []string{"ES256"}}
+	if _, err := New(t.Context(), cfg); err == nil {
+		t.Fatal("New() accepted a policy without RS256")
+	}
+	if _, err := st.Tenants().GetBySlug(t.Context(), app.DefaultTenantSlug); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("New() with an invalid policy wrote the default tenant (lookup error: %v)", err)
+	}
+}
+
+// TestJWKSCachingFitsPublishAhead guarantees that a key reaches every cached
+// copy of the JWK set before it signs: the HTTP cache lifetime plus the
+// Manager's cache lifetime must stay below the shortest publish-ahead.
+func TestJWKSCachingFitsPublishAhead(t *testing.T) {
+	t.Parallel()
+
+	if jwksMaxAge+keys.JWKSCacheTTL >= keys.MinPublishAhead {
+		t.Errorf("JWK set caching (%s + %s) is not shorter than keys.MinPublishAhead (%s)",
+			jwksMaxAge, keys.JWKSCacheTTL, keys.MinPublishAhead)
 	}
 }

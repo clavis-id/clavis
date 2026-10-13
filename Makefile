@@ -44,6 +44,10 @@ run: ## Run the server with the local development configuration
 test: ## Run tests with the race detector in random order
 	CGO_ENABLED=$(RACE_CGO) $(GO) test -race -shuffle=on ./...
 
+.PHONY: test-fips
+test-fips: ## Run the tests with the certified Go Cryptographic Module in FIPS 140-only mode
+	GOFIPS140=certified GODEBUG=fips140=only $(GO) test -count=1 ./...
+
 .PHONY: test-store
 test-store: ## Run the store tests (PostgreSQL included when CLAVIS_TEST_POSTGRES_DSN is set)
 	CGO_ENABLED=$(RACE_CGO) $(GO) test -race -shuffle=on ./store/...

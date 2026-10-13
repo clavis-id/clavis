@@ -50,6 +50,8 @@ jobs:
         run: make secrets
       - name: Import path Worker
         run: make test-go-import
+      - name: FIPS 140-only mode
+        run: make test-fips
       - name: Coverage floor
         run: make cover-check
       - name: Fuzz

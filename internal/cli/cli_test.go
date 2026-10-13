@@ -145,7 +145,8 @@ func TestMigrate(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "clavis.db")
-	environ := []string{"CLAVIS_DATABASE_DSN=" + path, "CLAVIS_DATABASE_AUTO_MIGRATE=false", testKey}
+	// No encryption key: migrations need only the database settings.
+	environ := []string{"CLAVIS_DATABASE_DSN=" + path, "CLAVIS_DATABASE_AUTO_MIGRATE=false"}
 
 	var stdout, stderr bytes.Buffer
 	if code := Execute(t.Context(), []string{"migrate"}, &stdout, &stderr, environ); code != 0 {

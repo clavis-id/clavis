@@ -183,8 +183,10 @@ func TestRotationLifecycle(t *testing.T) {
 	mustRotate(t, m, f.tenant.ID)
 	first := currentKID(t, m, f.tenant.ID)
 
-	// Just before the publish-ahead window: nothing changes.
-	f.clock.Advance(policy.RotationPeriod - policy.PublishAhead - time.Second)
+	// Just before the window that starts PublishAhead plus CheckInterval
+	// before the switch: nothing changes.
+	lead := policy.PublishAhead + policy.CheckInterval
+	f.clock.Advance(policy.RotationPeriod - lead - time.Second)
 	mustRotate(t, m, f.tenant.ID)
 	if got := kids(t, m, f.tenant.ID); len(got) != 1 {
 		t.Fatalf("published keys = %v, want only the first key", got)
@@ -208,7 +210,7 @@ func TestRotationLifecycle(t *testing.T) {
 
 	// At the scheduled switch the successor signs and the first key remains
 	// published for verification.
-	f.clock.Advance(policy.PublishAhead)
+	f.clock.Advance(lead)
 	if got := currentKID(t, m, f.tenant.ID); got != second {
 		t.Errorf("signing key after the switch = %q, want %q", got, second)
 	}
@@ -376,13 +378,17 @@ func TestPolicyValidation(t *testing.T) {
 	}
 
 	tests := map[string]func(*Policy){
-		"missing RS256":             func(p *Policy) { p.Algorithms = []string{ES256} },
-		"unsupported algorithm":     func(p *Policy) { p.Algorithms = []string{RS256, "HS256"} },
-		"duplicate algorithm":       func(p *Policy) { p.Algorithms = []string{RS256, RS256} },
-		"publish ahead too long":    func(p *Policy) { p.PublishAhead = p.RotationPeriod },
-		"publish ahead not set":     func(p *Policy) { p.PublishAhead = 0 },
-		"retention not positive":    func(p *Policy) { p.Retention = 0 },
-		"rotation period too short": func(p *Policy) { p.RotationPeriod = time.Hour },
+		"missing RS256":                      func(p *Policy) { p.Algorithms = []string{ES256} },
+		"unsupported algorithm":              func(p *Policy) { p.Algorithms = []string{RS256, "HS256"} },
+		"duplicate algorithm":                func(p *Policy) { p.Algorithms = []string{RS256, RS256} },
+		"publish ahead too long":             func(p *Policy) { p.PublishAhead = p.RotationPeriod },
+		"publish ahead not set":              func(p *Policy) { p.PublishAhead = 0 },
+		"publish ahead below the minimum":    func(p *Policy) { p.PublishAhead, p.CheckInterval = 10*time.Minute, time.Minute },
+		"check interval not set":             func(p *Policy) { p.CheckInterval = 0 },
+		"check interval above publish ahead": func(p *Policy) { p.CheckInterval = p.PublishAhead + time.Second },
+		"no room for the successor":          func(p *Policy) { p.RotationPeriod = p.PublishAhead + p.CheckInterval },
+		"retention not positive":             func(p *Policy) { p.Retention = 0 },
+		"rotation period too short":          func(p *Policy) { p.RotationPeriod = time.Hour },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -450,7 +456,7 @@ type runFixture struct {
 	done   chan struct{}
 }
 
-func startRun(t *testing.T, policy Policy, interval time.Duration) *runFixture {
+func startRun(t *testing.T, policy Policy) *runFixture {
 	t.Helper()
 	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "clavis.db"))
 	if err != nil {
@@ -477,7 +483,7 @@ func startRun(t *testing.T, policy Policy, interval time.Duration) *runFixture {
 	f := &runFixture{store: s, tenant: tn, reader: reader, cancel: cancel, done: make(chan struct{})}
 	go func() {
 		defer close(f.done)
-		m.Run(ctx, interval)
+		m.Run(ctx)
 	}()
 	return f
 }
@@ -523,8 +529,9 @@ func TestRunRotatesOnSchedule(t *testing.T) {
 			RotationPeriod: 4 * time.Hour,
 			PublishAhead:   2 * time.Hour,
 			Retention:      time.Hour,
+			CheckInterval:  30 * time.Minute,
 		}
-		f := startRun(t, policy, 30*time.Minute)
+		f := startRun(t, policy)
 		defer f.stop()
 
 		synctest.Wait()
@@ -553,7 +560,9 @@ func TestRunRotatesOnSchedule(t *testing.T) {
 
 func TestRunCountsFailures(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		f := startRun(t, DefaultPolicy(), time.Minute)
+		policy := DefaultPolicy()
+		policy.CheckInterval = time.Minute
+		f := startRun(t, policy)
 		defer f.stop()
 
 		// A closed store makes every rotation fail.
@@ -566,4 +575,82 @@ func TestRunCountsFailures(t *testing.T) {
 			t.Errorf("rotation failures counter = %d, want 3", got)
 		}
 	})
+}
+
+func TestAddedAlgorithmIsPublishedAhead(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	enc := newEncrypter(t, kek.GenerateSecret())
+	mustRotate(t, f.manager(t, enc, DefaultPolicy()), f.tenant.ID)
+
+	policy := DefaultPolicy()
+	policy.Algorithms = []string{RS256, ES256}
+	m := f.manager(t, enc, policy)
+	mustRotate(t, m, f.tenant.ID)
+
+	if got := kids(t, m, f.tenant.ID); len(got) != 2 {
+		t.Fatalf("published keys = %v, want the RS256 key and the new ES256 key", got)
+	}
+	if _, err := m.Signer(t.Context(), f.tenant.ID, ES256); !errors.Is(err, ErrNoActiveKey) {
+		t.Errorf("ES256 Signer() before publish-ahead elapsed error = %v, want ErrNoActiveKey", err)
+	}
+	f.clock.Advance(policy.PublishAhead)
+	if _, err := m.Signer(t.Context(), f.tenant.ID, ES256); err != nil {
+		t.Errorf("ES256 Signer() after publish-ahead unexpected error: %v", err)
+	}
+}
+
+func TestJWKSSkipsCorruptKeys(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	m := f.manager(t, newEncrypter(t, kek.GenerateSecret()), DefaultPolicy())
+	mustRotate(t, m, f.tenant.ID)
+	healthy := currentKID(t, m, f.tenant.ID)
+
+	corrupt := store.SigningKey{
+		ID:              uuid.NewV7(),
+		TenantID:        f.tenant.ID,
+		Algorithm:       ES256,
+		Generation:      1,
+		KeyID:           "corrupt",
+		PublicKey:       []byte("not a public key"),
+		PrivateKey:      []byte("not a private key"),
+		EncryptionKeyID: "local:0000000000000000",
+		ActivatesAt:     f.clock.Now(),
+		RetiresAt:       f.clock.Now().Add(time.Hour),
+		ExpiresAt:       f.clock.Now().Add(2 * time.Hour),
+		CreatedAt:       f.clock.Now(),
+	}
+	if err := f.store.SigningKeys().Create(t.Context(), corrupt); err != nil {
+		t.Fatalf("storing corrupt key: %v", err)
+	}
+	f.clock.Advance(JWKSCacheTTL)
+
+	if got := kids(t, m, f.tenant.ID); len(got) != 1 || got[0] != healthy {
+		t.Errorf("published keys = %v, want only the healthy key %q", got, healthy)
+	}
+}
+
+func TestJWKSIsCached(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	enc := newEncrypter(t, kek.GenerateSecret())
+	policy := DefaultPolicy()
+	m := f.manager(t, enc, policy)
+	mustRotate(t, m, f.tenant.ID)
+
+	// Fill the cache at the moment another instance schedules a successor.
+	f.clock.Advance(policy.RotationPeriod - policy.PublishAhead - policy.CheckInterval)
+	if got := kids(t, m, f.tenant.ID); len(got) != 1 {
+		t.Fatalf("published keys = %v, want 1", got)
+	}
+	mustRotate(t, f.manager(t, enc, policy), f.tenant.ID)
+
+	if got := kids(t, m, f.tenant.ID); len(got) != 1 {
+		t.Errorf("published keys before the cache expires = %v, want the cached single key", got)
+	}
+	f.clock.Advance(JWKSCacheTTL)
+	if got := kids(t, m, f.tenant.ID); len(got) != 2 {
+		t.Errorf("published keys after the cache expires = %v, want 2", got)
+	}
 }

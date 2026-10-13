@@ -30,6 +30,19 @@ var createMu sync.Mutex
 // database when the test ends.
 func openEmpty(t *testing.T, opts ...postgres.Option) *postgres.Store {
 	t.Helper()
+	dsn := createDatabase(t)
+	s, err := postgres.Open(t.Context(), dsn, opts...)
+	if err != nil {
+		t.Fatalf("Open() unexpected error: %v", err)
+	}
+	t.Cleanup(s.Close)
+	return s
+}
+
+// createDatabase creates an empty database, drops it when the test ends, and
+// returns its connection URL.
+func createDatabase(t *testing.T) string {
+	t.Helper()
 	admin := os.Getenv(adminDSNVar)
 	if admin == "" {
 		t.Skipf("set %s to run PostgreSQL tests (see make test-postgres)", adminDSNVar)
@@ -53,21 +66,18 @@ func openEmpty(t *testing.T, opts ...postgres.Option) *postgres.Store {
 	}
 
 	u.Path = "/" + strings.Trim(name, `"`)
-	s, err := postgres.Open(ctx, u.String(), opts...)
-	if err != nil {
-		t.Fatalf("Open() unexpected error: %v", err)
-	}
 	t.Cleanup(func() {
-		// t.Context is already canceled when cleanup functions run.
+		// t.Context is already canceled when cleanup functions run. Cleanups
+		// run in reverse order, so stores opened on this database are closed
+		// before it is dropped.
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		s.Close()
 		if _, err := conn.Exec(ctx, "DROP DATABASE "+name+" WITH (FORCE)"); err != nil {
 			t.Errorf("dropping test database: %v", err)
 		}
 		_ = conn.Close(ctx)
 	})
-	return s
+	return u.String()
 }
 
 func TestContract(t *testing.T) {
@@ -105,5 +115,38 @@ func TestOpenHidesConnectionStringErrors(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "s3cret") {
 		t.Errorf("Open() error %q leaks the password", err)
+	}
+}
+
+// TestConcurrentMigrations starts several instances against one empty
+// database at the same time, as a highly available deployment does.
+func TestConcurrentMigrations(t *testing.T) {
+	t.Parallel()
+	dsn := createDatabase(t)
+
+	const instances = 4
+	stores := make([]*postgres.Store, instances)
+	for i := range stores {
+		s, err := postgres.Open(t.Context(), dsn, postgres.WithoutMigrations())
+		if err != nil {
+			t.Fatalf("Open() unexpected error: %v", err)
+		}
+		t.Cleanup(s.Close)
+		stores[i] = s
+	}
+
+	errs := make([]error, instances)
+	var wg sync.WaitGroup
+	for i, s := range stores {
+		wg.Go(func() { errs[i] = s.Migrate(t.Context()) })
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("instance %d Migrate() unexpected error: %v", i, err)
+		}
+	}
+	if _, err := stores[0].Tenants().List(t.Context(), [16]byte{}, 1); err != nil {
+		t.Errorf("schema is not usable after concurrent migrations: %v", err)
 	}
 }
