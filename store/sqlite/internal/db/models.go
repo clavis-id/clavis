@@ -4,6 +4,21 @@
 
 package db
 
+type SigningKey struct {
+	ID              string
+	TenantID        string
+	Algorithm       string
+	Generation      int64
+	KeyID           string
+	PublicKey       []byte
+	PrivateKey      []byte
+	EncryptionKeyID string
+	ActivatesAt     int64
+	RetiresAt       int64
+	ExpiresAt       int64
+	CreatedAt       int64
+}
+
 type Tenant struct {
 	ID        string
 	Slug      string

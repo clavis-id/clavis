@@ -10,6 +10,21 @@ import (
 	"uuid"
 )
 
+type SigningKey struct {
+	ID              uuid.UUID
+	TenantID        uuid.UUID
+	Algorithm       string
+	Generation      int64
+	KeyID           string
+	PublicKey       []byte
+	PrivateKey      []byte
+	EncryptionKeyID string
+	ActivatesAt     time.Time
+	RetiresAt       time.Time
+	ExpiresAt       time.Time
+	CreatedAt       time.Time
+}
+
 type Tenant struct {
 	ID        uuid.UUID
 	Slug      string

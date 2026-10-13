@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"time"
 	"uuid"
 
 	"github.com/jackc/pgx/v5"
@@ -25,14 +26,18 @@ import (
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
 
-// uniqueViolation is the SQLSTATE for unique and primary key violations.
-const uniqueViolation = "23505"
+// SQLSTATE codes mapped to store errors.
+const (
+	foreignKeyViolation = "23503"
+	uniqueViolation     = "23505"
+)
 
 // Store is a store.Store backed by PostgreSQL. It is safe for concurrent use.
 type Store struct {
-	pool     *pgxpool.Pool
-	ownsPool bool
-	tenants  tenants
+	pool        *pgxpool.Pool
+	ownsPool    bool
+	tenants     tenants
+	signingKeys signingKeys
 }
 
 var _ store.Store = (*Store)(nil)
@@ -76,7 +81,8 @@ func New(ctx context.Context, pool *pgxpool.Pool, opts ...Option) (*Store, error
 	for _, opt := range opts {
 		opt(&o)
 	}
-	s := &Store{pool: pool, tenants: tenants{q: db.New(pool)}}
+	q := db.New(pool)
+	s := &Store{pool: pool, tenants: tenants{q: q}, signingKeys: signingKeys{q: q}}
 	if err := s.Ping(ctx); err != nil {
 		return nil, err
 	}
@@ -123,6 +129,9 @@ func (s *Store) Ping(ctx context.Context) error {
 
 // Tenants returns the tenant repository.
 func (s *Store) Tenants() store.Tenants { return s.tenants }
+
+// SigningKeys returns the signing key repository.
+func (s *Store) SigningKeys() store.SigningKeys { return s.signingKeys }
 
 type tenants struct {
 	q *db.Queries
@@ -192,6 +201,61 @@ func tenantFromRow(row db.Tenant) store.Tenant {
 	}
 }
 
+type signingKeys struct {
+	q *db.Queries
+}
+
+func (r signingKeys) Create(ctx context.Context, k store.SigningKey) error {
+	err := r.q.CreateSigningKey(ctx, db.CreateSigningKeyParams{
+		ID:              k.ID,
+		TenantID:        k.TenantID,
+		Algorithm:       k.Algorithm,
+		Generation:      k.Generation,
+		KeyID:           k.KeyID,
+		PublicKey:       k.PublicKey,
+		PrivateKey:      k.PrivateKey,
+		EncryptionKeyID: k.EncryptionKeyID,
+		ActivatesAt:     k.ActivatesAt,
+		RetiresAt:       k.RetiresAt,
+		ExpiresAt:       k.ExpiresAt,
+		CreatedAt:       k.CreatedAt,
+	})
+	return mapError("creating signing key", err)
+}
+
+func (r signingKeys) List(ctx context.Context, tenantID uuid.UUID) ([]store.SigningKey, error) {
+	rows, err := r.q.ListSigningKeys(ctx, tenantID)
+	if err != nil {
+		return nil, mapError("listing signing keys", err)
+	}
+	out := make([]store.SigningKey, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, store.SigningKey{
+			ID:              row.ID,
+			TenantID:        row.TenantID,
+			Algorithm:       row.Algorithm,
+			Generation:      row.Generation,
+			KeyID:           row.KeyID,
+			PublicKey:       row.PublicKey,
+			PrivateKey:      row.PrivateKey,
+			EncryptionKeyID: row.EncryptionKeyID,
+			ActivatesAt:     row.ActivatesAt.UTC(),
+			RetiresAt:       row.RetiresAt.UTC(),
+			ExpiresAt:       row.ExpiresAt.UTC(),
+			CreatedAt:       row.CreatedAt.UTC(),
+		})
+	}
+	return out, nil
+}
+
+func (r signingKeys) DeleteExpired(ctx context.Context, now time.Time) (int64, error) {
+	n, err := r.q.DeleteExpiredSigningKeys(ctx, now)
+	if err != nil {
+		return 0, mapError("deleting expired signing keys", err)
+	}
+	return n, nil
+}
+
 // mapError translates driver errors into the store sentinel errors.
 func mapError(op string, err error) error {
 	if err == nil {
@@ -201,8 +265,13 @@ func mapError(op string, err error) error {
 		return fmt.Errorf("postgres: %s: %w", op, store.ErrNotFound)
 	}
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
-		return fmt.Errorf("postgres: %s: %w", op, store.ErrConflict)
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case uniqueViolation:
+			return fmt.Errorf("postgres: %s: %w", op, store.ErrConflict)
+		case foreignKeyViolation:
+			return fmt.Errorf("postgres: %s: referenced record: %w", op, store.ErrNotFound)
+		}
 	}
 	return fmt.Errorf("postgres: %s: %w", op, err)
 }
