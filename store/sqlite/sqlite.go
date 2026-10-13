@@ -67,8 +67,9 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	if path == "" || strings.ContainsAny(path, "?#") {
-		return nil, fmt.Errorf("sqlite: invalid database path %q", path)
+	if path == "" || path == ":memory:" || strings.HasPrefix(path, "file:") {
+		// An in-memory database would be private to each pooled connection.
+		return nil, fmt.Errorf("sqlite: invalid database path %q: use the path of a file", path)
 	}
 	if err := createPrivate(path); err != nil {
 		return nil, err
@@ -78,7 +79,7 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	for _, p := range pragmas {
 		query.Add("_pragma", p)
 	}
-	conn, err := sql.Open("sqlite", "file:"+path+"?"+query.Encode())
+	conn, err := sql.Open("sqlite", "file:"+uriPathEscaper.Replace(path)+"?"+query.Encode())
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: opening %s: %w", path, err)
 	}
@@ -97,6 +98,10 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	}
 	return s, nil
 }
+
+// uriPathEscaper percent-encodes the characters that SQLite URIs treat
+// specially, so SQLite opens exactly the file at the given path.
+var uriPathEscaper = strings.NewReplacer("%", "%25", "?", "%3F", "#", "%23")
 
 // createPrivate creates the database file readable and writable only by its
 // owner, unless it already exists. SQLite gives its journal files the same

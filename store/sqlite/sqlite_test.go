@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
 	"testing"
 
 	"clavisid.org/clavis/store"
@@ -34,7 +36,7 @@ func TestContract(t *testing.T) {
 
 func TestOpenRejectsInvalidPaths(t *testing.T) {
 	t.Parallel()
-	for _, path := range []string{"", "clavis.db?mode=memory", "clavis.db#x"} {
+	for _, path := range []string{"", ":memory:", "file:clavis.db"} {
 		if _, err := sqlite.Open(t.Context(), path); err == nil {
 			t.Errorf("Open(%q) succeeded, want an error", path)
 		}
@@ -103,5 +105,53 @@ func TestOpenKeepsExistingFilePermissions(t *testing.T) {
 	}
 	if perm := info.Mode().Perm(); perm != 0o640 {
 		t.Errorf("Open() changed existing permissions to %v, want 0640", perm)
+	}
+}
+
+// TestOpenUsesTheExactPath checks that characters with a meaning in SQLite
+// URIs do not redirect the database to another file.
+func TestOpenUsesTheExactPath(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"a%41.db", "query?mode=memory.db", "frag#x.db", "with space.db"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, name)
+			s, err := sqlite.Open(t.Context(), path)
+			if err != nil {
+				t.Fatalf("Open(%q) unexpected error: %v", name, err)
+			}
+			if _, err := s.Tenants().List(t.Context(), [16]byte{}, 1); err != nil {
+				t.Fatalf("List() unexpected error: %v", err)
+			}
+			if err := s.Close(); err != nil {
+				t.Fatalf("Close() unexpected error: %v", err)
+			}
+
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatalf("reading directory: %v", err)
+			}
+			var names []string
+			for _, e := range entries {
+				names = append(names, e.Name())
+			}
+			for _, got := range names {
+				if !strings.HasPrefix(got, name) {
+					t.Errorf("Open(%q) created unexpected file %q (all files: %v)", name, got, names)
+				}
+			}
+			if !slices.Contains(names, name) {
+				t.Errorf("Open(%q) did not create the requested file (files: %v)", name, names)
+			}
+			reopened, err := sqlite.Open(t.Context(), path, sqlite.WithoutMigrations())
+			if err != nil {
+				t.Fatalf("reopening %q: %v", name, err)
+			}
+			defer reopened.Close()
+			if _, err := reopened.Tenants().List(t.Context(), [16]byte{}, 1); err != nil {
+				t.Errorf("schema missing after reopening %q: %v", name, err)
+			}
+		})
 	}
 }
