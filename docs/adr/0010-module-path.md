@@ -1,6 +1,6 @@
 # 0010. Module path github.com/clavis-id/clavis
 
-- Status: Accepted
+- Status: Superseded by 0012
 - Date: 2026-10-12
 
 ## Context

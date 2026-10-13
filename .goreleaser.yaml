@@ -1,0 +1,106 @@
+# Release configuration for GoReleaser v2. Test it with `make release-snapshot`.
+# Releases are cut by pushing a v* tag; see .github/workflows/release.yml.
+version: 2
+project_name: clavis
+
+builds:
+  - id: clavis
+    main: ./cmd/clavis
+    binary: clavis
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    # Reproducible builds: file times come from the commit, not the clock.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: clavis
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - NOTICE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+# Software bill of materials for every archive, generated with syft.
+sboms:
+  - artifacts: archive
+
+# Keyless signature of the checksum file, which covers every archive.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args: ["sign-blob", "--bundle=${signature}", "${artifact}", "--yes"]
+
+dockers_v2:
+  - id: clavis
+    ids: [clavis]
+    dockerfile: deploy/docker/Dockerfile
+    images:
+      - ghcr.io/clavis-id/clavis
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms: [linux/amd64, linux/arm64]
+    sbom: true
+    labels:
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .CommitDate }}"
+      org.opencontainers.image.source: https://github.com/clavis-id/clavis
+      org.opencontainers.image.licenses: Apache-2.0
+      org.opencontainers.image.description: OpenID Connect provider and OAuth 2.1 authorization server
+    # Manifest-level annotations: index-level ones fail in snapshot builds,
+    # which export single-platform images.
+    annotations:
+      org.opencontainers.image.description: OpenID Connect provider and OAuth 2.1 authorization server
+      org.opencontainers.image.source: https://github.com/clavis-id/clavis
+      org.opencontainers.image.licenses: Apache-2.0
+
+docker_signs:
+  - cmd: cosign
+    artifacts: images
+    args: ["sign", "${artifact}@${digest}", "--yes"]
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs"
+      - "^test"
+      - "^chore"
+      - "^Merge pull request"
+      - "^Merge branch"
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Security
+      regexp: '^.*?security(\(.+\))??!?:.+$'
+      order: 1
+    - title: Bug fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 2
+    - title: Other changes
+      order: 999
+
+release:
+  # Tags such as v0.1.0-alpha.1 become GitHub pre-releases.
+  prerelease: auto
+  # Releases are created as drafts so a maintainer reviews them before they
+  # become visible.
+  draft: true

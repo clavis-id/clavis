@@ -1,7 +1,10 @@
 # Architecture
 
-This document describes the target architecture of Clavis. It is a design, not a description of
-existing code. Decisions with lasting consequences are recorded as ADRs in [`adr/`](adr/).
+This document describes the target architecture of Clavis. Phase 0 (foundations) is
+implemented: the public embed API, storage ports with SQLite and PostgreSQL adapters, signing
+key management, telemetry and the release pipeline. Everything else is design and will be
+built phase by phase (see the [roadmap](roadmap.md)). Decisions with lasting consequences are
+recorded as ADRs in [`adr/`](adr/).
 
 ## Principles
 
@@ -22,9 +25,19 @@ existing code. Decisions with lasting consequences are recorded as ADRs in [`adr
 ### Embedded library
 
 ```go
+db, err := sqlite.Open(ctx, "auth.db")
+if err != nil {
+    return err
+}
+enc, err := kek.NewLocal(secretFromYourSecretsManager)
+if err != nil {
+    return err
+}
+
 auth, err := clavis.New(ctx, clavis.Config{
-    Issuer: "https://app.example.com/auth",
-    Store:  sqlite.MustOpen("file:auth.db"),
+    Issuer:       "https://app.example.com/auth",
+    Store:        db,
+    KeyEncrypter: enc,
 })
 if err != nil {
     return err
@@ -55,10 +68,14 @@ clavis/
   cmd/clavis/            CLI and server entry point (serve, migrate, plan, apply, keys, import)
   clavis.go              Public embed API: New, Config, Server, Server.Handler, Server.Verifier
   middleware/            Public: resource-server token validation for net/http
-  store/                 Public: storage ports
+  store/                 Public: storage ports and record types
     sqlite/              Public: SQLite adapter (modernc.org/sqlite, CGo-free)
-    postgres/            Public: PostgreSQL adapter (pgx v5)
+      migrations/        SQL migrations, embedded in the adapter
+      queries/           SQL queries compiled by sqlc
+      internal/db/       Generated query code (do not edit)
+    postgres/            Public: PostgreSQL adapter (pgx v5), same structure as sqlite/
     storetest/           Public: contract suite every adapter must pass
+  kek/                   Public: key encryption (Encrypter interface, AES-256-GCM Local)
   hooks/                 Public: hook payload types and WebAssembly ABI
   client/                Public: generated Go client for the admin API
   internal/
@@ -78,11 +95,11 @@ clavis/
     config/              Configuration schema, loading and validation
     telemetry/           slog setup, OpenTelemetry traces and metrics
   api/openapi.yaml       Admin API contract (source of truth)
-  migrations/sqlite/     SQL migrations for SQLite
-  migrations/postgres/   SQL migrations for PostgreSQL
+  sqlc.yaml              Query code generation for both adapters
   conformance/           OpenID conformance suite plans and runner
   e2e/                   Playwright browser tests
-  deploy/                Docker Compose examples, later Helm chart
+  deploy/                dev/ local config, docker/ release image, cloudflare/go-import/ Worker
+                         serving the clavisid.org/clavis import path; later Compose and Helm
   docs/                  Design documents and ADRs
 ```
 
@@ -129,7 +146,7 @@ clavis/
 | `/.well-known/oauth-authorization-server` | RFC 8414 | 1 |
 | `/oauth2/authorize` | RFC 6749, OAuth 2.1, PKCE (RFC 7636) | 1 |
 | `/oauth2/token` | RFC 6749, OAuth 2.1 | 1 |
-| `/oauth2/jwks` | RFC 7517 | 1 |
+| `/oauth2/jwks` | RFC 7517 | 0 (implemented) |
 | `/oauth2/userinfo` | OpenID Connect Core 1.0 | 1 |
 | `/oauth2/revoke` | RFC 7009 | 1 |
 | `/oauth2/introspect` | RFC 7662 | 1 |
@@ -143,9 +160,12 @@ clavis/
 
 - **Passwords:** argon2id with at least the OWASP baseline (19 MiB memory, 2 iterations,
   1 lane), parameters stored with each hash and upgraded transparently on login.
-- **Signing keys:** generated per tenant, encrypted at rest with AES-256-GCM under a key
-  encryption key supplied by configuration or a KMS. Rotated on a schedule; retired keys stay
-  in the JWKS until every token they signed has expired.
+- **Signing keys:** one sequence per tenant and algorithm (RS256 always; ES256 and EdDSA
+  optional), encrypted at rest through `kek.Encrypter` (AES-256-GCM by default, bound to the
+  record by additional data). Rotated every 30 days by default; a successor is published at
+  least 24 hours before it signs (publish-ahead plus the one-hour check interval), keys of a
+  newly enabled algorithm are published ahead the same way, and a retired key stays in the
+  JWKS for 48 hours. The JWK set is cached in memory for one minute. See ADR 0011.
 - **Tokens:** short-lived JWT access tokens bound to an audience; opaque, rotating refresh
   tokens with reuse detection that revokes the whole token family.
 - **Browser sessions:** `__Host-` prefixed, `Secure`, `HttpOnly`, `SameSite=Lax` cookies;
@@ -156,13 +176,32 @@ clavis/
   logged. Audit events record who, what, when and from where, without credential material.
 - **FIPS mode:** builds with `GOFIPS140=certified` restrict algorithms to the validated module.
 
+## Observability
+
+- **Logs:** structured `log/slog` records on standard error, JSON in production. Secrets and
+  tokens are never logged (see Security architecture).
+- **Probes:** `GET /healthz` (liveness, never touches dependencies) and `GET /readyz`
+  (readiness, pings the store). Probes are not traced or measured, so frequent health checks do
+  not flood telemetry.
+- **Traces:** every protocol route is wrapped with OpenTelemetry `otelhttp`; spans are named
+  after the route pattern (for example `GET /oauth2/jwks`) to keep cardinality bounded.
+  Embedders pass a `TracerProvider` in `clavis.Config` or rely on the global provider. The
+  binary exports over OTLP/HTTP (`telemetry.tracing`), honoring the standard
+  `OTEL_EXPORTER_OTLP_*` and `OTEL_RESOURCE_ATTRIBUTES` variables, with a parent-based ratio
+  sampler. It installs no propagator, so trace context sent by untrusted clients to public
+  endpoints is ignored and cannot force sampling.
+- **Metrics:** `otelhttp` request metrics, `clavis.signing_keys.created` (by algorithm),
+  `clavis.signing_keys.rotation_failures` and Go runtime metrics. The binary serves them in the
+  Prometheus format on a separate listener (`telemetry.metrics.address`, default
+  `127.0.0.1:9464`), never on the API port.
+
 ## Extension points
 
 | Port | Default adapter | Purpose |
 |---|---|---|
 | `store.Store` | SQLite, PostgreSQL | Persistence |
 | `Sender` | SMTP | Email delivery |
-| `KeyEncrypter` | Local key encryption key | Signing key protection (KMS adapters later) |
+| `kek.Encrypter` | `kek.Local` (AES-256-GCM) | Signing key protection (KMS adapters later) |
 | `Hook` | Webhook, WebAssembly | Lifecycle customization |
 | `RateLimiter` | In-process, store-backed | Abuse protection |
 | `UpstreamProvider` | Generic OIDC, Google, GitHub, Apple, Microsoft | Federation |

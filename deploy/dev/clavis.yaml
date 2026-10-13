@@ -1,0 +1,18 @@
+# Local development configuration. Run with `make run`.
+issuer: http://localhost:8080
+
+server:
+  address: 127.0.0.1:8080
+
+database:
+  driver: sqlite
+  dsn: clavis.db
+
+keys:
+  # Development only. This key is public: never use it outside a local
+  # machine. Generate real keys with `clavis keys new-encryption-key`.
+  encryption_key: 4/5XH1+uUgl+6LUm5X36DZuhOwYK5J0Dky6EpUnU9/0= # gitleaks:allow
+
+log:
+  level: debug
+  format: text

@@ -6,9 +6,10 @@ single static binary in front of any stack.
 
 Clavis is Latin for "key".
 
-> Status: pre-alpha, design phase. There is no runnable code yet. The design, scope and
-> decisions are documented in [`docs/`](docs/). Interfaces described here are targets and will
-> change.
+> Status: pre-alpha. Phase 0 (foundations) is complete: the embeddable server, SQLite and
+> PostgreSQL storage, signing key rotation with a published JWK set, telemetry and the release
+> pipeline. The OpenID Connect and OAuth flows arrive in Phase 1. Interfaces may change in any
+> release before v1.0; see the [roadmap](docs/roadmap.md).
 
 ## Why Clavis
 
@@ -43,9 +44,19 @@ rationale and how Clavis relates to existing projects.
 Embedded in a Go application:
 
 ```go
+db, err := sqlite.Open(ctx, "auth.db")
+if err != nil {
+    return err
+}
+enc, err := kek.NewLocal(secretFromYourSecretsManager)
+if err != nil {
+    return err
+}
+
 auth, err := clavis.New(ctx, clavis.Config{
-    Issuer: "https://app.example.com/auth",
-    Store:  sqlite.MustOpen("file:auth.db"),
+    Issuer:       "https://app.example.com/auth",
+    Store:        db,
+    KeyEncrypter: enc,
 })
 if err != nil {
     return err
@@ -59,6 +70,7 @@ As a standalone server, any OpenID Connect client library in any language integr
 Clavis through standard discovery:
 
 ```
+clavis keys new-encryption-key   # store the output in your secrets manager
 clavis serve --config clavis.yaml
 ```
 
@@ -68,7 +80,14 @@ clavis serve --config clavis.yaml
 - [Architecture](docs/architecture.md)
 - [Testing strategy](docs/testing.md)
 - [Roadmap](docs/roadmap.md)
+- [Releasing](docs/releasing.md)
 - [Architecture decision records](docs/adr/)
+
+## Contributing
+
+Contributions are welcome; start with [CONTRIBUTING.md](CONTRIBUTING.md). Everyone taking part
+in the project follows the [code of conduct](CODE_OF_CONDUCT.md). Report vulnerabilities
+privately as described in [SECURITY.md](SECURITY.md).
 
 ## License
 

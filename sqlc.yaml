@@ -1,0 +1,29 @@
+# Generates the query code of the storage adapters. Run with `make generate`.
+version: "2"
+sql:
+  - engine: sqlite
+    schema: store/sqlite/migrations
+    queries: store/sqlite/queries
+    gen:
+      go:
+        package: db
+        out: store/sqlite/internal/db
+        emit_empty_slices: true
+  - engine: postgresql
+    schema: store/postgres/migrations
+    queries: store/postgres/queries
+    gen:
+      go:
+        package: db
+        out: store/postgres/internal/db
+        sql_package: pgx/v5
+        emit_empty_slices: true
+        overrides:
+          - db_type: uuid
+            go_type:
+              import: uuid
+              type: UUID
+          - db_type: timestamptz
+            go_type:
+              import: time
+              type: Time

@@ -3,27 +3,33 @@
 Each phase ends with explicit exit criteria. A phase is not complete until every criterion is
 met in CI. Versions before v1.0 make no compatibility promises.
 
-Current phase: **Design** (no code yet).
+Current phase: **Phase 0, code complete.** The remaining exit criterion is the first tagged
+pre-release.
 
 ## Phase 0: Foundations
 
 Scope:
-- Go 1.27 toolchain, `go.mod` with module path `github.com/clavis-id/clavis`.
-- Makefile, golangci-lint v2 configuration, GitHub Actions CI, Renovate, CodeQL, OSSF
-  Scorecard, gitleaks.
+- Go 1.27 toolchain, `go.mod` with module path `clavisid.org/clavis` (ADR 0012).
+- Makefile, golangci-lint v2 configuration, GitHub Actions CI, Dependabot, gitleaks,
+  actionlint. Development tools are pinned in isolated modules under `tools/`.
+- CodeQL, OpenSSF Scorecard and dependency review workflows, which activate automatically when
+  the repository becomes public.
 - goreleaser v2 pipeline: multi-architecture binaries, distroless images, cosign keyless
   signatures, SBOM, artifact attestations.
 - Storage ports with SQLite and PostgreSQL adapters, goose migrations, sqlc queries,
   `store/storetest` contract suite.
 - Configuration loading and validation, slog logging, OpenTelemetry setup.
 - Signing key management: generation, encryption at rest, rotation, JWKS rendering.
-- Test harness: clock injection, `httptest` server helpers, testcontainers setup.
-- CONTRIBUTING.md, SECURITY.md, code of conduct.
+- Test harness: injected time and identifiers, `httptest` helpers, PostgreSQL in Docker.
+- CONTRIBUTING.md, SECURITY.md (with security@clavisid.org) and CODE_OF_CONDUCT.md
+  (Contributor Covenant 3.0, reports to conduct@clavisid.org).
 
 Exit criteria:
 - `make test`, `make test-postgres`, `make lint` pass in CI on Linux and macOS, amd64 and arm64.
 - Contract suite passes on both adapters.
-- A tagged pre-release produces signed binaries and images.
+- A tagged pre-release produces binaries, SBOMs and multi-architecture images. Keyless
+  signatures and provenance attestations are produced from the first release after the
+  repository becomes public (see docs/releasing.md).
 
 ## Phase 1: MVP v0.1 (Cognito user pool parity core)
 

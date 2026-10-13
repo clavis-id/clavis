@@ -1,0 +1,131 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - contextcheck
+    - copyloopvar
+    - depguard
+    - errname
+    - errorlint
+    - exhaustive
+    - forbidigo
+    - gocritic
+    - gosec
+    - misspell
+    - nilerr
+    - noctx
+    - nolintlint
+    - perfsprint
+    - revive
+    - sloglint
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - usetesting
+    - wrapcheck
+  settings:
+    depguard:
+      rules:
+        crypto-randomness:
+          files:
+            - "!$test"
+          deny:
+            - pkg: math/rand
+              desc: use crypto/rand; non-cryptographic randomness is banned outside tests
+            - pkg: math/rand/v2
+              desc: use crypto/rand; non-cryptographic randomness is banned outside tests
+        legacy-json:
+          deny:
+            - pkg: encoding/json$
+              desc: use encoding/json/v2 (ADR 0002)
+        no-assertion-frameworks:
+          deny:
+            - pkg: github.com/stretchr/testify
+              desc: use the standard testing package with github.com/google/go-cmp
+    errorlint:
+      errorf: true
+      asserts: true
+      comparison: true
+    exhaustive:
+      default-signifies-exhaustive: true
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^print(ln)?$
+          msg: use log/slog
+        - pattern: ^fmt\.Print.*$
+          msg: use log/slog; write CLI output through an injected io.Writer
+        - pattern: ^log\.(Print|Fatal|Panic).*$
+          msg: use log/slog; library code must not exit or panic
+        - pattern: ^os\.Exit$
+          msg: only cmd/clavis may exit the process
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+      disabled-checks:
+        - hugeParam
+        - rangeValCopy
+        - whyNoLint
+    gosec:
+      excludes:
+        - G104 # unchecked errors are reported by errcheck
+    misspell:
+      locale: US
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    revive:
+      rules:
+        - name: exported
+        - name: package-comments
+        - name: context-as-argument
+        - name: error-strings
+        - name: error-naming
+        - name: receiver-naming
+        - name: var-naming
+        - name: unused-parameter
+    sloglint:
+      no-global: all
+      context: scope
+      attr-only: true
+      key-naming-case: snake
+    wrapcheck:
+      ignore-package-globs:
+        - clavisid.org/clavis
+        - clavisid.org/clavis/*
+  exclusions:
+    generated: strict
+    presets:
+      - std-error-handling
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+          - wrapcheck
+          - forbidigo
+      - path: ^cmd/
+        linters:
+          - forbidigo
+        text: os\.Exit
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+    goimports:
+      local-prefixes:
+        - clavisid.org/clavis
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

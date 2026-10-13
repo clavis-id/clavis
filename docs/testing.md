@@ -10,7 +10,8 @@ of the product. No change merges without the tests described here.
 
 - Standard library `testing`, table-driven, with `github.com/google/go-cmp` for comparisons.
   No assertion framework.
-- Time is injected through a clock interface. Expiry, rotation and lockout logic is tested with
+- Time and identifiers are injected as functions (`Now func() time.Time`,
+  `NewID func() uuid.UUID`). Expiry, rotation and lockout logic is tested with
   `testing/synctest` so tests never sleep.
 - Cryptographic randomness is made deterministic with `testing/cryptotest.SetGlobalRandom`
   (Go 1.27) where golden outputs are needed.
@@ -22,8 +23,12 @@ of the product. No change merges without the tests described here.
 - `store/storetest` is a public suite that exercises every storage port: CRUD, tenant isolation,
   uniqueness constraints, concurrency (conditional updates, refresh token family revocation),
   pagination and expiry cleanup.
-- It runs against SQLite in memory on every test run and against PostgreSQL through
-  `testcontainers-go` in CI and on demand locally.
+- It runs against SQLite (a temporary database file per test) on every test run, and against
+  PostgreSQL when `CLAVIS_TEST_POSTGRES_DSN` points at a server: `make test-postgres` starts a
+  throwaway container locally, and CI uses a service container. Each test creates and drops its
+  own database, so subtests run in parallel.
+- No container library is used: a plain Docker container keeps test-only dependencies out of
+  the module graph that embedders inherit.
 - Third-party adapters (for example MySQL) prove compatibility by passing the same suite.
 
 ### Integration tests
@@ -49,9 +54,11 @@ of the product. No change merges without the tests described here.
 - The threats in RFC 9700 (OAuth 2.0 Security Best Current Practice) are encoded as named
   tests: open redirectors, authorization code injection and replay, PKCE downgrade, mix-up,
   refresh token replay, token leakage through referrers, clickjacking headers, CSRF.
-- Native Go fuzzing targets: redirect URI matching, scope parsing, JWS and JWT parsing, client
-  metadata documents, authorization request parsing, configuration parsing, SCIM filters
-  (Phase 3). Short fuzz runs in CI on every pull request; long runs nightly.
+- Native Go fuzzing. Current targets: issuer parsing (`internal/issuer`), configuration parsing
+  (`internal/config`) and ciphertext decryption (`kek`). Planned: redirect URI matching, scope
+  parsing, JWS and JWT parsing, client metadata documents, authorization request parsing (Phase
+  1 and 2) and SCIM filters (Phase 3). Short runs on every pull request; long nightly runs are
+  planned.
 - Static and supply chain analysis: `govulncheck`, `gosec` through golangci-lint, CodeQL,
   gitleaks, OSSF Scorecard, dependency review on pull requests.
 
@@ -77,17 +84,22 @@ of the product. No change merges without the tests described here.
 - Go benchmarks for token issuance, token validation, JWKS serving and session lookup, compared
   with `benchstat` against `develop`; regressions above an agreed threshold fail CI.
 - k6 scenarios for login and token endpoints run before releases.
-- CI checks the footprint targets: binary size under 40 MB, idle resident memory under 50 MB,
-  cold start under one second.
+- CI checks the footprint targets: release binary (stripped, as built by goreleaser) under
+  40 MB, idle resident memory under 50 MB, cold start under one second.
 
 ## Always-on rules
 
 - Tests run with `-race` and `-shuffle=on`.
-- Goroutine leaks are checked at the end of every package test run.
-- Coverage floor of 80 percent for `internal/oauth`, `internal/oidc`, `internal/keys` and
-  `internal/authn`; coverage is reported for every package.
-- No test depends on the network outside containers it starts itself.
-- No test depends on wall-clock time or on test execution order.
+- Every package with tests has a `TestMain` that calls `goleak.VerifyTestMain`
+  (`go.uber.org/goleak`, test-only), so a goroutine that outlives the tests fails the run.
+- Security-critical packages keep at least 80 percent statement coverage, enforced in CI by
+  `make cover-check`. The list in the Makefile (`COVER_FLOOR_PKGS`) currently holds
+  `internal/issuer`, `internal/keys` and `kek`; `internal/oauth`, `internal/oidc` and
+  `internal/authn` join it when they are created.
+- Every fuzz target runs for 15 seconds in CI on each pull request (`make fuzz`).
+- No test depends on the network outside servers or containers it starts itself.
+- No test depends on test execution order. Time-dependent behavior uses an injected clock or
+  `testing/synctest` rather than sleeping on the wall clock.
 
 ## What each change must include
 
@@ -100,15 +112,26 @@ of the product. No change merges without the tests described here.
 | Bug fix | A regression test that fails before the fix |
 | Performance-sensitive path | Benchmark |
 
-## Planned commands
+## Commands
+
+Available:
 
 | Command | Purpose |
 |---|---|
-| `make test` | Unit and integration tests with SQLite (`-race -shuffle=on`) |
-| `make test-postgres` | Same suite plus store contract tests on PostgreSQL |
-| `make fuzz` | Short fuzz run for every target |
-| `make conformance` | Start Clavis and run the OpenID conformance plans |
-| `make e2e` | Playwright browser tests |
-| `make bench` | Benchmarks with `benchstat` comparison |
-| `make lint` | golangci-lint, govulncheck |
-| `make cover` | Coverage report and floor check |
+| `make test` | Unit and integration tests (`-race -shuffle=on`); PostgreSQL tests skip without a DSN |
+| `make test-postgres` | Store tests against a throwaway PostgreSQL container |
+| `make test-store` | Store tests, including PostgreSQL when `CLAVIS_TEST_POSTGRES_DSN` is set |
+| `make test-go-import` | Tests of the Cloudflare Worker that serves the import path (Node.js) |
+| `make cover` | Coverage profile and total for every package |
+| `make cover-check` | Coverage floor for security-critical packages |
+| `make fuzz` | Every fuzz target for `FUZZTIME` each (default 30s) |
+| `make lint` | golangci-lint and actionlint |
+| `make vuln` | govulncheck |
+
+Planned:
+
+| Command | Purpose | Phase |
+|---|---|---|
+| `make conformance` | Start Clavis and run the OpenID conformance plans | 1 |
+| `make e2e` | Playwright browser tests | 1 |
+| `make bench` | Benchmarks with `benchstat` comparison | 1 |
