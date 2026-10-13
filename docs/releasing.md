@@ -35,18 +35,30 @@ smoke test of the image and the release binary size check.
 
 ## Running the image
 
+Generate the key encryption key once and store it in a secrets manager:
+
+```
+clavis keys new-encryption-key
+```
+
+Then pass the same key every time the container starts, here from an environment variable of
+the calling shell:
+
 ```
 docker run -d -p 8080:8080 \
   -e CLAVIS_ISSUER=https://auth.example.com \
-  -e CLAVIS_KEYS_ENCRYPTION_KEY="$(clavis keys new-encryption-key)" \
+  -e CLAVIS_KEYS_ENCRYPTION_KEY \
   -v clavis-data:/var/lib/clavis \
   ghcr.io/clavis-id/clavis:<version>
 ```
 
+Never generate the key inline in the run command: a container started with a different key
+cannot decrypt the signing keys stored in the volume.
+
 The image runs as an unprivileged user, stores the SQLite database in `/var/lib/clavis`,
 listens on port 8080 and, when `CLAVIS_TELEMETRY_METRICS_ENABLED=true`, serves metrics on
-port 9464. Keep the encryption key in a secrets manager: without it, stored signing keys cannot
-be decrypted.
+port 9464. To apply migrations as a separate step, run `clavis migrate` with only the
+`CLAVIS_DATABASE_*` settings and start the server with `CLAVIS_DATABASE_AUTO_MIGRATE=false`.
 
 ## Verifying a release
 

@@ -159,8 +159,10 @@ clavis/
   1 lane), parameters stored with each hash and upgraded transparently on login.
 - **Signing keys:** one sequence per tenant and algorithm (RS256 always; ES256 and EdDSA
   optional), encrypted at rest through `kek.Encrypter` (AES-256-GCM by default, bound to the
-  record by additional data). Rotated every 30 days by default; a successor is published 24
-  hours before it signs and a retired key stays in the JWKS for 48 hours. See ADR 0011.
+  record by additional data). Rotated every 30 days by default; a successor is published at
+  least 24 hours before it signs (publish-ahead plus the one-hour check interval), keys of a
+  newly enabled algorithm are published ahead the same way, and a retired key stays in the
+  JWKS for 48 hours. The JWK set is cached in memory for one minute. See ADR 0011.
 - **Tokens:** short-lived JWT access tokens bound to an audience; opaque, rotating refresh
   tokens with reuse detection that revokes the whole token family.
 - **Browser sessions:** `__Host-` prefixed, `Secure`, `HttpOnly`, `SameSite=Lax` cookies;
