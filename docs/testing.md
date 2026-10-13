@@ -39,7 +39,7 @@ of the product. No change merges without the tests described here.
 
 - The OpenID Foundation conformance suite runs in Docker against a Clavis instance.
 - Triggered on every change under `internal/oauth`, `internal/oidc` or `internal/keys`, and
-  nightly on `main`.
+  nightly on `develop`.
 - Profiles grow with the roadmap: Basic OP, Config OP, Form Post, RP-Initiated Logout
   (Phase 1); Dynamic OP and PAR (Phase 2); FAPI 2.0 Security Profile (later).
 - A failing conformance module blocks the merge.
@@ -75,7 +75,7 @@ of the product. No change merges without the tests described here.
 ### Performance
 
 - Go benchmarks for token issuance, token validation, JWKS serving and session lookup, compared
-  with `benchstat` against `main`; regressions above an agreed threshold fail CI.
+  with `benchstat` against `develop`; regressions above an agreed threshold fail CI.
 - k6 scenarios for login and token endpoints run before releases.
 - CI checks the footprint targets: binary size under 40 MB, idle resident memory under 50 MB,
   cold start under one second.
