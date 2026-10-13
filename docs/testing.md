@@ -54,9 +54,11 @@ of the product. No change merges without the tests described here.
 - The threats in RFC 9700 (OAuth 2.0 Security Best Current Practice) are encoded as named
   tests: open redirectors, authorization code injection and replay, PKCE downgrade, mix-up,
   refresh token replay, token leakage through referrers, clickjacking headers, CSRF.
-- Native Go fuzzing targets: redirect URI matching, scope parsing, JWS and JWT parsing, client
-  metadata documents, authorization request parsing, configuration parsing, SCIM filters
-  (Phase 3). Short fuzz runs in CI on every pull request; long runs nightly.
+- Native Go fuzzing. Current targets: issuer parsing (`internal/issuer`), configuration parsing
+  (`internal/config`) and ciphertext decryption (`kek`). Planned: redirect URI matching, scope
+  parsing, JWS and JWT parsing, client metadata documents, authorization request parsing (Phase
+  1 and 2) and SCIM filters (Phase 3). Short runs on every pull request; long nightly runs are
+  planned.
 - Static and supply chain analysis: `govulncheck`, `gosec` through golangci-lint, CodeQL,
   gitleaks, OSSF Scorecard, dependency review on pull requests.
 
@@ -88,11 +90,16 @@ of the product. No change merges without the tests described here.
 ## Always-on rules
 
 - Tests run with `-race` and `-shuffle=on`.
-- Goroutine leaks are checked at the end of every package test run.
-- Coverage floor of 80 percent for `internal/oauth`, `internal/oidc`, `internal/keys` and
-  `internal/authn`; coverage is reported for every package.
-- No test depends on the network outside containers it starts itself.
-- No test depends on wall-clock time or on test execution order.
+- Every package with tests has a `TestMain` that calls `goleak.VerifyTestMain`
+  (`go.uber.org/goleak`, test-only), so a goroutine that outlives the tests fails the run.
+- Security-critical packages keep at least 80 percent statement coverage, enforced in CI by
+  `make cover-check`. The list in the Makefile (`COVER_FLOOR_PKGS`) currently holds
+  `internal/issuer`, `internal/keys` and `kek`; `internal/oauth`, `internal/oidc` and
+  `internal/authn` join it when they are created.
+- Every fuzz target runs for 15 seconds in CI on each pull request (`make fuzz`).
+- No test depends on the network outside servers or containers it starts itself.
+- No test depends on test execution order. Time-dependent behavior uses an injected clock or
+  `testing/synctest` rather than sleeping on the wall clock.
 
 ## What each change must include
 
@@ -105,15 +112,26 @@ of the product. No change merges without the tests described here.
 | Bug fix | A regression test that fails before the fix |
 | Performance-sensitive path | Benchmark |
 
-## Planned commands
+## Commands
+
+Available:
 
 | Command | Purpose |
 |---|---|
-| `make test` | Unit and integration tests with SQLite (`-race -shuffle=on`) |
+| `make test` | Unit and integration tests (`-race -shuffle=on`); PostgreSQL tests skip without a DSN |
 | `make test-postgres` | Store tests against a throwaway PostgreSQL container |
-| `make fuzz` | Short fuzz run for every target |
-| `make conformance` | Start Clavis and run the OpenID conformance plans |
-| `make e2e` | Playwright browser tests |
-| `make bench` | Benchmarks with `benchstat` comparison |
-| `make lint` | golangci-lint, govulncheck |
-| `make cover` | Coverage report and floor check |
+| `make test-store` | Store tests, including PostgreSQL when `CLAVIS_TEST_POSTGRES_DSN` is set |
+| `make test-go-import` | Tests of the Cloudflare Worker that serves the import path (Node.js) |
+| `make cover` | Coverage profile and total for every package |
+| `make cover-check` | Coverage floor for security-critical packages |
+| `make fuzz` | Every fuzz target for `FUZZTIME` each (default 30s) |
+| `make lint` | golangci-lint and actionlint |
+| `make vuln` | govulncheck |
+
+Planned:
+
+| Command | Purpose | Phase |
+|---|---|---|
+| `make conformance` | Start Clavis and run the OpenID conformance plans | 1 |
+| `make e2e` | Playwright browser tests | 1 |
+| `make bench` | Benchmarks with `benchstat` comparison | 1 |
