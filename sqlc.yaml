@@ -9,3 +9,21 @@ sql:
         package: db
         out: store/sqlite/internal/db
         emit_empty_slices: true
+  - engine: postgresql
+    schema: store/postgres/migrations
+    queries: store/postgres/queries
+    gen:
+      go:
+        package: db
+        out: store/postgres/internal/db
+        sql_package: pgx/v5
+        emit_empty_slices: true
+        overrides:
+          - db_type: uuid
+            go_type:
+              import: uuid
+              type: UUID
+          - db_type: timestamptz
+            go_type:
+              import: time
+              type: Time
