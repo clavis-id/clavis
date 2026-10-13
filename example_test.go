@@ -43,6 +43,7 @@ func ExampleNew() {
 	if err != nil {
 		panic(err)
 	}
+	defer auth.Close()
 
 	mux := http.NewServeMux()
 	mux.Handle("/auth/", http.StripPrefix("/auth", auth.Handler()))

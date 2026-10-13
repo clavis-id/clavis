@@ -41,10 +41,17 @@ func testConfig(t *testing.T, st store.Store) Config {
 
 func newTestServer(t *testing.T, st store.Store) *Server {
 	t.Helper()
-	s, err := New(t.Context(), testConfig(t, st))
+	return mustNew(t, testConfig(t, st))
+}
+
+// mustNew creates a Server that is closed when the test ends.
+func mustNew(t *testing.T, cfg Config) *Server {
+	t.Helper()
+	s, err := New(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("New() unexpected error: %v", err)
 	}
+	t.Cleanup(func() { _ = s.Close() })
 	return s
 }
 
@@ -266,11 +273,7 @@ func TestProtocolRoutesAreTraced(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	cfg := testConfig(t, openStore(t))
 	cfg.TracerProvider = sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
-	srv, err := New(t.Context(), cfg)
-	if err != nil {
-		t.Fatalf("New() unexpected error: %v", err)
-	}
-	h := srv.Handler()
+	h := mustNew(t, cfg).Handler()
 
 	for _, path := range []string{"/healthz", "/readyz", "/oauth2/jwks"} {
 		serve(t, h, http.MethodGet, path)
@@ -285,5 +288,23 @@ func TestProtocolRoutesAreTraced(t *testing.T) {
 	}
 	if got := spans[0].Name(); got != "GET /oauth2/jwks" {
 		t.Errorf("span name = %q, want the route pattern", got)
+	}
+}
+
+func TestCloseStopsBackgroundWork(t *testing.T) {
+	t.Parallel()
+
+	s, err := New(context.Background(), testConfig(t, openStore(t)))
+	if err != nil {
+		t.Fatalf("New() unexpected error: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close() unexpected error: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Errorf("second Close() unexpected error: %v", err)
+	}
+	if rec := serve(t, s.Handler(), http.MethodGet, "/oauth2/jwks"); rec.Code != http.StatusOK {
+		t.Errorf("GET /oauth2/jwks after Close() status = %d, want 200", rec.Code)
 	}
 }

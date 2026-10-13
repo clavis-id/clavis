@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 	"uuid"
 
@@ -102,13 +103,19 @@ type Server struct {
 	tracer        trace.TracerProvider
 	meter         metric.MeterProvider
 	handler       http.Handler
+
+	stop      context.CancelFunc
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 // New validates cfg, prepares the store (creating the default tenant and its
 // signing keys on first use) and returns a ready-to-use Server.
 //
-// New starts signing key rotation in the background. It stops when ctx is
-// canceled, so ctx should live as long as the Server is in use.
+// New starts signing key rotation in the background. Call Close to stop it
+// when the Server is no longer needed; canceling ctx stops it too.
+// Background work never outlives ctx, so ctx must live as long as the Server
+// is in use.
 func New(ctx context.Context, cfg Config) (*Server, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("clavis: %w", err)
@@ -162,8 +169,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	if err := manager.RotateAll(ctx); err != nil {
 		return nil, fmt.Errorf("clavis: preparing signing keys: %w", err)
 	}
-	go manager.Run(ctx, interval)
-
+	bgCtx, stop := context.WithCancel(ctx) //nolint:gosec // stop is kept in the Server and called by Close.
 	s := &Server{
 		issuer:        iss,
 		store:         cfg.Store,
@@ -172,9 +178,25 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		logger:        logger,
 		tracer:        tracer,
 		meter:         meter,
+		stop:          stop,
+		done:          make(chan struct{}),
 	}
 	s.handler = s.routes()
+	go func() {
+		defer close(s.done)
+		manager.Run(bgCtx, interval)
+	}()
 	return s, nil
+}
+
+// Close stops the background work started by New and waits for it to
+// finish. It does not close the store, which the caller owns. Close is safe
+// to call more than once; requests served after Close keep working, but keys
+// are no longer rotated.
+func (s *Server) Close() error {
+	s.closeOnce.Do(s.stop)
+	<-s.done
+	return nil
 }
 
 // Issuer returns the validated issuer URL as a string.
