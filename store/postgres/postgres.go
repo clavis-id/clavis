@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/lock"
 
 	"clavisid.org/clavis/store"
 	"clavisid.org/clavis/store/postgres/internal/db"
@@ -25,6 +26,11 @@ import (
 
 //go:embed migrations/*.sql
 var migrationFiles embed.FS
+
+// migrationLockID is the PostgreSQL advisory lock that serializes schema
+// migrations across Clavis instances. It differs from goose's default so other
+// applications that use goose in the same database do not contend for it.
+const migrationLockID int64 = 0x636c61766973 // "clavis" in ASCII
 
 // SQLSTATE codes mapped to store errors.
 const (
@@ -94,15 +100,20 @@ func New(ctx context.Context, pool *pgxpool.Pool, opts ...Option) (*Store, error
 	return s, nil
 }
 
-// Migrate applies every pending schema migration.
+// Migrate applies every pending schema migration. An advisory lock makes
+// instances that start at the same time apply migrations one after another.
 func (s *Store) Migrate(ctx context.Context) error {
 	fsys, err := fs.Sub(migrationFiles, "migrations")
 	if err != nil {
 		return fmt.Errorf("postgres: loading migrations: %w", err)
 	}
+	locker, err := lock.NewPostgresSessionLocker(lock.WithLockID(migrationLockID))
+	if err != nil {
+		return fmt.Errorf("postgres: preparing migration lock: %w", err)
+	}
 	sqlDB := stdlib.OpenDBFromPool(s.pool)
 	defer sqlDB.Close()
-	p, err := goose.NewProvider(goose.DialectPostgres, sqlDB, fsys)
+	p, err := goose.NewProvider(goose.DialectPostgres, sqlDB, fsys, goose.WithSessionLocker(locker))
 	if err != nil {
 		return fmt.Errorf("postgres: preparing migrations: %w", err)
 	}
