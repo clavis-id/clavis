@@ -1,0 +1,56 @@
+name: Release check
+
+# Builds every release artifact without publishing, and smoke tests the
+# container image. Runs when release configuration changes, on master and on
+# demand.
+on:
+  pull_request:
+    branches: [develop, master]
+    paths:
+      - .goreleaser.yaml
+      - deploy/docker/**
+      - .github/workflows/release*.yml
+      - tools/goreleaser/**
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    name: Snapshot release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+          check-latest: true
+          cache-dependency-path: go.sum
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: v2.18.3
+          args: release --snapshot --clean --skip=sign
+      - name: Release binary size
+        run: |
+          size=$(stat -c %s dist/clavis_linux_amd64_v1/clavis)
+          echo "linux/amd64 release binary: $((size / 1048576)) MiB"
+          test "$size" -lt $((40 * 1048576)) || { echo "release binary exceeds 40 MiB"; exit 1; }
+      - name: Smoke test the image
+        run: |
+          image=$(docker images --format '{{.Repository}}:{{.Tag}}' 'ghcr.io/clavis-id/clavis:*-amd64' | head -n 1)
+          echo "testing $image"
+          key=$(head -c 32 /dev/urandom | base64)
+          docker run -d --name clavis -p 127.0.0.1:8080:8080 -e CLAVIS_KEYS_ENCRYPTION_KEY="$key" "$image"
+          for _ in $(seq 1 50); do curl -sf http://127.0.0.1:8080/readyz && break; sleep 0.2; done
+          curl -sf http://127.0.0.1:8080/oauth2/jwks > /dev/null
+          docker stop -t 30 clavis
+          test "$(docker inspect clavis --format '{{.State.ExitCode}}')" = 0

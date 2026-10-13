@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 	"uuid"
@@ -69,6 +70,9 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	if path == "" || strings.ContainsAny(path, "?#") {
 		return nil, fmt.Errorf("sqlite: invalid database path %q", path)
 	}
+	if err := createPrivate(path); err != nil {
+		return nil, err
+	}
 
 	query := url.Values{"_txlock": {"immediate"}}
 	for _, p := range pragmas {
@@ -92,6 +96,24 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		}
 	}
 	return s, nil
+}
+
+// createPrivate creates the database file readable and writable only by its
+// owner, unless it already exists. SQLite gives its journal files the same
+// permissions, so data never becomes readable by other local users.
+func createPrivate(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // The path is chosen by the operator.
+	switch {
+	case err == nil:
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("sqlite: creating %s: %w", path, err)
+		}
+		return nil
+	case errors.Is(err, fs.ErrExist):
+		return nil
+	default:
+		return fmt.Errorf("sqlite: creating %s: %w", path, err)
+	}
 }
 
 // Migrate applies every pending schema migration.

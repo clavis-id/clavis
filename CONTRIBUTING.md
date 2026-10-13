@@ -20,16 +20,17 @@ use CGo, so no C toolchain is required either.
 ## Common tasks
 
 ```
-make help           List every target
-make build          Compile every package and build bin/clavis
-make run            Run the server locally with deploy/dev/clavis.yaml
-make test           Run tests with the race detector in random order
-make test-postgres  Run the store tests against a throwaway PostgreSQL container
-make generate       Regenerate code after changing SQL migrations or queries
-make lint           Run golangci-lint and actionlint
-make fmt            Format Go code
-make vuln           Report known vulnerabilities
-make check          Run everything CI runs on pull requests
+make help              List every target
+make build             Compile every package and build bin/clavis
+make run               Run the server locally with deploy/dev/clavis.yaml
+make test              Run tests with the race detector in random order
+make test-postgres     Run the store tests against a throwaway PostgreSQL container
+make generate          Regenerate code after changing SQL migrations or queries
+make release-snapshot  Build release archives and images locally without publishing
+make lint              Run golangci-lint and actionlint
+make fmt               Format Go code
+make vuln              Report known vulnerabilities
+make check             Run everything CI runs on pull requests
 ```
 
 ## Branches
@@ -65,6 +66,10 @@ A pull request is ready for review when:
 
 Changes to protocol behavior, cryptography, sessions or token handling receive extra review and
 must reference the specification section they implement.
+
+## Releases
+
+See [docs/releasing.md](docs/releasing.md).
 
 ## Reporting security issues
 
