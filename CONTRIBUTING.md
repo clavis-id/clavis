@@ -1,7 +1,8 @@
 # Contributing to Clavis
 
 Thank you for your interest in Clavis. This guide explains how to set up a development
-environment and what a change needs before it can be merged.
+environment and what a change needs before it can be merged. Everyone taking part in the
+project follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 Clavis is in an early stage. Before starting significant work, open an issue to discuss it, so
 that the change fits the [roadmap](docs/roadmap.md) and the
@@ -12,6 +13,8 @@ that the change fits the [roadmap](docs/roadmap.md) and the
 - Go 1.27 or later.
 - GNU Make.
 - Docker, for PostgreSQL tests and for code generation (sqlc runs in a container).
+- Node.js, only to test the Cloudflare Worker in `deploy/cloudflare/go-import`
+  (`make test-go-import`).
 
 Every other tool (golangci-lint, govulncheck, gitleaks, actionlint) is pinned in its own module
 under `tools/` and runs through `go tool`; nothing else needs to be installed. Clavis does not

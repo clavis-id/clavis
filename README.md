@@ -6,9 +6,10 @@ single static binary in front of any stack.
 
 Clavis is Latin for "key".
 
-> Status: pre-alpha, design phase. There is no runnable code yet. The design, scope and
-> decisions are documented in [`docs/`](docs/). Interfaces described here are targets and will
-> change.
+> Status: pre-alpha. Phase 0 (foundations) is complete: the embeddable server, SQLite and
+> PostgreSQL storage, signing key rotation with a published JWK set, telemetry and the release
+> pipeline. The OpenID Connect and OAuth flows arrive in Phase 1. Interfaces may change in any
+> release before v1.0; see the [roadmap](docs/roadmap.md).
 
 ## Why Clavis
 
@@ -81,6 +82,12 @@ clavis serve --config clavis.yaml
 - [Roadmap](docs/roadmap.md)
 - [Releasing](docs/releasing.md)
 - [Architecture decision records](docs/adr/)
+
+## Contributing
+
+Contributions are welcome; start with [CONTRIBUTING.md](CONTRIBUTING.md). Everyone taking part
+in the project follows the [code of conduct](CODE_OF_CONDUCT.md). Report vulnerabilities
+privately as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
