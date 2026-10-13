@@ -153,6 +153,7 @@ func serve(ctx context.Context, configPath string, environ []string, logOutput i
 	if err != nil {
 		return err
 	}
+	defer srv.Close()
 
 	servers := []serverSpec{{
 		address: cfg.Server.Address,
