@@ -10,11 +10,13 @@ fixes.
 
 ## Reporting a vulnerability
 
-Please report vulnerabilities privately through GitHub:
+Please report vulnerabilities privately, preferably through GitHub:
 
 1. Open the repository's **Security** tab.
 2. Choose **Report a vulnerability**.
 3. Describe the issue, the affected version or commit, and the steps to reproduce it.
+
+If you cannot use GitHub, email **security@clavisid.org** with the same information.
 
 Do not open public issues, pull requests or discussions about a vulnerability before a fix is
 released.

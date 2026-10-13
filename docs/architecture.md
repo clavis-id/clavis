@@ -1,7 +1,10 @@
 # Architecture
 
-This document describes the target architecture of Clavis. It is a design, not a description of
-existing code. Decisions with lasting consequences are recorded as ADRs in [`adr/`](adr/).
+This document describes the target architecture of Clavis. Phase 0 (foundations) is
+implemented: the public embed API, storage ports with SQLite and PostgreSQL adapters, signing
+key management, telemetry and the release pipeline. Everything else is design and will be
+built phase by phase (see the [roadmap](roadmap.md)). Decisions with lasting consequences are
+recorded as ADRs in [`adr/`](adr/).
 
 ## Principles
 
@@ -143,7 +146,7 @@ clavis/
 | `/.well-known/oauth-authorization-server` | RFC 8414 | 1 |
 | `/oauth2/authorize` | RFC 6749, OAuth 2.1, PKCE (RFC 7636) | 1 |
 | `/oauth2/token` | RFC 6749, OAuth 2.1 | 1 |
-| `/oauth2/jwks` | RFC 7517 | 1 |
+| `/oauth2/jwks` | RFC 7517 | 0 (implemented) |
 | `/oauth2/userinfo` | OpenID Connect Core 1.0 | 1 |
 | `/oauth2/revoke` | RFC 7009 | 1 |
 | `/oauth2/introspect` | RFC 7662 | 1 |

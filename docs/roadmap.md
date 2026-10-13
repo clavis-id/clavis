@@ -3,7 +3,8 @@
 Each phase ends with explicit exit criteria. A phase is not complete until every criterion is
 met in CI. Versions before v1.0 make no compatibility promises.
 
-Current phase: **Design** (no code yet).
+Current phase: **Phase 0, code complete.** The remaining exit criterion is the first tagged
+pre-release.
 
 ## Phase 0: Foundations
 
@@ -20,8 +21,8 @@ Scope:
 - Configuration loading and validation, slog logging, OpenTelemetry setup.
 - Signing key management: generation, encryption at rest, rotation, JWKS rendering.
 - Test harness: injected time and identifiers, `httptest` helpers, PostgreSQL in Docker.
-- CONTRIBUTING.md and SECURITY.md. A code of conduct is added before the repository becomes
-  public, together with a dedicated contact address.
+- CONTRIBUTING.md, SECURITY.md (with security@clavisid.org) and CODE_OF_CONDUCT.md
+  (Contributor Covenant 3.0, reports to conduct@clavisid.org).
 
 Exit criteria:
 - `make test`, `make test-postgres`, `make lint` pass in CI on Linux and macOS, amd64 and arm64.
