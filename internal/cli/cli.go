@@ -83,9 +83,12 @@ func newMigrateCommand(environ []string) *cobra.Command {
 	return cmd
 }
 
-// setup loads the configuration and builds the logger shared by commands.
-func setup(ctx context.Context, configPath string, environ []string, logOutput io.Writer) (config.Config, *slog.Logger, error) {
-	res, err := config.Load(configPath, environ)
+// setup loads the configuration with load and builds the logger shared by
+// commands.
+func setup(ctx context.Context, load func(string, []string) (config.Result, error),
+	configPath string, environ []string, logOutput io.Writer,
+) (config.Config, *slog.Logger, error) {
+	res, err := load(configPath, environ)
 	if err != nil {
 		return config.Config{}, nil, err
 	}
@@ -101,7 +104,7 @@ func setup(ctx context.Context, configPath string, environ []string, logOutput i
 }
 
 func serve(ctx context.Context, configPath string, environ []string, logOutput io.Writer) error {
-	cfg, logger, err := setup(ctx, configPath, environ, logOutput)
+	cfg, logger, err := setup(ctx, config.Load, configPath, environ, logOutput)
 	if err != nil {
 		return err
 	}
@@ -238,7 +241,9 @@ func serveAll(ctx context.Context, specs []serverSpec) error {
 }
 
 func migrate(ctx context.Context, configPath string, environ []string, logOutput io.Writer) error {
-	cfg, logger, err := setup(ctx, configPath, environ, logOutput)
+	// Only the database settings are needed, so the key encryption key does
+	// not have to be exposed to migration jobs.
+	cfg, logger, err := setup(ctx, config.LoadDatabase, configPath, environ, logOutput)
 	if err != nil {
 		return err
 	}

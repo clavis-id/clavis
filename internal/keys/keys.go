@@ -52,6 +52,15 @@ const rsaKeyBits = 2048
 // tenantPageSize is the page size used when rotating every tenant.
 const tenantPageSize = 100
 
+// MinPublishAhead is the shortest allowed PublishAhead. Clients cache the
+// JWK set (the HTTP layer allows five minutes) and the Manager caches it for
+// JWKSCacheTTL, so a key must be published well before it signs.
+const MinPublishAhead = 15 * time.Minute
+
+// JWKSCacheTTL is how long the Manager reuses a tenant's JWK set before
+// reading the store again.
+const JWKSCacheTTL = time.Minute
+
 // ErrNoActiveKey is returned by Signer when no key is active for the tenant
 // and algorithm, which happens until the first rotation runs.
 var ErrNoActiveKey = errors.New("keys: no active signing key")
@@ -69,6 +78,10 @@ type Policy struct {
 	// Retention is how long a retired key stays published. It must exceed
 	// the lifetime of every token the key can sign.
 	Retention time.Duration
+	// CheckInterval is how often Run rotates keys. Successors are created
+	// PublishAhead plus CheckInterval before the switch, so they are
+	// published for at least PublishAhead whatever the timing of the check.
+	CheckInterval time.Duration
 }
 
 // DefaultPolicy returns the policy used when none is configured.
@@ -78,6 +91,7 @@ func DefaultPolicy() Policy {
 		RotationPeriod: 30 * 24 * time.Hour,
 		PublishAhead:   24 * time.Hour,
 		Retention:      48 * time.Hour,
+		CheckInterval:  time.Hour,
 	}
 }
 
@@ -97,9 +111,16 @@ func (p Policy) Validate() error {
 		}
 		seen[alg] = true
 	}
-	if p.PublishAhead <= 0 || p.RotationPeriod <= p.PublishAhead {
-		errs = append(errs, fmt.Errorf("publish_ahead (%s) must be positive and shorter than rotation_period (%s)",
-			p.PublishAhead, p.RotationPeriod))
+	if p.PublishAhead < MinPublishAhead {
+		errs = append(errs, fmt.Errorf("publish_ahead must be at least %s, got %s", MinPublishAhead, p.PublishAhead))
+	}
+	if p.CheckInterval <= 0 || p.CheckInterval > p.PublishAhead {
+		errs = append(errs, fmt.Errorf("check_interval (%s) must be positive and no longer than publish_ahead (%s)",
+			p.CheckInterval, p.PublishAhead))
+	}
+	if p.RotationPeriod <= p.PublishAhead+p.CheckInterval {
+		errs = append(errs, fmt.Errorf("rotation_period (%s) must be longer than publish_ahead plus check_interval (%s)",
+			p.RotationPeriod, p.PublishAhead+p.CheckInterval))
 	}
 	if p.Retention <= 0 {
 		errs = append(errs, fmt.Errorf("retention must be positive, got %s", p.Retention))
@@ -146,6 +167,13 @@ type Manager struct {
 
 	mu      sync.Mutex
 	signers map[uuid.UUID]crypto.Signer // decrypted private keys by record ID
+	jwks    map[uuid.UUID]cachedSet     // published key sets by tenant ID
+}
+
+// cachedSet is a tenant's JWK set and the time it stops being reused.
+type cachedSet struct {
+	set     jose.JSONWebKeySet
+	expires time.Time
 }
 
 // NewManager validates cfg and returns a Manager.
@@ -181,13 +209,14 @@ func NewManager(cfg Config) (*Manager, error) {
 		created:   created,
 		failures:  failures,
 		signers:   make(map[uuid.UUID]crypto.Signer),
+		jwks:      make(map[uuid.UUID]cachedSet),
 	}, nil
 }
 
-// Run rotates every tenant's keys each interval until ctx is canceled.
-// Failures are logged and retried on the next tick.
-func (m *Manager) Run(ctx context.Context, interval time.Duration) {
-	ticker := time.NewTicker(interval)
+// Run rotates every tenant's keys each Policy.CheckInterval until ctx is
+// canceled. Failures are logged and retried on the next tick.
+func (m *Manager) Run(ctx context.Context) {
+	ticker := time.NewTicker(m.policy.CheckInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -233,25 +262,36 @@ func (m *Manager) RotateAll(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// Rotate brings one tenant's keys in line with the policy: it creates the
-// first key for each algorithm, or a successor when the current key is about
-// to retire, or a replacement when every key has retired (for example after
-// a long outage).
+// Rotate brings one tenant's keys in line with the policy. For each
+// algorithm it creates:
+//
+//   - a successor, once the current key is within PublishAhead plus
+//     CheckInterval of retiring, scheduled to sign when the current key
+//     retires;
+//   - the first key of an algorithm added to a tenant that already signs
+//     with another one, published PublishAhead before it signs;
+//   - a key that signs immediately when the tenant has no current key at
+//     all: a new tenant, or one whose keys all retired during an outage.
+//     Availability then wins over caches, which may briefly miss the key.
 func (m *Manager) Rotate(ctx context.Context, tenantID uuid.UUID) error {
 	all, err := m.store.SigningKeys().List(ctx, tenantID)
 	if err != nil {
 		return fmt.Errorf("keys: listing keys of tenant %s: %w", tenantID, err)
 	}
 	now := m.now()
+	tenantSigns := slices.ContainsFunc(all, func(k store.SigningKey) bool { return signsAt(k, now) })
 	var errs []error
 	for _, alg := range m.policy.Algorithms {
 		latest, ok := latestKey(all, alg)
 		switch {
+		case !ok && tenantSigns:
+			errs = append(errs, m.create(ctx, tenantID, alg, 1, now.Add(m.policy.PublishAhead)))
 		case !ok:
 			errs = append(errs, m.create(ctx, tenantID, alg, 1, now))
 		case !now.Before(latest.RetiresAt):
 			errs = append(errs, m.create(ctx, tenantID, alg, latest.Generation+1, now))
-		case !latest.ActivatesAt.After(now) && !now.Before(latest.RetiresAt.Add(-m.policy.PublishAhead)):
+		case !latest.ActivatesAt.After(now) &&
+			!now.Before(latest.RetiresAt.Add(-(m.policy.PublishAhead + m.policy.CheckInterval))):
 			errs = append(errs, m.create(ctx, tenantID, alg, latest.Generation+1, latest.RetiresAt))
 		}
 	}
@@ -305,6 +345,9 @@ func (m *Manager) create(ctx context.Context, tenantID uuid.UUID, alg string, ge
 	case err != nil:
 		return fmt.Errorf("keys: storing key: %w", err)
 	}
+	m.mu.Lock()
+	delete(m.jwks, tenantID)
+	m.mu.Unlock()
 	m.created.Add(ctx, 1, metric.WithAttributes(attribute.String("algorithm", alg)))
 	m.logger.LogAttrs(ctx, slog.LevelInfo, "created signing key",
 		slog.String("tenant_id", tenantID.String()),
@@ -325,8 +368,7 @@ func (m *Manager) Signer(ctx context.Context, tenantID uuid.UUID, alg string) (S
 	var current *store.SigningKey
 	for i := range all {
 		k := &all[i]
-		if k.Algorithm == alg && !k.ActivatesAt.After(now) && now.Before(k.RetiresAt) &&
-			(current == nil || k.Generation > current.Generation) {
+		if k.Algorithm == alg && signsAt(*k, now) && (current == nil || k.Generation > current.Generation) {
 			current = k
 		}
 	}
@@ -342,13 +384,23 @@ func (m *Manager) Signer(ctx context.Context, tenantID uuid.UUID, alg string) (S
 
 // JWKS returns the public keys of the tenant that relying parties must
 // accept: the current key, its scheduled successor and retired keys that
-// have not expired.
+// have not expired. The set is cached for JWKSCacheTTL, so frequent requests
+// to the public endpoint do not reach the store. A key whose stored public
+// key cannot be parsed is logged and left out instead of failing the whole
+// set, so one damaged record cannot stop verification of every token.
 func (m *Manager) JWKS(ctx context.Context, tenantID uuid.UUID) (jose.JSONWebKeySet, error) {
+	now := m.now()
+	m.mu.Lock()
+	cached, ok := m.jwks[tenantID]
+	m.mu.Unlock()
+	if ok && now.Before(cached.expires) {
+		return cached.set, nil
+	}
+
 	all, err := m.store.SigningKeys().List(ctx, tenantID)
 	if err != nil {
 		return jose.JSONWebKeySet{}, fmt.Errorf("keys: listing keys of tenant %s: %w", tenantID, err)
 	}
-	now := m.now()
 	set := jose.JSONWebKeySet{Keys: make([]jose.JSONWebKey, 0, len(all))}
 	for _, k := range all {
 		if !now.Before(k.ExpiresAt) {
@@ -356,10 +408,18 @@ func (m *Manager) JWKS(ctx context.Context, tenantID uuid.UUID) (jose.JSONWebKey
 		}
 		pub, err := x509.ParsePKIXPublicKey(k.PublicKey)
 		if err != nil {
-			return jose.JSONWebKeySet{}, fmt.Errorf("keys: corrupt public key %s: %w", k.KeyID, err)
+			m.logger.LogAttrs(ctx, slog.LevelError, "skipping signing key with a corrupt public key",
+				slog.String("tenant_id", tenantID.String()),
+				slog.String("kid", k.KeyID),
+				slog.String("error", err.Error()))
+			continue
 		}
 		set.Keys = append(set.Keys, jose.JSONWebKey{Key: pub, KeyID: k.KeyID, Algorithm: k.Algorithm, Use: "sig"})
 	}
+
+	m.mu.Lock()
+	m.jwks[tenantID] = cachedSet{set: set, expires: now.Add(JWKSCacheTTL)}
+	m.mu.Unlock()
 	return set, nil
 }
 
@@ -400,16 +460,23 @@ func (m *Manager) decrypt(ctx context.Context, k store.SigningKey) (crypto.Signe
 	return signer, nil
 }
 
-// forgetDeleted drops cached private keys whose records no longer exist.
-// Expired keys never sign, so this only bounds memory.
+// forgetDeleted drops cached JWK sets and private keys after expired keys are
+// deleted. Expired keys never sign, so this only bounds memory and keeps the
+// published sets in step with the store.
 func (m *Manager) forgetDeleted(ctx context.Context) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.jwks = make(map[uuid.UUID]cachedSet)
 	if len(m.signers) == 0 {
 		return
 	}
 	m.signers = make(map[uuid.UUID]crypto.Signer)
 	m.logger.LogAttrs(ctx, slog.LevelDebug, "cleared signing key cache")
+}
+
+// signsAt reports whether k is the signing key at time t.
+func signsAt(k store.SigningKey, t time.Time) bool {
+	return !k.ActivatesAt.After(t) && t.Before(k.RetiresAt)
 }
 
 // latestKey returns the key with the highest generation for alg.

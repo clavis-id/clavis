@@ -169,6 +169,16 @@ func TestLoadErrors(t *testing.T) {
 			want:    []string{"read_timeout"},
 		},
 		{
+			name: "duration without a unit in the file",
+			file: "keys:\n  check_interval: 3600\n",
+			want: []string{"check_interval", "needs a unit"},
+		},
+		{
+			name:    "duration without a unit in the environment",
+			environ: []string{"CLAVIS_SERVER_READ_HEADER_TIMEOUT=10"},
+			want:    []string{"read_header_timeout", "missing unit"},
+		},
+		{
 			name: "every validation problem is reported",
 			file: `
 issuer: http://auth.example.com
@@ -200,7 +210,7 @@ log:
 				"database.dsn:",
 				"keys.encryption_key: required",
 				"algorithms must include RS256",
-				"keys.check_interval:",
+				"check_interval (48h0m0s) must be positive and no longer than publish_ahead",
 				"telemetry.tracing.sample_ratio:",
 				"telemetry.tracing.endpoint:",
 				"telemetry.metrics.address:",
@@ -296,4 +306,19 @@ func FuzzParse(f *testing.F) {
 			}
 		}
 	})
+}
+
+func TestLoadDatabaseNeedsOnlyDatabaseSettings(t *testing.T) {
+	t.Parallel()
+
+	res, err := LoadDatabase("", []string{"CLAVIS_DATABASE_DSN=/var/lib/clavis/clavis.db"})
+	if err != nil {
+		t.Fatalf("LoadDatabase() unexpected error: %v", err)
+	}
+	if res.Config.Database.DSN != "/var/lib/clavis/clavis.db" {
+		t.Errorf("DSN = %q, want the value from the environment", res.Config.Database.DSN)
+	}
+	if _, err := LoadDatabase("", []string{"CLAVIS_DATABASE_DRIVER=mysql"}); err == nil {
+		t.Error("LoadDatabase() accepted an invalid driver")
+	}
 }

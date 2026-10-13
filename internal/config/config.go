@@ -147,6 +147,7 @@ type Log struct {
 
 // Default returns the configuration used when nothing overrides it.
 func Default() Config {
+	defaultPolicy := keys.DefaultPolicy()
 	return Config{
 		Issuer: "http://localhost:8080",
 		Server: Server{
@@ -163,11 +164,11 @@ func Default() Config {
 			AutoMigrate: true,
 		},
 		Keys: Keys{
-			Algorithms:     keys.DefaultPolicy().Algorithms,
-			RotationPeriod: keys.DefaultPolicy().RotationPeriod,
-			PublishAhead:   keys.DefaultPolicy().PublishAhead,
-			Retention:      keys.DefaultPolicy().Retention,
-			CheckInterval:  time.Hour,
+			Algorithms:     defaultPolicy.Algorithms,
+			RotationPeriod: defaultPolicy.RotationPeriod,
+			PublishAhead:   defaultPolicy.PublishAhead,
+			Retention:      defaultPolicy.Retention,
+			CheckInterval:  defaultPolicy.CheckInterval,
 		},
 		Telemetry: Telemetry{
 			Tracing: Tracing{SampleRatio: 1},
@@ -194,6 +195,19 @@ type Result struct {
 // overrides from environ (in os.Environ format) and validates the result.
 // Unknown keys in the file and invalid values are errors.
 func Load(path string, environ []string) (Result, error) {
+	return load(path, environ, Config.Validate)
+}
+
+// LoadDatabase reads the same sources as Load but validates only the
+// database and log sections. Commands such as migrate use it, so they do not
+// need secrets they never use, such as the key encryption key.
+func LoadDatabase(path string, environ []string) (Result, error) {
+	return load(path, environ, Config.validateDatabase)
+}
+
+// load reads the file at path, if any, and builds the configuration checked
+// by validate.
+func load(path string, environ []string, validate func(Config) error) (Result, error) {
 	var data []byte
 	if path != "" {
 		var err error
@@ -202,16 +216,35 @@ func Load(path string, environ []string) (Result, error) {
 			return Result{}, fmt.Errorf("reading config file: %w", err)
 		}
 	}
-	res, err := parse(data, environ)
-	if err != nil && path != "" {
-		return Result{}, fmt.Errorf("config file %s: %w", path, err)
+	res, err := decode(data, environ)
+	if err == nil {
+		err = validate(res.Config)
 	}
-	return res, err
+	if err != nil {
+		if path != "" {
+			return Result{}, fmt.Errorf("config file %s: %w", path, err)
+		}
+		return Result{}, err
+	}
+	return res, nil
 }
 
-// parse builds the configuration from YAML data, which may be empty, and
-// environ.
+// parse builds and fully validates the configuration from YAML data, which
+// may be empty, and environ.
 func parse(data []byte, environ []string) (Result, error) {
+	res, err := decode(data, environ)
+	if err != nil {
+		return Result{}, err
+	}
+	if err := res.Config.Validate(); err != nil {
+		return Result{}, err
+	}
+	return res, nil
+}
+
+// decode builds the configuration from YAML data, which may be empty, and
+// environ, without validating it.
+func decode(data []byte, environ []string) (Result, error) {
 	k := koanf.New(".")
 	if len(data) > 0 {
 		if err := k.Load(rawbytes.Provider(data), yaml.Parser()); err != nil {
@@ -241,7 +274,7 @@ func parse(data []byte, environ []string) (Result, error) {
 	err := k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{
 		DecoderConfig: &mapstructure.DecoderConfig{
 			DecodeHook: mapstructure.ComposeDecodeHookFunc(
-				mapstructure.StringToTimeDurationHookFunc(),
+				durationHook,
 				mapstructure.StringToSliceHookFunc(","),
 			),
 			ErrorUnused:      true,
@@ -253,15 +286,14 @@ func parse(data []byte, environ []string) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("decoding config: %w", err)
 	}
-	if err := cfg.Validate(); err != nil {
-		return Result{}, err
-	}
 	return Result{Config: cfg, IgnoredEnv: ignored}, nil
 }
 
 // Validate reports every problem in c, joined into a single error.
 func (c Config) Validate() error {
 	var errs []error
+	errs = append(errs, c.Database.validate()...)
+	errs = append(errs, c.Log.validate()...)
 	if _, err := issuer.Parse(c.Issuer); err != nil {
 		errs = append(errs, fmt.Errorf("issuer: %w", err))
 	}
@@ -279,25 +311,47 @@ func (c Config) Validate() error {
 			errs = append(errs, fmt.Errorf("%s: must be positive, got %s", name, d))
 		}
 	}
-	if !slices.Contains([]string{DriverSQLite, DriverPostgres}, c.Database.Driver) {
-		errs = append(errs, fmt.Errorf("database.driver: must be %s or %s, got %q", DriverSQLite, DriverPostgres, c.Database.Driver))
-	}
-	if c.Database.DSN == "" {
-		errs = append(errs, errors.New("database.dsn: must not be empty"))
-	}
 	errs = append(errs, c.Keys.validate()...)
 	errs = append(errs, c.Telemetry.validate()...)
-	if !slices.Contains([]string{"debug", "info", "warn", "error"}, c.Log.Level) {
-		errs = append(errs, fmt.Errorf("log.level: must be debug, info, warn or error, got %q", c.Log.Level))
-	}
-	if !slices.Contains([]string{"json", "text"}, c.Log.Format) {
-		errs = append(errs, fmt.Errorf("log.format: must be json or text, got %q", c.Log.Format))
-	}
+	return joinProblems(errs)
+}
+
+// validateDatabase reports the problems in the database and log sections.
+func (c Config) validateDatabase() error {
+	return joinProblems(append(c.Database.validate(), c.Log.validate()...))
+}
+
+// joinProblems sorts errs for stable output and joins them, or returns nil.
+func joinProblems(errs []error) error {
 	if len(errs) == 0 {
 		return nil
 	}
 	slices.SortFunc(errs, func(a, b error) int { return strings.Compare(a.Error(), b.Error()) })
 	return fmt.Errorf("invalid configuration: %w", errors.Join(errs...))
+}
+
+// validate reports the problems in the database section.
+func (d Database) validate() []error {
+	var errs []error
+	if !slices.Contains([]string{DriverSQLite, DriverPostgres}, d.Driver) {
+		errs = append(errs, fmt.Errorf("database.driver: must be %s or %s, got %q", DriverSQLite, DriverPostgres, d.Driver))
+	}
+	if d.DSN == "" {
+		errs = append(errs, errors.New("database.dsn: must not be empty"))
+	}
+	return errs
+}
+
+// validate reports the problems in the log section.
+func (l Log) validate() []error {
+	var errs []error
+	if !slices.Contains([]string{"debug", "info", "warn", "error"}, l.Level) {
+		errs = append(errs, fmt.Errorf("log.level: must be debug, info, warn or error, got %q", l.Level))
+	}
+	if !slices.Contains([]string{"json", "text"}, l.Format) {
+		errs = append(errs, fmt.Errorf("log.format: must be json or text, got %q", l.Format))
+	}
+	return errs
 }
 
 // envKeys maps environment variable names to configuration keys for every
@@ -341,9 +395,6 @@ func (k Keys) validate() []error {
 	if err := k.Policy().Validate(); err != nil {
 		errs = append(errs, fmt.Errorf("keys: %w", err))
 	}
-	if k.CheckInterval <= 0 || k.CheckInterval >= k.PublishAhead {
-		errs = append(errs, fmt.Errorf("keys.check_interval: must be positive and shorter than keys.publish_ahead, got %s", k.CheckInterval))
-	}
 	return errs
 }
 
@@ -354,6 +405,7 @@ func (k Keys) Policy() keys.Policy {
 		RotationPeriod: k.RotationPeriod,
 		PublishAhead:   k.PublishAhead,
 		Retention:      k.Retention,
+		CheckInterval:  k.CheckInterval,
 	}
 }
 
@@ -375,4 +427,22 @@ func (t Telemetry) validate() []error {
 		}
 	}
 	return errs
+}
+
+// durationHook decodes durations from strings with a unit, such as "30s".
+// Numbers are rejected: a YAML integer would otherwise be read as
+// nanoseconds, so "check_interval: 3600" would mean 3.6 microseconds.
+func durationHook(_, to reflect.Type, data any) (any, error) {
+	if to != reflect.TypeFor[time.Duration]() {
+		return data, nil
+	}
+	text, ok := data.(string)
+	if !ok {
+		return nil, fmt.Errorf("duration %v needs a unit, for example \"30s\" or \"24h\"", data)
+	}
+	d, err := time.ParseDuration(text)
+	if err != nil {
+		return nil, fmt.Errorf("invalid duration %q: %w", text, err)
+	}
+	return d, nil
 }
