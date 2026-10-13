@@ -9,8 +9,10 @@ Current phase: **Design** (no code yet).
 
 Scope:
 - Go 1.27 toolchain, `go.mod` with module path `github.com/clavis-id/clavis`.
-- Makefile, golangci-lint v2 configuration, GitHub Actions CI, Renovate, CodeQL, OSSF
-  Scorecard, gitleaks.
+- Makefile, golangci-lint v2 configuration, GitHub Actions CI, Dependabot, gitleaks,
+  actionlint. Development tools are pinned in isolated modules under `tools/`.
+- CodeQL, OpenSSF Scorecard and dependency review workflows, which activate automatically when
+  the repository becomes public.
 - goreleaser v2 pipeline: multi-architecture binaries, distroless images, cosign keyless
   signatures, SBOM, artifact attestations.
 - Storage ports with SQLite and PostgreSQL adapters, goose migrations, sqlc queries,
@@ -18,7 +20,8 @@ Scope:
 - Configuration loading and validation, slog logging, OpenTelemetry setup.
 - Signing key management: generation, encryption at rest, rotation, JWKS rendering.
 - Test harness: clock injection, `httptest` server helpers, testcontainers setup.
-- CONTRIBUTING.md, SECURITY.md, code of conduct.
+- CONTRIBUTING.md and SECURITY.md. A code of conduct is added before the repository becomes
+  public, together with a dedicated contact address.
 
 Exit criteria:
 - `make test`, `make test-postgres`, `make lint` pass in CI on Linux and macOS, amd64 and arm64.
