@@ -9,7 +9,7 @@ import (
 	"time"
 	"uuid"
 
-	"github.com/clavis-id/clavis/store"
+	"clavisid.org/clavis/store"
 )
 
 // DefaultTenantSlug is the slug of the tenant served at the root issuer.

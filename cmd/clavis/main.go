@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/clavis-id/clavis/internal/cli"
+	"clavisid.org/clavis/internal/cli"
 )
 
 func main() {

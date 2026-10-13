@@ -16,11 +16,11 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/clavis-id/clavis/internal/app"
-	"github.com/clavis-id/clavis/internal/issuer"
-	"github.com/clavis-id/clavis/internal/keys"
-	"github.com/clavis-id/clavis/kek"
-	"github.com/clavis-id/clavis/store"
+	"clavisid.org/clavis/internal/app"
+	"clavisid.org/clavis/internal/issuer"
+	"clavisid.org/clavis/internal/keys"
+	"clavisid.org/clavis/kek"
+	"clavisid.org/clavis/store"
 )
 
 // readinessTimeout bounds the database check performed by GET /readyz.

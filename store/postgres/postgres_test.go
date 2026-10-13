@@ -12,9 +12,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/clavis-id/clavis/store"
-	"github.com/clavis-id/clavis/store/postgres"
-	"github.com/clavis-id/clavis/store/storetest"
+	"clavisid.org/clavis/store"
+	"clavisid.org/clavis/store/postgres"
+	"clavisid.org/clavis/store/storetest"
 )
 
 // adminDSNVar names the environment variable with a connection URL for a

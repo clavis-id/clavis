@@ -19,8 +19,8 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
-	"github.com/clavis-id/clavis/store"
-	"github.com/clavis-id/clavis/store/postgres/internal/db"
+	"clavisid.org/clavis/store"
+	"clavisid.org/clavis/store/postgres/internal/db"
 )
 
 //go:embed migrations/*.sql

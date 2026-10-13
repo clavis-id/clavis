@@ -1,4 +1,4 @@
-module github.com/clavis-id/clavis
+module clavisid.org/clavis
 
 go 1.27.0
 

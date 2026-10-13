@@ -35,8 +35,8 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/noop"
 
-	"github.com/clavis-id/clavis/kek"
-	"github.com/clavis-id/clavis/store"
+	"clavisid.org/clavis/kek"
+	"clavisid.org/clavis/store"
 )
 
 // Supported JWS algorithms.
@@ -160,7 +160,7 @@ func NewManager(cfg Config) (*Manager, error) {
 	if mp == nil {
 		mp = noop.NewMeterProvider()
 	}
-	meter := mp.Meter("github.com/clavis-id/clavis/internal/keys")
+	meter := mp.Meter("clavisid.org/clavis/internal/keys")
 	created, err := meter.Int64Counter("clavis.signing_keys.created",
 		metric.WithDescription("Signing keys created by rotation."), metric.WithUnit("{key}"))
 	if err != nil {

@@ -10,8 +10,8 @@ import (
 	"time"
 	"uuid"
 
-	"github.com/clavis-id/clavis/store"
-	"github.com/clavis-id/clavis/store/sqlite"
+	"clavisid.org/clavis/store"
+	"clavisid.org/clavis/store/sqlite"
 )
 
 func newDeps(t *testing.T, s store.Store) Deps {

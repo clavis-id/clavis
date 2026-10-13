@@ -14,13 +14,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/clavis-id/clavis"
-	"github.com/clavis-id/clavis/internal/config"
-	"github.com/clavis-id/clavis/internal/logging"
-	"github.com/clavis-id/clavis/internal/server"
-	"github.com/clavis-id/clavis/internal/telemetry"
-	"github.com/clavis-id/clavis/internal/version"
-	"github.com/clavis-id/clavis/kek"
+	"clavisid.org/clavis"
+	"clavisid.org/clavis/internal/config"
+	"clavisid.org/clavis/internal/logging"
+	"clavisid.org/clavis/internal/server"
+	"clavisid.org/clavis/internal/telemetry"
+	"clavisid.org/clavis/internal/version"
+	"clavisid.org/clavis/kek"
 )
 
 // Execute runs the command described by args and returns the process exit

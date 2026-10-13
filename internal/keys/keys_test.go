@@ -16,9 +16,9 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
-	"github.com/clavis-id/clavis/kek"
-	"github.com/clavis-id/clavis/store"
-	"github.com/clavis-id/clavis/store/sqlite"
+	"clavisid.org/clavis/kek"
+	"clavisid.org/clavis/store"
+	"clavisid.org/clavis/store/sqlite"
 )
 
 // clock is a manually advanced time source.

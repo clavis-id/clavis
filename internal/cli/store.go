@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/clavis-id/clavis/internal/config"
-	"github.com/clavis-id/clavis/store"
-	"github.com/clavis-id/clavis/store/postgres"
-	"github.com/clavis-id/clavis/store/sqlite"
+	"clavisid.org/clavis/internal/config"
+	"clavisid.org/clavis/store"
+	"clavisid.org/clavis/store/postgres"
+	"clavisid.org/clavis/store/sqlite"
 )
 
 // migrator is implemented by every first-party store adapter.

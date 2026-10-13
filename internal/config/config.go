@@ -25,9 +25,9 @@ import (
 	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/knadh/koanf/v2"
 
-	"github.com/clavis-id/clavis/internal/issuer"
-	"github.com/clavis-id/clavis/internal/keys"
-	"github.com/clavis-id/clavis/kek"
+	"clavisid.org/clavis/internal/issuer"
+	"clavisid.org/clavis/internal/keys"
+	"clavisid.org/clavis/kek"
 )
 
 // EnvPrefix is the prefix of every environment variable read by Load.
