@@ -97,6 +97,7 @@ linters:
       key-naming-case: snake
     wrapcheck:
       ignore-package-globs:
+        - github.com/clavis-id/clavis
         - github.com/clavis-id/clavis/*
   exclusions:
     generated: strict

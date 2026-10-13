@@ -21,8 +21,13 @@ help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 .PHONY: build
-build: ## Compile every package
+build: ## Compile every package and build bin/clavis
 	$(GO) build ./...
+	$(GO) build -trimpath -o bin/clavis ./cmd/clavis
+
+.PHONY: run
+run: ## Run the server with the local development configuration
+	$(GO) run ./cmd/clavis serve --config deploy/dev/clavis.yaml
 
 .PHONY: test
 test: ## Run tests with the race detector in random order

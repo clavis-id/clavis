@@ -1,0 +1,9 @@
+# Local development configuration. Run with `make run`.
+issuer: http://localhost:8080
+
+server:
+  address: 127.0.0.1:8080
+
+log:
+  level: debug
+  format: text
