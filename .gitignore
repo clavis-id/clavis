@@ -1,0 +1,41 @@
+# Local assistant context (never committed)
+CLAUDE.md
+.claude/settings.local.json
+
+# Build output
+/bin/
+/dist/
+/clavis
+
+# Go test and profiling artifacts
+*.test
+*.out
+*.prof
+coverage.*
+cover.out
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Local databases
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+# End-to-end tests (Playwright)
+e2e/node_modules/
+e2e/test-results/
+e2e/playwright-report/
+e2e/blob-report/
+
+# Conformance suite runs
+conformance/results/
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
