@@ -2,12 +2,14 @@ package keys
 
 import (
 	"bytes"
+	"context"
 	"crypto/x509"
 	"errors"
 	"log/slog"
 	"path/filepath"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 	"uuid"
 
@@ -437,4 +439,131 @@ func TestRotationMetrics(t *testing.T) {
 	if got[RS256] != 1 || got[ES256] != 1 {
 		t.Errorf("created keys by algorithm = %v, want one RS256 and one ES256", got)
 	}
+}
+
+// runFixture starts Run inside a synctest bubble, where time is virtual.
+type runFixture struct {
+	store  *sqlite.Store
+	tenant store.Tenant
+	reader *sdkmetric.ManualReader
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+func startRun(t *testing.T, policy Policy, interval time.Duration) *runFixture {
+	t.Helper()
+	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "clavis.db"))
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+	tn := store.Tenant{ID: uuid.NewV7(), Slug: "acme", Name: "Acme", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := s.Tenants().Create(t.Context(), tn); err != nil {
+		t.Fatalf("creating tenant: %v", err)
+	}
+	reader := sdkmetric.NewManualReader()
+	m, err := NewManager(Config{
+		Store:         s,
+		Encrypter:     newEncrypter(t, kek.GenerateSecret()),
+		Policy:        policy,
+		Logger:        slog.New(slog.DiscardHandler),
+		Now:           time.Now,
+		NewID:         uuid.NewV7,
+		MeterProvider: sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)),
+	})
+	if err != nil {
+		t.Fatalf("NewManager() unexpected error: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	f := &runFixture{store: s, tenant: tn, reader: reader, cancel: cancel, done: make(chan struct{})}
+	go func() {
+		defer close(f.done)
+		m.Run(ctx, interval)
+	}()
+	return f
+}
+
+func (f *runFixture) stop() {
+	f.cancel()
+	<-f.done
+	_ = f.store.Close()
+}
+
+func (f *runFixture) keyCount(t *testing.T) int {
+	t.Helper()
+	keys, err := f.store.SigningKeys().List(t.Context(), f.tenant.ID)
+	if err != nil {
+		t.Fatalf("listing keys: %v", err)
+	}
+	return len(keys)
+}
+
+func counterValue(t *testing.T, reader *sdkmetric.ManualReader, name string) int64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(t.Context(), &rm); err != nil {
+		t.Fatalf("collecting metrics: %v", err)
+	}
+	var total int64
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if sum, ok := m.Data.(metricdata.Sum[int64]); ok && m.Name == name {
+				for _, dp := range sum.DataPoints {
+					total += dp.Value
+				}
+			}
+		}
+	}
+	return total
+}
+
+func TestRunRotatesOnSchedule(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		policy := Policy{
+			Algorithms:     []string{RS256},
+			RotationPeriod: 4 * time.Hour,
+			PublishAhead:   2 * time.Hour,
+			Retention:      time.Hour,
+		}
+		f := startRun(t, policy, 30*time.Minute)
+		defer f.stop()
+
+		synctest.Wait()
+		if n := f.keyCount(t); n != 0 {
+			t.Fatalf("Run() created %d keys before its first tick, want 0", n)
+		}
+
+		// The first tick creates the initial key.
+		time.Sleep(30 * time.Minute)
+		synctest.Wait()
+		if n := f.keyCount(t); n != 1 {
+			t.Fatalf("keys after the first tick = %d, want 1", n)
+		}
+
+		// Two hours before the first key retires, a tick schedules its successor.
+		time.Sleep(policy.RotationPeriod - policy.PublishAhead)
+		synctest.Wait()
+		if n := f.keyCount(t); n != 2 {
+			t.Fatalf("keys inside the publish-ahead window = %d, want 2", n)
+		}
+		if got := counterValue(t, f.reader, "clavis.signing_keys.created"); got != 2 {
+			t.Errorf("created keys counter = %d, want 2", got)
+		}
+	})
+}
+
+func TestRunCountsFailures(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		f := startRun(t, DefaultPolicy(), time.Minute)
+		defer f.stop()
+
+		// A closed store makes every rotation fail.
+		if err := f.store.Close(); err != nil {
+			t.Fatalf("closing store: %v", err)
+		}
+		time.Sleep(3 * time.Minute)
+		synctest.Wait()
+		if got := counterValue(t, f.reader, "clavis.signing_keys.rotation_failures"); got != 3 {
+			t.Errorf("rotation failures counter = %d, want 3", got)
+		}
+	})
 }
