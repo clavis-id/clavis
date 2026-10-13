@@ -55,9 +55,12 @@ clavis/
   cmd/clavis/            CLI and server entry point (serve, migrate, plan, apply, keys, import)
   clavis.go              Public embed API: New, Config, Server, Server.Handler, Server.Verifier
   middleware/            Public: resource-server token validation for net/http
-  store/                 Public: storage ports
+  store/                 Public: storage ports and record types
     sqlite/              Public: SQLite adapter (modernc.org/sqlite, CGo-free)
-    postgres/            Public: PostgreSQL adapter (pgx v5)
+      migrations/        SQL migrations, embedded in the adapter
+      queries/           SQL queries compiled by sqlc
+      internal/db/       Generated query code (do not edit)
+    postgres/            Public: PostgreSQL adapter (pgx v5), same structure as sqlite/
     storetest/           Public: contract suite every adapter must pass
   hooks/                 Public: hook payload types and WebAssembly ABI
   client/                Public: generated Go client for the admin API
@@ -78,8 +81,7 @@ clavis/
     config/              Configuration schema, loading and validation
     telemetry/           slog setup, OpenTelemetry traces and metrics
   api/openapi.yaml       Admin API contract (source of truth)
-  migrations/sqlite/     SQL migrations for SQLite
-  migrations/postgres/   SQL migrations for PostgreSQL
+  sqlc.yaml              Query code generation for both adapters
   conformance/           OpenID conformance suite plans and runner
   e2e/                   Playwright browser tests
   deploy/                Docker Compose examples, later Helm chart

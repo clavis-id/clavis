@@ -19,7 +19,7 @@ Scope:
   `store/storetest` contract suite.
 - Configuration loading and validation, slog logging, OpenTelemetry setup.
 - Signing key management: generation, encryption at rest, rotation, JWKS rendering.
-- Test harness: clock injection, `httptest` server helpers, testcontainers setup.
+- Test harness: injected time and identifiers, `httptest` helpers, PostgreSQL in Docker.
 - CONTRIBUTING.md and SECURITY.md. A code of conduct is added before the repository becomes
   public, together with a dedicated contact address.
 
