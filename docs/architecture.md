@@ -22,9 +22,19 @@ existing code. Decisions with lasting consequences are recorded as ADRs in [`adr
 ### Embedded library
 
 ```go
+db, err := sqlite.Open(ctx, "auth.db")
+if err != nil {
+    return err
+}
+enc, err := kek.NewLocal(secretFromYourSecretsManager)
+if err != nil {
+    return err
+}
+
 auth, err := clavis.New(ctx, clavis.Config{
-    Issuer: "https://app.example.com/auth",
-    Store:  sqlite.MustOpen("file:auth.db"),
+    Issuer:       "https://app.example.com/auth",
+    Store:        db,
+    KeyEncrypter: enc,
 })
 if err != nil {
     return err
@@ -62,6 +72,7 @@ clavis/
       internal/db/       Generated query code (do not edit)
     postgres/            Public: PostgreSQL adapter (pgx v5), same structure as sqlite/
     storetest/           Public: contract suite every adapter must pass
+  kek/                   Public: key encryption (Encrypter interface, AES-256-GCM Local)
   hooks/                 Public: hook payload types and WebAssembly ABI
   client/                Public: generated Go client for the admin API
   internal/
@@ -145,9 +156,10 @@ clavis/
 
 - **Passwords:** argon2id with at least the OWASP baseline (19 MiB memory, 2 iterations,
   1 lane), parameters stored with each hash and upgraded transparently on login.
-- **Signing keys:** generated per tenant, encrypted at rest with AES-256-GCM under a key
-  encryption key supplied by configuration or a KMS. Rotated on a schedule; retired keys stay
-  in the JWKS until every token they signed has expired.
+- **Signing keys:** one sequence per tenant and algorithm (RS256 always; ES256 and EdDSA
+  optional), encrypted at rest through `kek.Encrypter` (AES-256-GCM by default, bound to the
+  record by additional data). Rotated every 30 days by default; a successor is published 24
+  hours before it signs and a retired key stays in the JWKS for 48 hours. See ADR 0011.
 - **Tokens:** short-lived JWT access tokens bound to an audience; opaque, rotating refresh
   tokens with reuse detection that revokes the whole token family.
 - **Browser sessions:** `__Host-` prefixed, `Secure`, `HttpOnly`, `SameSite=Lax` cookies;
@@ -164,7 +176,7 @@ clavis/
 |---|---|---|
 | `store.Store` | SQLite, PostgreSQL | Persistence |
 | `Sender` | SMTP | Email delivery |
-| `KeyEncrypter` | Local key encryption key | Signing key protection (KMS adapters later) |
+| `kek.Encrypter` | `kek.Local` (AES-256-GCM) | Signing key protection (KMS adapters later) |
 | `Hook` | Webhook, WebAssembly | Lifecycle customization |
 | `RateLimiter` | In-process, store-backed | Abuse protection |
 | `UpstreamProvider` | Generic OIDC, Google, GitHub, Apple, Microsoft | Federation |

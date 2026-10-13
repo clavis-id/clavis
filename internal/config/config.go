@@ -25,6 +25,8 @@ import (
 	"github.com/knadh/koanf/v2"
 
 	"github.com/clavis-id/clavis/internal/issuer"
+	"github.com/clavis-id/clavis/internal/keys"
+	"github.com/clavis-id/clavis/kek"
 )
 
 // EnvPrefix is the prefix of every environment variable read by Load.
@@ -43,6 +45,8 @@ type Config struct {
 	Server Server `koanf:"server"`
 	// Database configures where Clavis stores its data.
 	Database Database `koanf:"database"`
+	// Keys configures token signing keys and their encryption at rest.
+	Keys Keys `koanf:"keys"`
 	// Log configures structured logging.
 	Log Log `koanf:"log"`
 }
@@ -82,6 +86,30 @@ type Server struct {
 	ShutdownTimeout time.Duration `koanf:"shutdown_timeout"`
 }
 
+// Keys configures token signing keys and their encryption at rest.
+type Keys struct {
+	// EncryptionKey is the base64-encoded 32-byte key that encrypts private
+	// signing keys before they reach the database. It is required and is
+	// never logged. Generate one with `clavis keys new-encryption-key`.
+	EncryptionKey string `koanf:"encryption_key"`
+	// PreviousEncryptionKeys still decrypt existing keys after
+	// EncryptionKey is rotated. In the environment, separate them with
+	// commas.
+	PreviousEncryptionKeys []string `koanf:"previous_encryption_keys"`
+	// Algorithms lists the JWS algorithms used to sign tokens: RS256
+	// (required), ES256, EdDSA. In the environment, separate them with
+	// commas.
+	Algorithms []string `koanf:"algorithms"`
+	// RotationPeriod is how long each signing key signs.
+	RotationPeriod time.Duration `koanf:"rotation_period"`
+	// PublishAhead is how long a new key is published before it signs.
+	PublishAhead time.Duration `koanf:"publish_ahead"`
+	// Retention is how long a retired key stays published.
+	Retention time.Duration `koanf:"retention"`
+	// CheckInterval is how often rotation runs.
+	CheckInterval time.Duration `koanf:"check_interval"`
+}
+
 // Log configures structured logging.
 type Log struct {
 	// Level is the minimum level: debug, info, warn or error.
@@ -106,6 +134,13 @@ func Default() Config {
 			Driver:      DriverSQLite,
 			DSN:         "clavis.db",
 			AutoMigrate: true,
+		},
+		Keys: Keys{
+			Algorithms:     keys.DefaultPolicy().Algorithms,
+			RotationPeriod: keys.DefaultPolicy().RotationPeriod,
+			PublishAhead:   keys.DefaultPolicy().PublishAhead,
+			Retention:      keys.DefaultPolicy().Retention,
+			CheckInterval:  time.Hour,
 		},
 		Log: Log{
 			Level:  "info",
@@ -161,7 +196,10 @@ func Load(path string, environ []string) (Result, error) {
 	cfg := Default()
 	err := k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{
 		DecoderConfig: &mapstructure.DecoderConfig{
-			DecodeHook:       mapstructure.StringToTimeDurationHookFunc(),
+			DecodeHook: mapstructure.ComposeDecodeHookFunc(
+				mapstructure.StringToTimeDurationHookFunc(),
+				mapstructure.StringToSliceHookFunc(","),
+			),
 			ErrorUnused:      true,
 			WeaklyTypedInput: true,
 			TagName:          "koanf",
@@ -203,6 +241,7 @@ func (c Config) Validate() error {
 	if c.Database.DSN == "" {
 		errs = append(errs, errors.New("database.dsn: must not be empty"))
 	}
+	errs = append(errs, c.Keys.validate()...)
 	if !slices.Contains([]string{"debug", "info", "warn", "error"}, c.Log.Level) {
 		errs = append(errs, fmt.Errorf("log.level: must be debug, info, warn or error, got %q", c.Log.Level))
 	}
@@ -219,7 +258,7 @@ func (c Config) Validate() error {
 // envKeys maps environment variable names to configuration keys for every
 // leaf field of t.
 func envKeys(t reflect.Type, prefix string) map[string]string {
-	keys := make(map[string]string)
+	out := make(map[string]string)
 	for f := range t.Fields() {
 		tag := f.Tag.Get("koanf")
 		if tag == "" || tag == "-" {
@@ -231,11 +270,44 @@ func envKeys(t reflect.Type, prefix string) map[string]string {
 		}
 		if f.Type.Kind() == reflect.Struct && f.Type != reflect.TypeFor[time.Duration]() {
 			for name, k := range envKeys(f.Type, key) {
-				keys[name] = k
+				out[name] = k
 			}
 			continue
 		}
-		keys[EnvPrefix+strings.ToUpper(strings.ReplaceAll(key, ".", "_"))] = key
+		out[EnvPrefix+strings.ToUpper(strings.ReplaceAll(key, ".", "_"))] = key
 	}
-	return keys
+	return out
+}
+
+// validate reports the problems in the keys section. Secret values never
+// appear in the messages.
+func (k Keys) validate() []error {
+	var errs []error
+	if k.EncryptionKey == "" {
+		errs = append(errs, errors.New("keys.encryption_key: required; generate one with `clavis keys new-encryption-key`"))
+	} else if _, err := kek.ParseSecret(k.EncryptionKey); err != nil {
+		errs = append(errs, fmt.Errorf("keys.encryption_key: %w", err))
+	}
+	for i, prev := range k.PreviousEncryptionKeys {
+		if _, err := kek.ParseSecret(prev); err != nil {
+			errs = append(errs, fmt.Errorf("keys.previous_encryption_keys[%d]: %w", i, err))
+		}
+	}
+	if err := k.Policy().Validate(); err != nil {
+		errs = append(errs, fmt.Errorf("keys: %w", err))
+	}
+	if k.CheckInterval <= 0 || k.CheckInterval >= k.PublishAhead {
+		errs = append(errs, fmt.Errorf("keys.check_interval: must be positive and shorter than keys.publish_ahead, got %s", k.CheckInterval))
+	}
+	return errs
+}
+
+// Policy returns the rotation policy described by k.
+func (k Keys) Policy() keys.Policy {
+	return keys.Policy{
+		Algorithms:     k.Algorithms,
+		RotationPeriod: k.RotationPeriod,
+		PublishAhead:   k.PublishAhead,
+		Retention:      k.Retention,
+	}
 }

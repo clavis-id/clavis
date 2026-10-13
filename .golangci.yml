@@ -71,6 +71,7 @@ linters:
         - style
       disabled-checks:
         - hugeParam
+        - rangeValCopy
         - whyNoLint
     gosec:
       excludes:

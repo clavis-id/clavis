@@ -19,3 +19,4 @@ request. Status values: Proposed, Accepted, Superseded by NNNN, Deprecated.
 | [0008](0008-hooks-webhooks-and-wasm.md) | Hooks as webhooks and WebAssembly modules | Accepted |
 | [0009](0009-per-tenant-issuer.md) | Multi-tenancy with a per-tenant issuer | Accepted |
 | [0010](0010-module-path.md) | Module path github.com/clavis-id/clavis | Accepted |
+| [0011](0011-signing-key-lifecycle.md) | Signing key lifecycle and encryption at rest | Accepted |

@@ -83,10 +83,11 @@ func TestEnsureDefaultTenantIsSafeUnderConcurrency(t *testing.T) {
 }
 
 // failingStore returns a fixed error from every tenant lookup.
-type failingStore struct{}
+// failingStore embeds store.Store so it keeps compiling as ports are added;
+// only the methods used here are implemented.
+type failingStore struct{ store.Store }
 
-func (failingStore) Tenants() store.Tenants     { return failingTenants{} }
-func (failingStore) Ping(context.Context) error { return nil }
+func (failingStore) Tenants() store.Tenants { return failingTenants{} }
 
 type failingTenants struct{ store.Tenants }
 

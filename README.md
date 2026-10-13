@@ -43,9 +43,19 @@ rationale and how Clavis relates to existing projects.
 Embedded in a Go application:
 
 ```go
+db, err := sqlite.Open(ctx, "auth.db")
+if err != nil {
+    return err
+}
+enc, err := kek.NewLocal(secretFromYourSecretsManager)
+if err != nil {
+    return err
+}
+
 auth, err := clavis.New(ctx, clavis.Config{
-    Issuer: "https://app.example.com/auth",
-    Store:  sqlite.MustOpen("file:auth.db"),
+    Issuer:       "https://app.example.com/auth",
+    Store:        db,
+    KeyEncrypter: enc,
 })
 if err != nil {
     return err
@@ -59,6 +69,7 @@ As a standalone server, any OpenID Connect client library in any language integr
 Clavis through standard discovery:
 
 ```
+clavis keys new-encryption-key   # store the output in your secrets manager
 clavis serve --config clavis.yaml
 ```
 

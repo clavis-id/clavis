@@ -37,6 +37,8 @@ const MaxPageSize = 1000
 type Store interface {
 	// Tenants returns the tenant repository.
 	Tenants() Tenants
+	// SigningKeys returns the signing key repository.
+	SigningKeys() SigningKeys
 	// Ping reports whether the underlying database is reachable.
 	Ping(ctx context.Context) error
 }
@@ -69,4 +71,46 @@ type Tenants interface {
 	List(ctx context.Context, after uuid.UUID, limit int) ([]Tenant, error)
 	// Delete removes the tenant with the given ID, or returns ErrNotFound.
 	Delete(ctx context.Context, id uuid.UUID) error
+}
+
+// SigningKey is a key pair that signs tokens for one tenant and one
+// algorithm. Its lifecycle is fixed when it is created: it is published from
+// creation, signs between ActivatesAt and RetiresAt, and stays published
+// until ExpiresAt so tokens it signed can still be verified.
+type SigningKey struct {
+	// ID is a version 7 UUID assigned on creation.
+	ID       uuid.UUID
+	TenantID uuid.UUID
+	// Algorithm is the JWS algorithm, such as "RS256".
+	Algorithm string
+	// Generation increases by one with every rotation of a tenant's keys for
+	// an algorithm. It is unique per tenant and algorithm, which prevents
+	// two instances from creating the same successor.
+	Generation int64
+	// KeyID is the "kid" published in the JWK set. It is unique per tenant.
+	KeyID string
+	// PublicKey is the public key in PKIX, ASN.1 DER form.
+	PublicKey []byte
+	// PrivateKey is the PKCS #8 private key encrypted by the key
+	// encryption key named by EncryptionKeyID.
+	PrivateKey      []byte
+	EncryptionKeyID string
+	ActivatesAt     time.Time
+	RetiresAt       time.Time
+	ExpiresAt       time.Time
+	CreatedAt       time.Time
+}
+
+// SigningKeys stores signing keys.
+type SigningKeys interface {
+	// Create inserts k. It returns ErrConflict when the ID, the key ID within
+	// the tenant, or the generation for the tenant and algorithm is already
+	// in use, and ErrNotFound when the tenant does not exist.
+	Create(ctx context.Context, k SigningKey) error
+	// List returns every key of a tenant, ordered by algorithm and then by
+	// generation.
+	List(ctx context.Context, tenantID uuid.UUID) ([]SigningKey, error)
+	// DeleteExpired removes the keys of every tenant whose ExpiresAt is not
+	// after now, and returns how many were removed.
+	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
 }

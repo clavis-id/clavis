@@ -21,18 +21,79 @@ func writeFile(t *testing.T, content string) string {
 	return path
 }
 
+// testKey is a valid encryption key for tests (32 zero bytes, base64).
+const testKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
 func TestLoadDefaults(t *testing.T) {
 	t.Parallel()
 
-	res, err := Load("", nil)
+	res, err := Load("", []string{"CLAVIS_KEYS_ENCRYPTION_KEY=" + testKey})
 	if err != nil {
 		t.Fatalf("Load() unexpected error: %v", err)
 	}
-	if diff := cmp.Diff(Default(), res.Config); diff != "" {
+	want := Default()
+	want.Keys.EncryptionKey = testKey
+	if diff := cmp.Diff(want, res.Config); diff != "" {
 		t.Errorf("Load() mismatch with Default() (-want +got):\n%s", diff)
 	}
 	if len(res.IgnoredEnv) != 0 {
 		t.Errorf("IgnoredEnv = %v, want none", res.IgnoredEnv)
+	}
+}
+
+func TestLoadRequiresEncryptionKey(t *testing.T) {
+	t.Parallel()
+
+	_, err := Load("", nil)
+	if err == nil || !strings.Contains(err.Error(), "keys.encryption_key: required") {
+		t.Errorf("Load() error = %v, want a missing encryption key error", err)
+	}
+}
+
+func TestLoadNeverEchoesSecrets(t *testing.T) {
+	t.Parallel()
+
+	const bad = "c2VjcmV0LXRoYXQtaXMtdG9vLXNob3J0"
+	_, err := Load("", []string{
+		"CLAVIS_KEYS_ENCRYPTION_KEY=" + bad,
+		"CLAVIS_KEYS_PREVIOUS_ENCRYPTION_KEYS=" + testKey + "," + bad,
+	})
+	if err == nil {
+		t.Fatal("Load() accepted invalid encryption keys")
+	}
+	if strings.Contains(err.Error(), bad) {
+		t.Errorf("Load() error %q contains the secret value", err)
+	}
+	if !strings.Contains(err.Error(), "previous_encryption_keys[1]") {
+		t.Errorf("Load() error %q does not point at the invalid previous key", err)
+	}
+}
+
+func TestLoadListsFromFileAndEnvironment(t *testing.T) {
+	t.Parallel()
+
+	path := writeFile(t, "keys:\n  algorithms: [RS256, ES256]\n")
+	res, err := Load(path, []string{"CLAVIS_KEYS_ENCRYPTION_KEY=" + testKey})
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	if diff := cmp.Diff([]string{"RS256", "ES256"}, res.Config.Keys.Algorithms); diff != "" {
+		t.Errorf("algorithms from file mismatch (-want +got):\n%s", diff)
+	}
+
+	res, err = Load(path, []string{
+		"CLAVIS_KEYS_ENCRYPTION_KEY=" + testKey,
+		"CLAVIS_KEYS_ALGORITHMS=RS256,EdDSA",
+		"CLAVIS_KEYS_PREVIOUS_ENCRYPTION_KEYS=" + testKey + "," + testKey,
+	})
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	if diff := cmp.Diff([]string{"RS256", "EdDSA"}, res.Config.Keys.Algorithms); diff != "" {
+		t.Errorf("algorithms from environment mismatch (-want +got):\n%s", diff)
+	}
+	if got := len(res.Config.Keys.PreviousEncryptionKeys); got != 2 {
+		t.Errorf("previous encryption keys = %d, want 2", got)
 	}
 }
 
@@ -55,6 +116,7 @@ log:
 		"CLAVIS_DATABASE_DRIVER=postgres",
 		"CLAVIS_DATABASE_DSN=postgres://clavis@db.internal/clavis",
 		"CLAVIS_DATABASE_AUTO_MIGRATE=false",
+		"CLAVIS_KEYS_ENCRYPTION_KEY=" + testKey,
 		"CLAVIS_CONFIG=/ignored/because/it/is/the/file/path",
 		"CLAVIS_SERVICE_HOST=10.0.0.12",
 		"CLAVIS_PORT=tcp://10.0.0.12:8080",
@@ -73,6 +135,7 @@ log:
 	want.Log.Level = "debug"
 	want.Log.Format = "text"
 	want.Database = Database{Driver: "postgres", DSN: "postgres://clavis@db.internal/clavis", AutoMigrate: false}
+	want.Keys.EncryptionKey = testKey
 	if diff := cmp.Diff(want, res.Config); diff != "" {
 		t.Errorf("Load() config mismatch (-want +got):\n%s", diff)
 	}
@@ -115,6 +178,9 @@ server:
 database:
   driver: mysql
   dsn: ""
+keys:
+  algorithms: [ES256]
+  check_interval: 48h
 log:
   level: verbose
   format: xml
@@ -125,6 +191,9 @@ log:
 				"server.write_timeout: must be positive",
 				"database.driver:",
 				"database.dsn:",
+				"keys.encryption_key: required",
+				"algorithms must include RS256",
+				"keys.check_interval:",
 				"log.level:",
 				"log.format:",
 			},
@@ -164,18 +233,25 @@ func TestEnvKeysCoverEveryField(t *testing.T) {
 	t.Parallel()
 
 	want := map[string]string{
-		"CLAVIS_ISSUER":                     "issuer",
-		"CLAVIS_SERVER_ADDRESS":             "server.address",
-		"CLAVIS_SERVER_READ_HEADER_TIMEOUT": "server.read_header_timeout",
-		"CLAVIS_SERVER_READ_TIMEOUT":        "server.read_timeout",
-		"CLAVIS_SERVER_WRITE_TIMEOUT":       "server.write_timeout",
-		"CLAVIS_SERVER_IDLE_TIMEOUT":        "server.idle_timeout",
-		"CLAVIS_SERVER_SHUTDOWN_TIMEOUT":    "server.shutdown_timeout",
-		"CLAVIS_DATABASE_DRIVER":            "database.driver",
-		"CLAVIS_DATABASE_DSN":               "database.dsn",
-		"CLAVIS_DATABASE_AUTO_MIGRATE":      "database.auto_migrate",
-		"CLAVIS_LOG_LEVEL":                  "log.level",
-		"CLAVIS_LOG_FORMAT":                 "log.format",
+		"CLAVIS_ISSUER":                        "issuer",
+		"CLAVIS_SERVER_ADDRESS":                "server.address",
+		"CLAVIS_SERVER_READ_HEADER_TIMEOUT":    "server.read_header_timeout",
+		"CLAVIS_SERVER_READ_TIMEOUT":           "server.read_timeout",
+		"CLAVIS_SERVER_WRITE_TIMEOUT":          "server.write_timeout",
+		"CLAVIS_SERVER_IDLE_TIMEOUT":           "server.idle_timeout",
+		"CLAVIS_SERVER_SHUTDOWN_TIMEOUT":       "server.shutdown_timeout",
+		"CLAVIS_DATABASE_DRIVER":               "database.driver",
+		"CLAVIS_DATABASE_DSN":                  "database.dsn",
+		"CLAVIS_DATABASE_AUTO_MIGRATE":         "database.auto_migrate",
+		"CLAVIS_KEYS_ENCRYPTION_KEY":           "keys.encryption_key",
+		"CLAVIS_KEYS_PREVIOUS_ENCRYPTION_KEYS": "keys.previous_encryption_keys",
+		"CLAVIS_KEYS_ALGORITHMS":               "keys.algorithms",
+		"CLAVIS_KEYS_ROTATION_PERIOD":          "keys.rotation_period",
+		"CLAVIS_KEYS_PUBLISH_AHEAD":            "keys.publish_ahead",
+		"CLAVIS_KEYS_RETENTION":                "keys.retention",
+		"CLAVIS_KEYS_CHECK_INTERVAL":           "keys.check_interval",
+		"CLAVIS_LOG_LEVEL":                     "log.level",
+		"CLAVIS_LOG_FORMAT":                    "log.format",
 	}
 	if diff := cmp.Diff(want, envKeys(reflect.TypeFor[Config](), "")); diff != "" {
 		t.Errorf("envKeys() mismatch (-want +got):\n%s", diff)
