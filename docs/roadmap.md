@@ -8,7 +8,7 @@ Current phase: **Design** (no code yet).
 ## Phase 0: Foundations
 
 Scope:
-- Go 1.27 toolchain, `go.mod` with module path `github.com/clavis-id/clavis`.
+- Go 1.27 toolchain, `go.mod` with module path `clavisid.org/clavis` (ADR 0012).
 - Makefile, golangci-lint v2 configuration, GitHub Actions CI, Dependabot, gitleaks,
   actionlint. Development tools are pinned in isolated modules under `tools/`.
 - CodeQL, OpenSSF Scorecard and dependency review workflows, which activate automatically when

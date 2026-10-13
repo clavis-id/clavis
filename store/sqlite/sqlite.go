@@ -22,8 +22,8 @@ import (
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 
-	"github.com/clavis-id/clavis/store"
-	"github.com/clavis-id/clavis/store/sqlite/internal/db"
+	"clavisid.org/clavis/store"
+	"clavisid.org/clavis/store/sqlite/internal/db"
 )
 
 //go:embed migrations/*.sql

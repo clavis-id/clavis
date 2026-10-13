@@ -1,4 +1,4 @@
-module github.com/clavis-id/clavis/tools/goreleaser
+module clavisid.org/clavis/tools/goreleaser
 
 go 1.27.1
 

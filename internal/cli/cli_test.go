@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/clavis-id/clavis/kek"
-	"github.com/clavis-id/clavis/store/sqlite"
+	"clavisid.org/clavis/kek"
+	"clavisid.org/clavis/store/sqlite"
 )
 
 // testKey is a valid encryption key for tests (32 zero bytes, base64).

@@ -1,4 +1,4 @@
-module github.com/clavis-id/clavis/tools/gitleaks
+module clavisid.org/clavis/tools/gitleaks
 
 go 1.27.0
 

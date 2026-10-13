@@ -8,9 +8,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/clavis-id/clavis"
-	"github.com/clavis-id/clavis/kek"
-	"github.com/clavis-id/clavis/store/sqlite"
+	"clavisid.org/clavis"
+	"clavisid.org/clavis/kek"
+	"clavisid.org/clavis/store/sqlite"
 )
 
 // Clavis mounts on any router. Here it serves every route below /auth/ of an

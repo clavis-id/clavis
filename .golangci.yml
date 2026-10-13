@@ -98,8 +98,8 @@ linters:
       key-naming-case: snake
     wrapcheck:
       ignore-package-globs:
-        - github.com/clavis-id/clavis
-        - github.com/clavis-id/clavis/*
+        - clavisid.org/clavis
+        - clavisid.org/clavis/*
   exclusions:
     generated: strict
     presets:
@@ -124,7 +124,7 @@ formatters:
       simplify: true
     goimports:
       local-prefixes:
-        - github.com/clavis-id/clavis
+        - clavisid.org/clavis
 
 issues:
   max-issues-per-linter: 0

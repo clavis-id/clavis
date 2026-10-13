@@ -13,11 +13,11 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/clavis-id/clavis/internal/app"
-	"github.com/clavis-id/clavis/internal/issuer"
-	"github.com/clavis-id/clavis/kek"
-	"github.com/clavis-id/clavis/store"
-	"github.com/clavis-id/clavis/store/sqlite"
+	"clavisid.org/clavis/internal/app"
+	"clavisid.org/clavis/internal/issuer"
+	"clavisid.org/clavis/kek"
+	"clavisid.org/clavis/store"
+	"clavisid.org/clavis/store/sqlite"
 )
 
 func openStore(t *testing.T) *sqlite.Store {

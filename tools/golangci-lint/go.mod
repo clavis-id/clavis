@@ -1,4 +1,4 @@
-module github.com/clavis-id/clavis/tools/golangci-lint
+module clavisid.org/clavis/tools/golangci-lint
 
 go 1.27.0
 

@@ -17,7 +17,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/clavis-id/clavis/store"
+	"clavisid.org/clavis/store"
 )
 
 // OpenFunc returns a new, empty store for one test. It must register any

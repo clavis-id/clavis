@@ -6,9 +6,9 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/clavis-id/clavis/store"
-	"github.com/clavis-id/clavis/store/sqlite"
-	"github.com/clavis-id/clavis/store/storetest"
+	"clavisid.org/clavis/store"
+	"clavisid.org/clavis/store/sqlite"
+	"clavisid.org/clavis/store/storetest"
 )
 
 func open(t *testing.T, path string, opts ...sqlite.Option) *sqlite.Store {

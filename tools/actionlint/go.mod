@@ -1,4 +1,4 @@
-module github.com/clavis-id/clavis/tools/actionlint
+module clavisid.org/clavis/tools/actionlint
 
 go 1.27.0
 

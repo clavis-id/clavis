@@ -46,6 +46,8 @@ jobs:
         run: make vuln
       - name: Secrets
         run: make secrets
+      - name: Import path Worker
+        run: make test-go-import
 
   test:
     name: Test (${{ matrix.os }})

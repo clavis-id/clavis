@@ -18,5 +18,6 @@ request. Status values: Proposed, Accepted, Superseded by NNNN, Deprecated.
 | [0007](0007-hosted-ui-templ-htmx.md) | Hosted UI with templ and htmx | Accepted |
 | [0008](0008-hooks-webhooks-and-wasm.md) | Hooks as webhooks and WebAssembly modules | Accepted |
 | [0009](0009-per-tenant-issuer.md) | Multi-tenancy with a per-tenant issuer | Accepted |
-| [0010](0010-module-path.md) | Module path github.com/clavis-id/clavis | Accepted |
+| [0010](0010-module-path.md) | Module path github.com/clavis-id/clavis | Superseded by 0012 |
 | [0011](0011-signing-key-lifecycle.md) | Signing key lifecycle and encryption at rest | Accepted |
+| [0012](0012-vanity-import-path.md) | Vanity import path clavisid.org/clavis | Accepted |

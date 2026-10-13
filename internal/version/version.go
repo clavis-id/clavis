@@ -10,7 +10,7 @@ import (
 )
 
 // ModulePath is the import path of the Clavis module.
-const ModulePath = "github.com/clavis-id/clavis"
+const ModulePath = "clavisid.org/clavis"
 
 // unknown is reported when the build carries no version information.
 const unknown = "(devel)"

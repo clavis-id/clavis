@@ -1,4 +1,4 @@
-module github.com/clavis-id/clavis/tools/govulncheck
+module clavisid.org/clavis/tools/govulncheck
 
 go 1.27.0
 

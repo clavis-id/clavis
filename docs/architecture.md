@@ -95,7 +95,8 @@ clavis/
   sqlc.yaml              Query code generation for both adapters
   conformance/           OpenID conformance suite plans and runner
   e2e/                   Playwright browser tests
-  deploy/                Docker Compose examples, later Helm chart
+  deploy/                dev/ local config, docker/ release image, cloudflare/go-import/ Worker
+                         serving the clavisid.org/clavis import path; later Compose and Helm
   docs/                  Design documents and ADRs
 ```
 
