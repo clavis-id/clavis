@@ -12,8 +12,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/clavis-id/clavis/kek"
 	"github.com/clavis-id/clavis/store/sqlite"
 )
+
+// testKey is a valid encryption key for tests (32 zero bytes, base64).
+const testKey = "CLAVIS_KEYS_ENCRYPTION_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 func TestVersion(t *testing.T) {
 	t.Parallel()
@@ -44,7 +48,7 @@ func TestServeRejectsInvalidConfiguration(t *testing.T) {
 	t.Parallel()
 
 	var stdout, stderr bytes.Buffer
-	environ := []string{"CLAVIS_ISSUER=http://auth.example.com"}
+	environ := []string{"CLAVIS_ISSUER=http://auth.example.com", testKey}
 	if code := Execute(t.Context(), []string{"serve"}, &stdout, &stderr, environ); code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
@@ -83,6 +87,7 @@ func TestServeLifecycle(t *testing.T) {
 		"CLAVIS_SERVER_ADDRESS=127.0.0.1:0",
 		"CLAVIS_DATABASE_DSN=" + filepath.Join(t.TempDir(), "clavis.db"),
 		"CLAVIS_SERVICE_HOST=10.0.0.12",
+		testKey,
 	}
 
 	exit := make(chan int, 1)
@@ -115,7 +120,7 @@ func TestServeLifecycle(t *testing.T) {
 		t.Error("no warning was logged for the unknown CLAVIS_SERVICE_HOST variable")
 	}
 
-	for _, path := range []string{"/healthz", "/readyz"} {
+	for _, path := range []string{"/healthz", "/readyz", "/oauth2/jwks"} {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+address+path, http.NoBody)
 		if err != nil {
 			t.Fatalf("building request: %v", err)
@@ -140,7 +145,7 @@ func TestMigrate(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "clavis.db")
-	environ := []string{"CLAVIS_DATABASE_DSN=" + path, "CLAVIS_DATABASE_AUTO_MIGRATE=false"}
+	environ := []string{"CLAVIS_DATABASE_DSN=" + path, "CLAVIS_DATABASE_AUTO_MIGRATE=false", testKey}
 
 	var stdout, stderr bytes.Buffer
 	if code := Execute(t.Context(), []string{"migrate"}, &stdout, &stderr, environ); code != 0 {
@@ -167,6 +172,7 @@ func TestServeWithoutAutoMigrateNeedsMigratedDatabase(t *testing.T) {
 		"CLAVIS_SERVER_ADDRESS=127.0.0.1:0",
 		"CLAVIS_DATABASE_DSN=" + filepath.Join(t.TempDir(), "clavis.db"),
 		"CLAVIS_DATABASE_AUTO_MIGRATE=false",
+		testKey,
 	}
 	var stdout, stderr bytes.Buffer
 	if code := Execute(t.Context(), []string{"serve"}, &stdout, &stderr, environ); code != 1 {
@@ -174,5 +180,25 @@ func TestServeWithoutAutoMigrateNeedsMigratedDatabase(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "default tenant") {
 		t.Errorf("stderr %q does not explain the failure", stderr.String())
+	}
+}
+
+func TestNewEncryptionKey(t *testing.T) {
+	t.Parallel()
+
+	seen := make(map[string]bool)
+	for range 2 {
+		var stdout, stderr bytes.Buffer
+		if code := Execute(t.Context(), []string{"keys", "new-encryption-key"}, &stdout, &stderr, nil); code != 0 {
+			t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
+		}
+		encoded := strings.TrimSpace(stdout.String())
+		if _, err := kek.ParseSecret(encoded); err != nil {
+			t.Errorf("output %q is not a valid encryption key: %v", encoded, err)
+		}
+		if seen[encoded] {
+			t.Error("two invocations printed the same key")
+		}
+		seen[encoded] = true
 	}
 }

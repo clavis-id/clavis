@@ -2,6 +2,7 @@ package clavis
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,11 +13,21 @@ import (
 
 	"github.com/clavis-id/clavis/internal/app"
 	"github.com/clavis-id/clavis/internal/issuer"
+	"github.com/clavis-id/clavis/internal/keys"
+	"github.com/clavis-id/clavis/kek"
 	"github.com/clavis-id/clavis/store"
 )
 
 // readinessTimeout bounds the database check performed by GET /readyz.
 const readinessTimeout = 2 * time.Second
+
+// jwksMaxAge is how long clients may cache the JWK set. It is far shorter
+// than the default publish-ahead period, so cached sets always contain a
+// successor key before it starts signing.
+const jwksMaxAge = 5 * time.Minute
+
+// defaultKeyCheckInterval is how often signing key rotation runs.
+const defaultKeyCheckInterval = time.Hour
 
 // Config configures a Clavis server.
 type Config struct {
@@ -30,8 +41,38 @@ type Config struct {
 	// for a single instance or store/postgres for several.
 	Store store.Store
 
+	// KeyEncrypter encrypts private signing keys before they reach the store.
+	// It is required. kek.NewLocal suits most deployments; keep its secret
+	// outside the database, for example in a secrets manager.
+	KeyEncrypter kek.Encrypter
+
+	// SigningKeys configures signing key algorithms and rotation. Zero fields
+	// take their defaults.
+	SigningKeys SigningKeyPolicy
+
 	// Logger receives structured logs. When nil, logs are discarded.
 	Logger *slog.Logger
+}
+
+// SigningKeyPolicy configures token signing keys. Zero fields take their
+// defaults.
+type SigningKeyPolicy struct {
+	// Algorithms lists the JWS algorithms every tenant can sign with:
+	// "RS256", "ES256" and "EdDSA" are supported. It must include RS256,
+	// which OpenID Connect requires. Default: RS256 only.
+	Algorithms []string
+	// RotationPeriod is how long each key signs. Default: 30 days.
+	RotationPeriod time.Duration
+	// PublishAhead is how long a new key is published before it starts
+	// signing, so clients that cache the JWK set learn it in time. Default:
+	// 24 hours.
+	PublishAhead time.Duration
+	// Retention is how long a retired key stays published so tokens it
+	// signed can still be verified. Default: 48 hours.
+	Retention time.Duration
+	// CheckInterval is how often rotation runs. It must be shorter than
+	// PublishAhead. Default: 1 hour.
+	CheckInterval time.Duration
 }
 
 // Server is a Clavis instance. Mount the value returned by Handler on any
@@ -39,17 +80,19 @@ type Config struct {
 //
 // A Server is safe for concurrent use.
 type Server struct {
-	issuer  *url.URL
-	store   store.Store
-	logger  *slog.Logger
-	handler http.Handler
+	issuer        *url.URL
+	store         store.Store
+	keys          *keys.Manager
+	defaultTenant uuid.UUID
+	logger        *slog.Logger
+	handler       http.Handler
 }
 
-// New validates cfg, prepares the store (creating the default tenant on
-// first use) and returns a ready-to-use Server.
+// New validates cfg, prepares the store (creating the default tenant and its
+// signing keys on first use) and returns a ready-to-use Server.
 //
-// Background work started by the Server stops when ctx is canceled, so ctx
-// should live as long as the Server is in use.
+// New starts signing key rotation in the background. It stops when ctx is
+// canceled, so ctx should live as long as the Server is in use.
 func New(ctx context.Context, cfg Config) (*Server, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("clavis: %w", err)
@@ -61,17 +104,42 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	if cfg.Store == nil {
 		return nil, errors.New("clavis: Config.Store is required")
 	}
+	if cfg.KeyEncrypter == nil {
+		return nil, errors.New("clavis: Config.KeyEncrypter is required")
+	}
+	policy, interval := cfg.SigningKeys.withDefaults()
+	if interval <= 0 || interval >= policy.PublishAhead {
+		return nil, fmt.Errorf("clavis: SigningKeys.CheckInterval (%s) must be positive and shorter than PublishAhead (%s)",
+			interval, policy.PublishAhead)
+	}
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
 
 	deps := app.Deps{Store: cfg.Store, Logger: logger, Now: time.Now, NewID: uuid.NewV7}
-	if _, err := app.EnsureDefaultTenant(ctx, deps); err != nil {
+	tenant, err := app.EnsureDefaultTenant(ctx, deps)
+	if err != nil {
 		return nil, fmt.Errorf("clavis: %w", err)
 	}
 
-	s := &Server{issuer: iss, store: cfg.Store, logger: logger}
+	manager, err := keys.NewManager(keys.Config{
+		Store:     cfg.Store,
+		Encrypter: cfg.KeyEncrypter,
+		Policy:    policy,
+		Logger:    logger,
+		Now:       deps.Now,
+		NewID:     deps.NewID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("clavis: %w", err)
+	}
+	if err := manager.RotateAll(ctx); err != nil {
+		return nil, fmt.Errorf("clavis: preparing signing keys: %w", err)
+	}
+	go manager.Run(ctx, interval)
+
+	s := &Server{issuer: iss, store: cfg.Store, keys: manager, defaultTenant: tenant.ID, logger: logger}
 	s.handler = s.routes()
 	return s, nil
 }
@@ -91,6 +159,7 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /readyz", s.handleReady)
+	mux.HandleFunc("GET /oauth2/jwks", s.handleJWKS)
 	return mux
 }
 
@@ -117,4 +186,58 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = w.Write([]byte("ok\n"))
+}
+
+// handleJWKS serves the public signing keys of the default tenant as a JWK
+// set (RFC 7517, section 5).
+func (s *Server) handleJWKS(w http.ResponseWriter, r *http.Request) {
+	set, err := s.keys.JWKS(r.Context(), s.defaultTenant)
+	if err != nil {
+		s.internalError(w, r, "loading the JWK set", err)
+		return
+	}
+	body, err := json.Marshal(set)
+	if err != nil {
+		s.internalError(w, r, "encoding the JWK set", err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/jwk-set+json")
+	w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", int(jwksMaxAge.Seconds())))
+	_, _ = w.Write(body)
+}
+
+// internalError logs err and answers with a generic 500 response that
+// reveals nothing about the failure.
+func (s *Server) internalError(w http.ResponseWriter, r *http.Request, action string, err error) {
+	s.logger.LogAttrs(r.Context(), slog.LevelError, "request failed",
+		slog.String("action", action),
+		slog.String("path", r.URL.Path),
+		slog.String("error", err.Error()))
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusInternalServerError)
+	_, _ = w.Write([]byte("internal error\n"))
+}
+
+// withDefaults returns the rotation policy and check interval with defaults
+// applied to zero fields. Other values pass through and are validated later.
+func (p SigningKeyPolicy) withDefaults() (keys.Policy, time.Duration) {
+	policy := keys.DefaultPolicy()
+	if len(p.Algorithms) > 0 {
+		policy.Algorithms = p.Algorithms
+	}
+	if p.RotationPeriod != 0 {
+		policy.RotationPeriod = p.RotationPeriod
+	}
+	if p.PublishAhead != 0 {
+		policy.PublishAhead = p.PublishAhead
+	}
+	if p.Retention != 0 {
+		policy.Retention = p.Retention
+	}
+	interval := defaultKeyCheckInterval
+	if p.CheckInterval != 0 {
+		interval = p.CheckInterval
+	}
+	return policy, interval
 }

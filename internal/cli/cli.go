@@ -3,6 +3,7 @@ package cli
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	"github.com/clavis-id/clavis/internal/logging"
 	"github.com/clavis-id/clavis/internal/server"
 	"github.com/clavis-id/clavis/internal/version"
+	"github.com/clavis-id/clavis/kek"
 )
 
 // Execute runs the command described by args and returns the process exit
@@ -39,7 +41,7 @@ func newRootCommand(environ []string) *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
-	root.AddCommand(newServeCommand(environ), newMigrateCommand(environ), newVersionCommand())
+	root.AddCommand(newServeCommand(environ), newMigrateCommand(environ), newKeysCommand(), newVersionCommand())
 	return root
 }
 
@@ -107,7 +109,24 @@ func serve(ctx context.Context, configPath string, environ []string, logOutput i
 	}
 	defer st.close()
 
-	srv, err := clavis.New(ctx, clavis.Config{Issuer: cfg.Issuer, Store: st, Logger: logger})
+	enc, err := newEncrypter(cfg.Keys)
+	if err != nil {
+		return err
+	}
+
+	srv, err := clavis.New(ctx, clavis.Config{
+		Issuer:       cfg.Issuer,
+		Store:        st,
+		KeyEncrypter: enc,
+		SigningKeys: clavis.SigningKeyPolicy{
+			Algorithms:     cfg.Keys.Algorithms,
+			RotationPeriod: cfg.Keys.RotationPeriod,
+			PublishAhead:   cfg.Keys.PublishAhead,
+			Retention:      cfg.Keys.Retention,
+			CheckInterval:  cfg.Keys.CheckInterval,
+		},
+		Logger: logger,
+	})
 	if err != nil {
 		return err
 	}
@@ -151,6 +170,53 @@ func migrate(ctx context.Context, configPath string, environ []string, logOutput
 	logger.LogAttrs(ctx, slog.LevelInfo, "database migrations applied",
 		slog.String("database_driver", cfg.Database.Driver))
 	return nil
+}
+
+func newKeysCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "keys",
+		Short: "Manage key material",
+		Args:  cobra.NoArgs,
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "new-encryption-key",
+		Short: "Print a new random encryption key for keys.encryption_key",
+		Long: "Print a new random 32-byte encryption key, base64 encoded, for the\n" +
+			"keys.encryption_key setting (" + config.EnvPrefix + "KEYS_ENCRYPTION_KEY). Store it in a\n" +
+			"secrets manager: losing it makes every stored signing key unreadable.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			secret := kek.GenerateSecret()
+			defer clear(secret)
+			if _, err := fmt.Fprintln(cmd.OutOrStdout(), base64.StdEncoding.EncodeToString(secret)); err != nil {
+				return fmt.Errorf("writing key: %w", err)
+			}
+			return nil
+		},
+	})
+	return cmd
+}
+
+// newEncrypter builds the key encrypter from the keys configuration, which
+// Load has already validated.
+func newEncrypter(cfg config.Keys) (*kek.Local, error) {
+	primary, err := kek.ParseSecret(cfg.EncryptionKey)
+	if err != nil {
+		return nil, fmt.Errorf("keys.encryption_key: %w", err)
+	}
+	previous := make([][]byte, 0, len(cfg.PreviousEncryptionKeys))
+	for i, encoded := range cfg.PreviousEncryptionKeys {
+		secret, err := kek.ParseSecret(encoded)
+		if err != nil {
+			return nil, fmt.Errorf("keys.previous_encryption_keys[%d]: %w", i, err)
+		}
+		previous = append(previous, secret)
+	}
+	enc, err := kek.NewLocal(primary, previous...)
+	if err != nil {
+		return nil, fmt.Errorf("building key encrypter: %w", err)
+	}
+	return enc, nil
 }
 
 func newVersionCommand() *cobra.Command {

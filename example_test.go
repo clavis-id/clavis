@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/clavis-id/clavis"
+	"github.com/clavis-id/clavis/kek"
 	"github.com/clavis-id/clavis/store/sqlite"
 )
 
@@ -28,9 +29,16 @@ func ExampleNew() {
 	}
 	defer db.Close()
 
+	// Load the key encryption key from a secrets manager in production.
+	enc, err := kek.NewLocal(kek.GenerateSecret())
+	if err != nil {
+		panic(err)
+	}
+
 	auth, err := clavis.New(ctx, clavis.Config{
-		Issuer: "https://app.example.com/auth",
-		Store:  db,
+		Issuer:       "https://app.example.com/auth",
+		Store:        db,
+		KeyEncrypter: enc,
 	})
 	if err != nil {
 		panic(err)

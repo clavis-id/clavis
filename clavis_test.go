@@ -2,14 +2,17 @@ package clavis
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/clavis-id/clavis/internal/app"
 	"github.com/clavis-id/clavis/internal/issuer"
+	"github.com/clavis-id/clavis/kek"
 	"github.com/clavis-id/clavis/store"
 	"github.com/clavis-id/clavis/store/sqlite"
 )
@@ -24,9 +27,18 @@ func openStore(t *testing.T) *sqlite.Store {
 	return s
 }
 
+func testConfig(t *testing.T, st store.Store) Config {
+	t.Helper()
+	enc, err := kek.NewLocal(kek.GenerateSecret())
+	if err != nil {
+		t.Fatalf("kek.NewLocal() unexpected error: %v", err)
+	}
+	return Config{Issuer: "http://localhost:8080", Store: st, KeyEncrypter: enc}
+}
+
 func newTestServer(t *testing.T, st store.Store) *Server {
 	t.Helper()
-	s, err := New(t.Context(), Config{Issuer: "http://localhost:8080", Store: st})
+	s, err := New(t.Context(), testConfig(t, st))
 	if err != nil {
 		t.Fatalf("New() unexpected error: %v", err)
 	}
@@ -43,7 +55,9 @@ func serve(t *testing.T, h http.Handler, method, path string) *httptest.Response
 func TestNewRejectsInvalidIssuer(t *testing.T) {
 	t.Parallel()
 
-	_, err := New(t.Context(), Config{Issuer: "http://auth.example.com", Store: openStore(t)})
+	cfg := testConfig(t, openStore(t))
+	cfg.Issuer = "http://auth.example.com"
+	_, err := New(t.Context(), cfg)
 	if !errors.Is(err, issuer.ErrInvalid) {
 		t.Errorf("New() error = %v, want issuer.ErrInvalid", err)
 	}
@@ -52,8 +66,42 @@ func TestNewRejectsInvalidIssuer(t *testing.T) {
 func TestNewRequiresStore(t *testing.T) {
 	t.Parallel()
 
-	if _, err := New(t.Context(), Config{Issuer: "https://auth.example.com"}); err == nil {
+	cfg := testConfig(t, nil)
+	if _, err := New(t.Context(), cfg); err == nil {
 		t.Error("New() succeeded without a store")
+	}
+}
+
+func TestNewRequiresKeyEncrypter(t *testing.T) {
+	t.Parallel()
+
+	cfg := testConfig(t, openStore(t))
+	cfg.KeyEncrypter = nil
+	if _, err := New(t.Context(), cfg); err == nil {
+		t.Error("New() succeeded without a key encrypter")
+	}
+}
+
+func TestNewRejectsInvalidSigningKeyPolicy(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]SigningKeyPolicy{
+		"missing RS256":               {Algorithms: []string{"ES256"}},
+		"unsupported algorithm":       {Algorithms: []string{"RS256", "HS256"}},
+		"check interval too long":     {CheckInterval: 24 * time.Hour},
+		"negative check interval":     {CheckInterval: -time.Minute},
+		"publish ahead beyond period": {RotationPeriod: time.Hour, PublishAhead: 2 * time.Hour, CheckInterval: time.Minute},
+		"negative retention":          {Retention: -time.Hour},
+	}
+	for name, policy := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cfg := testConfig(t, openStore(t))
+			cfg.SigningKeys = policy
+			if _, err := New(t.Context(), cfg); err == nil {
+				t.Errorf("New() accepted a policy with %s", name)
+			}
+		})
 	}
 }
 
@@ -62,7 +110,7 @@ func TestNewRejectsCanceledContext(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err := New(ctx, Config{Issuer: "https://auth.example.com", Store: openStore(t)})
+	_, err := New(ctx, testConfig(t, openStore(t)))
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("New() error = %v, want context.Canceled", err)
 	}
@@ -100,6 +148,8 @@ func TestProbes(t *testing.T) {
 		{method: http.MethodHead, path: "/healthz", want: http.StatusOK},
 		{method: http.MethodPost, path: "/healthz", want: http.StatusMethodNotAllowed},
 		{method: http.MethodGet, path: "/readyz", want: http.StatusOK},
+		{method: http.MethodGet, path: "/oauth2/jwks", want: http.StatusOK},
+		{method: http.MethodPost, path: "/oauth2/jwks", want: http.StatusMethodNotAllowed},
 		{method: http.MethodGet, path: "/unknown", want: http.StatusNotFound},
 	}
 	for _, tt := range tests {
@@ -140,5 +190,69 @@ func TestReadyReportsUnavailableStore(t *testing.T) {
 	}
 	if rec := serve(t, h, http.MethodGet, "/healthz"); rec.Code != http.StatusOK {
 		t.Errorf("GET /healthz status = %d, want 200 regardless of the store", rec.Code)
+	}
+}
+
+func TestJWKS(t *testing.T) {
+	t.Parallel()
+
+	st := openStore(t)
+	rec := serve(t, newTestServer(t, st).Handler(), http.MethodGet, "/oauth2/jwks")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/jwk-set+json" {
+		t.Errorf("Content-Type = %q, want application/jwk-set+json", got)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "public, max-age=300" {
+		t.Errorf("Cache-Control = %q, want public, max-age=300", got)
+	}
+
+	var set struct {
+		Keys []map[string]any `json:"keys"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &set); err != nil {
+		t.Fatalf("body is not a JWK set: %v\n%s", err, rec.Body.String())
+	}
+	if len(set.Keys) != 1 {
+		t.Fatalf("JWK set has %d keys, want 1", len(set.Keys))
+	}
+	key := set.Keys[0]
+	if key["kty"] != "RSA" || key["alg"] != "RS256" || key["use"] != "sig" || key["kid"] == "" {
+		t.Errorf("unexpected key parameters: %v", key)
+	}
+	for _, private := range []string{"d", "p", "q", "dp", "dq", "qi"} {
+		if _, ok := key[private]; ok {
+			t.Errorf("published key contains private parameter %q", private)
+		}
+	}
+
+	tenant, err := st.Tenants().GetBySlug(t.Context(), app.DefaultTenantSlug)
+	if err != nil {
+		t.Fatalf("loading default tenant: %v", err)
+	}
+	stored, err := st.SigningKeys().List(t.Context(), tenant.ID)
+	if err != nil {
+		t.Fatalf("listing stored keys: %v", err)
+	}
+	if len(stored) != 1 || stored[0].KeyID != key["kid"] {
+		t.Errorf("published kid %v does not match the stored key", key["kid"])
+	}
+}
+
+func TestJWKSHidesStoreErrors(t *testing.T) {
+	t.Parallel()
+
+	st := openStore(t)
+	h := newTestServer(t, st).Handler()
+	if err := st.Close(); err != nil {
+		t.Fatalf("closing store: %v", err)
+	}
+	rec := serve(t, h, http.MethodGet, "/oauth2/jwks")
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+	if got := rec.Body.String(); got != "internal error\n" {
+		t.Errorf("body = %q, want a generic message", got)
 	}
 }
