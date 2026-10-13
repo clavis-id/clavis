@@ -79,6 +79,7 @@ clavis serve --config clavis.yaml
 - [Architecture](docs/architecture.md)
 - [Testing strategy](docs/testing.md)
 - [Roadmap](docs/roadmap.md)
+- [Releasing](docs/releasing.md)
 - [Architecture decision records](docs/adr/)
 
 ## License

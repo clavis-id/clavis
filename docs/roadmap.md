@@ -26,7 +26,9 @@ Scope:
 Exit criteria:
 - `make test`, `make test-postgres`, `make lint` pass in CI on Linux and macOS, amd64 and arm64.
 - Contract suite passes on both adapters.
-- A tagged pre-release produces signed binaries and images.
+- A tagged pre-release produces binaries, SBOMs and multi-architecture images. Keyless
+  signatures and provenance attestations are produced from the first release after the
+  repository becomes public (see docs/releasing.md).
 
 ## Phase 1: MVP v0.1 (Cognito user pool parity core)
 
