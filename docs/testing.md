@@ -10,7 +10,8 @@ of the product. No change merges without the tests described here.
 
 - Standard library `testing`, table-driven, with `github.com/google/go-cmp` for comparisons.
   No assertion framework.
-- Time is injected through a clock interface. Expiry, rotation and lockout logic is tested with
+- Time and identifiers are injected as functions (`Now func() time.Time`,
+  `NewID func() uuid.UUID`). Expiry, rotation and lockout logic is tested with
   `testing/synctest` so tests never sleep.
 - Cryptographic randomness is made deterministic with `testing/cryptotest.SetGlobalRandom`
   (Go 1.27) where golden outputs are needed.
@@ -22,8 +23,12 @@ of the product. No change merges without the tests described here.
 - `store/storetest` is a public suite that exercises every storage port: CRUD, tenant isolation,
   uniqueness constraints, concurrency (conditional updates, refresh token family revocation),
   pagination and expiry cleanup.
-- It runs against SQLite in memory on every test run and against PostgreSQL through
-  `testcontainers-go` in CI and on demand locally.
+- It runs against SQLite (a temporary database file per test) on every test run, and against
+  PostgreSQL when `CLAVIS_TEST_POSTGRES_DSN` points at a server: `make test-postgres` starts a
+  throwaway container locally, and CI uses a service container. Each test creates and drops its
+  own database, so subtests run in parallel.
+- No container library is used: a plain Docker container keeps test-only dependencies out of
+  the module graph that embedders inherit.
 - Third-party adapters (for example MySQL) prove compatibility by passing the same suite.
 
 ### Integration tests
@@ -105,7 +110,7 @@ of the product. No change merges without the tests described here.
 | Command | Purpose |
 |---|---|
 | `make test` | Unit and integration tests with SQLite (`-race -shuffle=on`) |
-| `make test-postgres` | Same suite plus store contract tests on PostgreSQL |
+| `make test-postgres` | Store tests against a throwaway PostgreSQL container |
 | `make fuzz` | Short fuzz run for every target |
 | `make conformance` | Start Clavis and run the OpenID conformance plans |
 | `make e2e` | Playwright browser tests |

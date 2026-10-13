@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/clavis-id/clavis/store/sqlite"
 )
 
 func TestVersion(t *testing.T) {
@@ -79,6 +81,7 @@ func TestServeLifecycle(t *testing.T) {
 	pr, pw := io.Pipe()
 	environ := []string{
 		"CLAVIS_SERVER_ADDRESS=127.0.0.1:0",
+		"CLAVIS_DATABASE_DSN=" + filepath.Join(t.TempDir(), "clavis.db"),
 		"CLAVIS_SERVICE_HOST=10.0.0.12",
 	}
 
@@ -112,21 +115,64 @@ func TestServeLifecycle(t *testing.T) {
 		t.Error("no warning was logged for the unknown CLAVIS_SERVICE_HOST variable")
 	}
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+address+"/healthz", http.NoBody)
-	if err != nil {
-		t.Fatalf("building request: %v", err)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("GET /healthz: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("GET /healthz status = %d, want 200", resp.StatusCode)
+	for _, path := range []string{"/healthz", "/readyz"} {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+address+path, http.NoBody)
+		if err != nil {
+			t.Fatalf("building request: %v", err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("GET %s status = %d, want 200", path, resp.StatusCode)
+		}
 	}
 
 	cancel()
 	if code := <-exit; code != 0 {
 		t.Errorf("exit code = %d, want 0 after cancellation", code)
+	}
+}
+
+func TestMigrate(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "clavis.db")
+	environ := []string{"CLAVIS_DATABASE_DSN=" + path, "CLAVIS_DATABASE_AUTO_MIGRATE=false"}
+
+	var stdout, stderr bytes.Buffer
+	if code := Execute(t.Context(), []string{"migrate"}, &stdout, &stderr, environ); code != 0 {
+		t.Fatalf("migrate exit code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "database migrations applied") {
+		t.Errorf("migrate did not log its result: %q", stderr.String())
+	}
+
+	s, err := sqlite.Open(t.Context(), path, sqlite.WithoutMigrations())
+	if err != nil {
+		t.Fatalf("opening migrated database: %v", err)
+	}
+	defer s.Close()
+	if _, err := s.Tenants().List(t.Context(), [16]byte{}, 1); err != nil {
+		t.Errorf("schema is missing after migrate: %v", err)
+	}
+}
+
+func TestServeWithoutAutoMigrateNeedsMigratedDatabase(t *testing.T) {
+	t.Parallel()
+
+	environ := []string{
+		"CLAVIS_SERVER_ADDRESS=127.0.0.1:0",
+		"CLAVIS_DATABASE_DSN=" + filepath.Join(t.TempDir(), "clavis.db"),
+		"CLAVIS_DATABASE_AUTO_MIGRATE=false",
+	}
+	var stdout, stderr bytes.Buffer
+	if code := Execute(t.Context(), []string{"serve"}, &stdout, &stderr, environ); code != 1 {
+		t.Errorf("exit code = %d, want 1 on an unmigrated database", code)
+	}
+	if !strings.Contains(stderr.String(), "default tenant") {
+		t.Errorf("stderr %q does not explain the failure", stderr.String())
 	}
 }

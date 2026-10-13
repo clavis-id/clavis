@@ -14,6 +14,13 @@ TOOL_MODULES = $(wildcard tools/*/go.mod)
 
 COVER_PROFILE ?= coverage.out
 
+# Container images, pinned by digest. sqlc runs in Docker because its
+# PostgreSQL parser needs CGo.
+SQLC_IMAGE ?= sqlc/sqlc:1.31.1@sha256:70f53171d27b2424e9358869975455a6e955a5aa8e58a998a270a6e34e525537
+POSTGRES_IMAGE ?= postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+POSTGRES_CONTAINER ?= clavis-test-postgres
+POSTGRES_PORT ?= 55432
+
 .DEFAULT_GOAL := help
 
 .PHONY: help
@@ -33,10 +40,36 @@ run: ## Run the server with the local development configuration
 test: ## Run tests with the race detector in random order
 	CGO_ENABLED=$(RACE_CGO) $(GO) test -race -shuffle=on ./...
 
+.PHONY: test-store
+test-store: ## Run the store tests (PostgreSQL included when CLAVIS_TEST_POSTGRES_DSN is set)
+	CGO_ENABLED=$(RACE_CGO) $(GO) test -race -shuffle=on ./store/...
+
+.PHONY: test-postgres
+test-postgres: ## Run the store tests against a throwaway PostgreSQL container
+	@docker rm -f $(POSTGRES_CONTAINER) >/dev/null 2>&1 || true
+	@docker run -d --rm --name $(POSTGRES_CONTAINER) -e POSTGRES_PASSWORD=clavis \
+		-p 127.0.0.1:$(POSTGRES_PORT):5432 --tmpfs /var/lib/postgresql $(POSTGRES_IMAGE) >/dev/null
+	@trap 'docker rm -f $(POSTGRES_CONTAINER) >/dev/null' EXIT; \
+	for i in $$(seq 1 150); do \
+		docker exec $(POSTGRES_CONTAINER) pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1 && break; \
+		sleep 0.2; \
+	done; \
+	CLAVIS_TEST_POSTGRES_DSN="postgres://postgres:clavis@127.0.0.1:$(POSTGRES_PORT)/postgres?sslmode=disable" \
+		$(MAKE) --no-print-directory test-store
+
 .PHONY: cover
 cover: ## Run tests and write a coverage profile
 	CGO_ENABLED=$(RACE_CGO) $(GO) test -race -shuffle=on -covermode=atomic -coverprofile=$(COVER_PROFILE) ./...
 	$(GO) tool cover -func=$(COVER_PROFILE) | tail -n 1
+
+.PHONY: generate
+generate: ## Regenerate code (sqlc runs in Docker)
+	docker run --rm --user "$$(id -u):$$(id -g)" -v "$(CURDIR)":/src -w /src $(SQLC_IMAGE) generate
+
+.PHONY: generate-check
+generate-check: generate ## Fail if generated code is out of date
+	@test -z "$$(git status --porcelain -- store)" || \
+		{ git status --porcelain -- store; echo "generated code is out of date: run make generate"; exit 1; }
 
 .PHONY: lint
 lint: ## Run golangci-lint and lint the GitHub Actions workflows
@@ -70,4 +103,4 @@ check: tidy-check lint vuln test ## Run the checks that CI runs on every pull re
 
 .PHONY: clean
 clean: ## Remove build and test artifacts
-	rm -rf bin dist $(COVER_PROFILE)
+	rm -rf bin dist $(COVER_PROFILE) clavis.db clavis.db-shm clavis.db-wal

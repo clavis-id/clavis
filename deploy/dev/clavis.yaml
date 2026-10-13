@@ -4,6 +4,10 @@ issuer: http://localhost:8080
 server:
   address: 127.0.0.1:8080
 
+database:
+  driver: sqlite
+  dsn: clavis.db
+
 log:
   level: debug
   format: text

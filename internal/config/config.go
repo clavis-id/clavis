@@ -41,8 +41,28 @@ type Config struct {
 	Issuer string `koanf:"issuer"`
 	// Server configures the HTTP listener.
 	Server Server `koanf:"server"`
+	// Database configures where Clavis stores its data.
+	Database Database `koanf:"database"`
 	// Log configures structured logging.
 	Log Log `koanf:"log"`
+}
+
+// Database drivers accepted in Database.Driver.
+const (
+	DriverSQLite   = "sqlite"
+	DriverPostgres = "postgres"
+)
+
+// Database configures where Clavis stores its data.
+type Database struct {
+	// Driver is "sqlite" or "postgres".
+	Driver string `koanf:"driver"`
+	// DSN is the database file path for sqlite, or a connection URL for
+	// postgres. It may contain a password and is never logged.
+	DSN string `koanf:"dsn"`
+	// AutoMigrate applies pending schema migrations on startup. Disable it
+	// to run `clavis migrate` as a separate deployment step.
+	AutoMigrate bool `koanf:"auto_migrate"`
 }
 
 // Server configures the HTTP listener.
@@ -81,6 +101,11 @@ func Default() Config {
 			WriteTimeout:      30 * time.Second,
 			IdleTimeout:       2 * time.Minute,
 			ShutdownTimeout:   30 * time.Second,
+		},
+		Database: Database{
+			Driver:      DriverSQLite,
+			DSN:         "clavis.db",
+			AutoMigrate: true,
 		},
 		Log: Log{
 			Level:  "info",
@@ -171,6 +196,12 @@ func (c Config) Validate() error {
 		if d <= 0 {
 			errs = append(errs, fmt.Errorf("%s: must be positive, got %s", name, d))
 		}
+	}
+	if !slices.Contains([]string{DriverSQLite, DriverPostgres}, c.Database.Driver) {
+		errs = append(errs, fmt.Errorf("database.driver: must be %s or %s, got %q", DriverSQLite, DriverPostgres, c.Database.Driver))
+	}
+	if c.Database.DSN == "" {
+		errs = append(errs, errors.New("database.dsn: must not be empty"))
 	}
 	if !slices.Contains([]string{"debug", "info", "warn", "error"}, c.Log.Level) {
 		errs = append(errs, fmt.Errorf("log.level: must be debug, info, warn or error, got %q", c.Log.Level))

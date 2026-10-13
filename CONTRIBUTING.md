@@ -11,7 +11,7 @@ that the change fits the [roadmap](docs/roadmap.md) and the
 
 - Go 1.27 or later.
 - GNU Make.
-- Docker, for tests that run against PostgreSQL.
+- Docker, for PostgreSQL tests and for code generation (sqlc runs in a container).
 
 Every other tool (golangci-lint, govulncheck, gitleaks, actionlint) is pinned in its own module
 under `tools/` and runs through `go tool`; nothing else needs to be installed. Clavis does not
@@ -20,13 +20,16 @@ use CGo, so no C toolchain is required either.
 ## Common tasks
 
 ```
-make help        List every target
-make build       Compile every package
-make test        Run tests with the race detector in random order
-make lint        Run golangci-lint and actionlint
-make fmt         Format Go code
-make vuln        Report known vulnerabilities
-make check       Run everything CI runs on pull requests
+make help           List every target
+make build          Compile every package and build bin/clavis
+make run            Run the server locally with deploy/dev/clavis.yaml
+make test           Run tests with the race detector in random order
+make test-postgres  Run the store tests against a throwaway PostgreSQL container
+make generate       Regenerate code after changing SQL migrations or queries
+make lint           Run golangci-lint and actionlint
+make fmt            Format Go code
+make vuln           Report known vulnerabilities
+make check          Run everything CI runs on pull requests
 ```
 
 ## Branches
