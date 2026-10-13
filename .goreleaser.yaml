@@ -62,10 +62,13 @@ dockers_v2:
       org.opencontainers.image.created: "{{ .CommitDate }}"
       org.opencontainers.image.source: https://github.com/clavis-id/clavis
       org.opencontainers.image.licenses: Apache-2.0
+      org.opencontainers.image.description: OpenID Connect provider and OAuth 2.1 authorization server
+    # Manifest-level annotations: index-level ones fail in snapshot builds,
+    # which export single-platform images.
     annotations:
-      "index,manifest:org.opencontainers.image.description": OpenID Connect provider and OAuth 2.1 authorization server
-      "index,manifest:org.opencontainers.image.source": https://github.com/clavis-id/clavis
-      "index,manifest:org.opencontainers.image.licenses": Apache-2.0
+      org.opencontainers.image.description: OpenID Connect provider and OAuth 2.1 authorization server
+      org.opencontainers.image.source: https://github.com/clavis-id/clavis
+      org.opencontainers.image.licenses: Apache-2.0
 
 docker_signs:
   - cmd: cosign
