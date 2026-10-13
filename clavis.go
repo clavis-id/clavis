@@ -11,6 +11,11 @@ import (
 	"time"
 	"uuid"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/clavis-id/clavis/internal/app"
 	"github.com/clavis-id/clavis/internal/issuer"
 	"github.com/clavis-id/clavis/internal/keys"
@@ -52,6 +57,15 @@ type Config struct {
 
 	// Logger receives structured logs. When nil, logs are discarded.
 	Logger *slog.Logger
+
+	// TracerProvider creates the spans Clavis emits for protocol requests.
+	// When nil, the global provider of go.opentelemetry.io/otel is used,
+	// which discards spans unless the program installs one.
+	TracerProvider trace.TracerProvider
+
+	// MeterProvider creates the metrics Clavis records. When nil, the global
+	// provider of go.opentelemetry.io/otel is used.
+	MeterProvider metric.MeterProvider
 }
 
 // SigningKeyPolicy configures token signing keys. Zero fields take their
@@ -85,6 +99,8 @@ type Server struct {
 	keys          *keys.Manager
 	defaultTenant uuid.UUID
 	logger        *slog.Logger
+	tracer        trace.TracerProvider
+	meter         metric.MeterProvider
 	handler       http.Handler
 }
 
@@ -116,6 +132,14 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	tracer := cfg.TracerProvider
+	if tracer == nil {
+		tracer = otel.GetTracerProvider()
+	}
+	meter := cfg.MeterProvider
+	if meter == nil {
+		meter = otel.GetMeterProvider()
+	}
 
 	deps := app.Deps{Store: cfg.Store, Logger: logger, Now: time.Now, NewID: uuid.NewV7}
 	tenant, err := app.EnsureDefaultTenant(ctx, deps)
@@ -124,12 +148,13 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	manager, err := keys.NewManager(keys.Config{
-		Store:     cfg.Store,
-		Encrypter: cfg.KeyEncrypter,
-		Policy:    policy,
-		Logger:    logger,
-		Now:       deps.Now,
-		NewID:     deps.NewID,
+		Store:         cfg.Store,
+		Encrypter:     cfg.KeyEncrypter,
+		Policy:        policy,
+		Logger:        logger,
+		Now:           deps.Now,
+		NewID:         deps.NewID,
+		MeterProvider: meter,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("clavis: %w", err)
@@ -139,7 +164,15 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	}
 	go manager.Run(ctx, interval)
 
-	s := &Server{issuer: iss, store: cfg.Store, keys: manager, defaultTenant: tenant.ID, logger: logger}
+	s := &Server{
+		issuer:        iss,
+		store:         cfg.Store,
+		keys:          manager,
+		defaultTenant: tenant.ID,
+		logger:        logger,
+		tracer:        tracer,
+		meter:         meter,
+	}
 	s.handler = s.routes()
 	return s, nil
 }
@@ -154,13 +187,24 @@ func (s *Server) Handler() http.Handler {
 	return s.handler
 }
 
-// routes builds the request multiplexer.
+// routes builds the request multiplexer. Probes are not instrumented, so
+// frequent health checks do not flood traces and metrics.
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /readyz", s.handleReady)
-	mux.HandleFunc("GET /oauth2/jwks", s.handleJWKS)
+	s.handle(mux, "GET /oauth2/jwks", s.handleJWKS)
 	return mux
+}
+
+// handle registers an instrumented route. Spans are named after the route
+// pattern, which keeps their cardinality bounded.
+func (s *Server) handle(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
+	mux.Handle(pattern, otelhttp.NewHandler(h, pattern,
+		otelhttp.WithTracerProvider(s.tracer),
+		otelhttp.WithMeterProvider(s.meter),
+		otelhttp.WithSpanNameFormatter(func(operation string, _ *http.Request) string { return operation }),
+	))
 }
 
 // handleHealth reports that the process is alive. It never touches

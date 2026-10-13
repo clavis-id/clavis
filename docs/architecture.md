@@ -170,6 +170,25 @@ clavis/
   logged. Audit events record who, what, when and from where, without credential material.
 - **FIPS mode:** builds with `GOFIPS140=certified` restrict algorithms to the validated module.
 
+## Observability
+
+- **Logs:** structured `log/slog` records on standard error, JSON in production. Secrets and
+  tokens are never logged (see Security architecture).
+- **Probes:** `GET /healthz` (liveness, never touches dependencies) and `GET /readyz`
+  (readiness, pings the store). Probes are not traced or measured, so frequent health checks do
+  not flood telemetry.
+- **Traces:** every protocol route is wrapped with OpenTelemetry `otelhttp`; spans are named
+  after the route pattern (for example `GET /oauth2/jwks`) to keep cardinality bounded.
+  Embedders pass a `TracerProvider` in `clavis.Config` or rely on the global provider. The
+  binary exports over OTLP/HTTP (`telemetry.tracing`), honoring the standard
+  `OTEL_EXPORTER_OTLP_*` and `OTEL_RESOURCE_ATTRIBUTES` variables, with a parent-based ratio
+  sampler. It installs no propagator, so trace context sent by untrusted clients to public
+  endpoints is ignored and cannot force sampling.
+- **Metrics:** `otelhttp` request metrics, `clavis.signing_keys.created` (by algorithm),
+  `clavis.signing_keys.rotation_failures` and Go runtime metrics. The binary serves them in the
+  Prometheus format on a separate listener (`telemetry.metrics.address`, default
+  `127.0.0.1:9464`), never on the API port.
+
 ## Extension points
 
 | Port | Default adapter | Purpose |

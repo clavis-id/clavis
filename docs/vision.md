@@ -65,7 +65,7 @@ authorization specification (revision 2026-07-28).
 
 1. **Two modes, one codebase.** The same code runs embedded (`import` the module and mount
    `http.Handler`s) or standalone (`clavis serve`). It starts with embedded SQLite and no other
-   dependency, and scales horizontally on PostgreSQL. Footprint targets: binary under 40 MB,
+   dependency, and scales horizontally on PostgreSQL. Footprint targets: release binary under 40 MB,
    idle resident memory under 50 MB, cold start under one second.
 2. **Permissive license, no paid tier.** Apache-2.0. Organizations, enterprise SSO, SCIM and
    multi-tenancy belong to the open source core. There is no enterprise edition.

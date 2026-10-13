@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
 	"github.com/clavis-id/clavis/internal/app"
 	"github.com/clavis-id/clavis/internal/issuer"
 	"github.com/clavis-id/clavis/kek"
@@ -254,5 +257,33 @@ func TestJWKSHidesStoreErrors(t *testing.T) {
 	}
 	if got := rec.Body.String(); got != "internal error\n" {
 		t.Errorf("body = %q, want a generic message", got)
+	}
+}
+
+func TestProtocolRoutesAreTraced(t *testing.T) {
+	t.Parallel()
+
+	recorder := tracetest.NewSpanRecorder()
+	cfg := testConfig(t, openStore(t))
+	cfg.TracerProvider = sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	srv, err := New(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("New() unexpected error: %v", err)
+	}
+	h := srv.Handler()
+
+	for _, path := range []string{"/healthz", "/readyz", "/oauth2/jwks"} {
+		serve(t, h, http.MethodGet, path)
+	}
+	spans := recorder.Ended()
+	if len(spans) != 1 {
+		names := make([]string, 0, len(spans))
+		for _, sp := range spans {
+			names = append(names, sp.Name())
+		}
+		t.Fatalf("recorded spans %v, want only the JWKS request", names)
+	}
+	if got := spans[0].Name(); got != "GET /oauth2/jwks" {
+		t.Errorf("span name = %q, want the route pattern", got)
 	}
 }

@@ -202,3 +202,76 @@ func TestNewEncryptionKey(t *testing.T) {
 		seen[encoded] = true
 	}
 }
+
+// TestServeExposesMetrics runs the server with metrics enabled and scrapes the
+// separate metrics listener.
+func TestServeExposesMetrics(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	pr, pw := io.Pipe()
+	environ := []string{
+		"CLAVIS_SERVER_ADDRESS=127.0.0.1:0",
+		"CLAVIS_DATABASE_DSN=" + filepath.Join(t.TempDir(), "clavis.db"),
+		"CLAVIS_TELEMETRY_METRICS_ENABLED=true",
+		"CLAVIS_TELEMETRY_METRICS_ADDRESS=127.0.0.1:0",
+		testKey,
+	}
+	exit := make(chan int, 1)
+	go func() {
+		exit <- Execute(ctx, []string{"serve"}, io.Discard, pw, environ)
+		_ = pw.Close()
+	}()
+
+	addresses := make(map[string]string)
+	scanner := bufio.NewScanner(pr)
+	for len(addresses) < 2 && scanner.Scan() {
+		var record map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			t.Fatalf("log line is not JSON: %q", scanner.Text())
+		}
+		if record["msg"] == "http server listening" {
+			name, _ := record["server"].(string)
+			addresses[name], _ = record["address"].(string)
+		}
+	}
+	go func() { _, _ = io.Copy(io.Discard, pr) }()
+	if addresses["api"] == "" || addresses["metrics"] == "" {
+		t.Fatalf("listening addresses = %v, want api and metrics", addresses)
+	}
+
+	get := func(url string) (int, string) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, http.NoBody)
+		if err != nil {
+			t.Fatalf("building request: %v", err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s: %v", url, err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+
+	get("http://" + addresses["api"] + "/oauth2/jwks")
+	code, body := get("http://" + addresses["metrics"] + "/metrics")
+	if code != http.StatusOK {
+		t.Fatalf("GET /metrics status = %d, want 200", code)
+	}
+	for _, want := range []string{"clavis_signing_keys_created_total", "http_server_request_duration_seconds", "go_goroutines"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("metrics output does not contain %q", want)
+		}
+	}
+	if code, _ := get("http://" + addresses["api"] + "/metrics"); code != http.StatusNotFound {
+		t.Errorf("GET /metrics on the API listener status = %d, want 404", code)
+	}
+
+	cancel()
+	if code := <-exit; code != 0 {
+		t.Errorf("exit code = %d, want 0 after cancellation", code)
+	}
+}

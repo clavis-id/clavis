@@ -12,6 +12,9 @@ import (
 	"uuid"
 
 	"github.com/go-jose/go-jose/v4"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/clavis-id/clavis/kek"
 	"github.com/clavis-id/clavis/store"
@@ -388,5 +391,50 @@ func TestPolicyValidation(t *testing.T) {
 				t.Errorf("Validate() accepted a policy with %s", name)
 			}
 		})
+	}
+}
+
+func TestRotationMetrics(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	reader := sdkmetric.NewManualReader()
+	policy := DefaultPolicy()
+	policy.Algorithms = []string{RS256, ES256}
+	m, err := NewManager(Config{
+		Store:         f.store,
+		Encrypter:     newEncrypter(t, kek.GenerateSecret()),
+		Policy:        policy,
+		Logger:        slog.New(slog.DiscardHandler),
+		Now:           f.clock.Now,
+		NewID:         uuid.NewV7,
+		MeterProvider: sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)),
+	})
+	if err != nil {
+		t.Fatalf("NewManager() unexpected error: %v", err)
+	}
+	mustRotate(t, m, f.tenant.ID)
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(t.Context(), &rm); err != nil {
+		t.Fatalf("collecting metrics: %v", err)
+	}
+	got := make(map[string]int64)
+	for _, sm := range rm.ScopeMetrics {
+		for _, metric := range sm.Metrics {
+			if metric.Name != "clavis.signing_keys.created" {
+				continue
+			}
+			sum, ok := metric.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("metric data has type %T, want a sum", metric.Data)
+			}
+			for _, dp := range sum.DataPoints {
+				alg, _ := dp.Attributes.Value(attribute.Key("algorithm"))
+				got[alg.AsString()] = dp.Value
+			}
+		}
+	}
+	if got[RS256] != 1 || got[ES256] != 1 {
+		t.Errorf("created keys by algorithm = %v, want one RS256 and one ES256", got)
 	}
 }

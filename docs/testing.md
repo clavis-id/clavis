@@ -82,8 +82,8 @@ of the product. No change merges without the tests described here.
 - Go benchmarks for token issuance, token validation, JWKS serving and session lookup, compared
   with `benchstat` against `develop`; regressions above an agreed threshold fail CI.
 - k6 scenarios for login and token endpoints run before releases.
-- CI checks the footprint targets: binary size under 40 MB, idle resident memory under 50 MB,
-  cold start under one second.
+- CI checks the footprint targets: release binary (stripped, as built by goreleaser) under
+  40 MB, idle resident memory under 50 MB, cold start under one second.
 
 ## Always-on rules
 
