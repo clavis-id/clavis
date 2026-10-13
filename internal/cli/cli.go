@@ -8,7 +8,9 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/clavis-id/clavis/internal/config"
 	"github.com/clavis-id/clavis/internal/logging"
 	"github.com/clavis-id/clavis/internal/server"
+	"github.com/clavis-id/clavis/internal/telemetry"
 	"github.com/clavis-id/clavis/internal/version"
 	"github.com/clavis-id/clavis/kek"
 )
@@ -114,6 +117,24 @@ func serve(ctx context.Context, configPath string, environ []string, logOutput i
 		return err
 	}
 
+	info := version.Get()
+	tel, err := telemetry.Setup(ctx, telemetry.Config{
+		TracingEnabled:  cfg.Telemetry.Tracing.Enabled,
+		TracingEndpoint: cfg.Telemetry.Tracing.Endpoint,
+		SampleRatio:     cfg.Telemetry.Tracing.SampleRatio,
+		MetricsEnabled:  cfg.Telemetry.Metrics.Enabled,
+	}, info.Version)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), telemetryFlushTimeout)
+		defer cancel()
+		if err := tel.Shutdown(flushCtx); err != nil {
+			logger.LogAttrs(flushCtx, slog.LevelWarn, "flushing telemetry failed", slog.String("error", err.Error()))
+		}
+	}()
+
 	srv, err := clavis.New(ctx, clavis.Config{
 		Issuer:       cfg.Issuer,
 		Store:        st,
@@ -125,32 +146,94 @@ func serve(ctx context.Context, configPath string, environ []string, logOutput i
 			Retention:      cfg.Keys.Retention,
 			CheckInterval:  cfg.Keys.CheckInterval,
 		},
-		Logger: logger,
+		Logger:         logger,
+		TracerProvider: tel.Tracer,
+		MeterProvider:  tel.Meter,
 	})
 	if err != nil {
 		return err
 	}
 
-	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", cfg.Server.Address)
-	if err != nil {
-		return fmt.Errorf("listening on %s: %w", cfg.Server.Address, err)
+	servers := []serverSpec{{
+		address: cfg.Server.Address,
+		opts: server.Options{
+			Name:              "api",
+			Handler:           srv.Handler(),
+			Logger:            logger,
+			ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout,
+			ReadTimeout:       cfg.Server.ReadTimeout,
+			WriteTimeout:      cfg.Server.WriteTimeout,
+			IdleTimeout:       cfg.Server.IdleTimeout,
+			ShutdownTimeout:   cfg.Server.ShutdownTimeout,
+		},
+	}}
+	if tel.MetricsHandler != nil {
+		mux := http.NewServeMux()
+		mux.Handle("GET /metrics", tel.MetricsHandler)
+		servers = append(servers, serverSpec{
+			address: cfg.Telemetry.Metrics.Address,
+			opts: server.Options{
+				Name:              "metrics",
+				Handler:           mux,
+				Logger:            logger,
+				ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout,
+				ReadTimeout:       cfg.Server.ReadTimeout,
+				WriteTimeout:      cfg.Server.WriteTimeout,
+				IdleTimeout:       cfg.Server.IdleTimeout,
+				ShutdownTimeout:   cfg.Server.ShutdownTimeout,
+			},
+		})
 	}
 
-	info := version.Get()
 	logger.LogAttrs(ctx, slog.LevelInfo, "starting clavis",
 		slog.String("version", info.Version),
 		slog.String("issuer", srv.Issuer()),
-		slog.String("database_driver", cfg.Database.Driver))
+		slog.String("database_driver", cfg.Database.Driver),
+		slog.Bool("tracing", cfg.Telemetry.Tracing.Enabled),
+		slog.Bool("metrics", cfg.Telemetry.Metrics.Enabled))
+	return serveAll(ctx, servers)
+}
 
-	return server.Serve(ctx, ln, server.Options{
-		Handler:           srv.Handler(),
-		Logger:            logger,
-		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout,
-		ReadTimeout:       cfg.Server.ReadTimeout,
-		WriteTimeout:      cfg.Server.WriteTimeout,
-		IdleTimeout:       cfg.Server.IdleTimeout,
-		ShutdownTimeout:   cfg.Server.ShutdownTimeout,
-	})
+// telemetryFlushTimeout bounds how long pending spans may take to export on
+// shutdown.
+const telemetryFlushTimeout = 5 * time.Second
+
+// serverSpec is a listener address and the server to run on it.
+type serverSpec struct {
+	address string
+	opts    server.Options
+}
+
+// serveAll runs every server until ctx is canceled or one of them fails, in
+// which case the others are shut down too. It returns the first failure.
+func serveAll(ctx context.Context, specs []serverSpec) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	listeners := make([]net.Listener, 0, len(specs))
+	for _, spec := range specs {
+		ln, err := new(net.ListenConfig).Listen(ctx, "tcp", spec.address)
+		if err != nil {
+			for _, open := range listeners {
+				_ = open.Close()
+			}
+			return fmt.Errorf("listening on %s for the %s server: %w", spec.address, spec.opts.Name, err)
+		}
+		listeners = append(listeners, ln)
+	}
+
+	errc := make(chan error, len(specs))
+	for i, spec := range specs {
+		go func() { errc <- server.Serve(ctx, listeners[i], spec.opts) }()
+	}
+	var first error
+	for range specs {
+		if err := <-errc; err != nil && first == nil {
+			first = err
+			cancel()
+		}
+	}
+	return first
 }
 
 func migrate(ctx context.Context, configPath string, environ []string, logOutput io.Writer) error {

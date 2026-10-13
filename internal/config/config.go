@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"reflect"
 	"slices"
@@ -47,8 +48,34 @@ type Config struct {
 	Database Database `koanf:"database"`
 	// Keys configures token signing keys and their encryption at rest.
 	Keys Keys `koanf:"keys"`
+	// Telemetry configures traces and metrics.
+	Telemetry Telemetry `koanf:"telemetry"`
 	// Log configures structured logging.
 	Log Log `koanf:"log"`
+}
+
+// Telemetry configures traces and metrics. Both are disabled by default.
+type Telemetry struct {
+	Tracing Tracing `koanf:"tracing"`
+	Metrics Metrics `koanf:"metrics"`
+}
+
+// Tracing configures span export over OTLP/HTTP.
+type Tracing struct {
+	Enabled bool `koanf:"enabled"`
+	// Endpoint is the OTLP/HTTP traces URL. When empty, the standard
+	// OTEL_EXPORTER_OTLP_* environment variables apply.
+	Endpoint string `koanf:"endpoint"`
+	// SampleRatio is the fraction of new traces recorded, from 0 to 1.
+	SampleRatio float64 `koanf:"sample_ratio"`
+}
+
+// Metrics configures the Prometheus scrape endpoint.
+type Metrics struct {
+	Enabled bool `koanf:"enabled"`
+	// Address is the listener of the metrics endpoint, separate from the
+	// API listener so metrics are never exposed with the public API.
+	Address string `koanf:"address"`
 }
 
 // Database drivers accepted in Database.Driver.
@@ -141,6 +168,10 @@ func Default() Config {
 			PublishAhead:   keys.DefaultPolicy().PublishAhead,
 			Retention:      keys.DefaultPolicy().Retention,
 			CheckInterval:  time.Hour,
+		},
+		Telemetry: Telemetry{
+			Tracing: Tracing{SampleRatio: 1},
+			Metrics: Metrics{Address: "127.0.0.1:9464"},
 		},
 		Log: Log{
 			Level:  "info",
@@ -242,6 +273,7 @@ func (c Config) Validate() error {
 		errs = append(errs, errors.New("database.dsn: must not be empty"))
 	}
 	errs = append(errs, c.Keys.validate()...)
+	errs = append(errs, c.Telemetry.validate()...)
 	if !slices.Contains([]string{"debug", "info", "warn", "error"}, c.Log.Level) {
 		errs = append(errs, fmt.Errorf("log.level: must be debug, info, warn or error, got %q", c.Log.Level))
 	}
@@ -310,4 +342,24 @@ func (k Keys) Policy() keys.Policy {
 		PublishAhead:   k.PublishAhead,
 		Retention:      k.Retention,
 	}
+}
+
+// validate reports the problems in the telemetry section.
+func (t Telemetry) validate() []error {
+	var errs []error
+	if t.Tracing.SampleRatio < 0 || t.Tracing.SampleRatio > 1 {
+		errs = append(errs, fmt.Errorf("telemetry.tracing.sample_ratio: must be between 0 and 1, got %v", t.Tracing.SampleRatio))
+	}
+	if t.Tracing.Endpoint != "" {
+		u, err := url.Parse(t.Tracing.Endpoint)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			errs = append(errs, errors.New("telemetry.tracing.endpoint: must be an absolute http or https URL"))
+		}
+	}
+	if t.Metrics.Enabled {
+		if _, _, err := net.SplitHostPort(t.Metrics.Address); err != nil {
+			errs = append(errs, fmt.Errorf("telemetry.metrics.address: %w", err))
+		}
+	}
+	return errs
 }

@@ -17,6 +17,8 @@ const maxHeaderBytes = 64 << 10
 
 // Options configures Serve.
 type Options struct {
+	// Name identifies the server in logs, for example "api" or "metrics".
+	Name              string
 	Handler           http.Handler
 	Logger            *slog.Logger
 	ReadHeaderTimeout time.Duration
@@ -46,7 +48,8 @@ func Serve(ctx context.Context, ln net.Listener, opts Options) error {
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
-	opts.Logger.LogAttrs(ctx, slog.LevelInfo, "http server listening",
+	logger := opts.Logger.With(slog.String("server", opts.Name))
+	logger.LogAttrs(ctx, slog.LevelInfo, "http server listening",
 		slog.String("address", ln.Addr().String()))
 
 	select {
@@ -55,7 +58,7 @@ func Serve(ctx context.Context, ln net.Listener, opts Options) error {
 	case <-ctx.Done():
 	}
 
-	opts.Logger.LogAttrs(ctx, slog.LevelInfo, "http server shutting down",
+	logger.LogAttrs(ctx, slog.LevelInfo, "http server shutting down",
 		slog.Duration("timeout", opts.ShutdownTimeout))
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), opts.ShutdownTimeout)
 	defer cancel()
@@ -66,6 +69,6 @@ func Serve(ctx context.Context, ln net.Listener, opts Options) error {
 	if err := <-errc; !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("http server: %w", err)
 	}
-	opts.Logger.LogAttrs(ctx, slog.LevelInfo, "http server stopped")
+	logger.LogAttrs(ctx, slog.LevelInfo, "http server stopped")
 	return nil
 }
