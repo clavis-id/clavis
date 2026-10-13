@@ -1,0 +1,52 @@
+package cli
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/clavis-id/clavis/internal/config"
+	"github.com/clavis-id/clavis/store"
+	"github.com/clavis-id/clavis/store/postgres"
+	"github.com/clavis-id/clavis/store/sqlite"
+)
+
+// migrator is implemented by every first-party store adapter.
+type migrator interface {
+	Migrate(ctx context.Context) error
+}
+
+// openedStore is a store together with the means to migrate and release it.
+type openedStore struct {
+	store.Store
+	migrator
+	close func()
+}
+
+// openStore opens the store selected by cfg. Pending migrations are applied
+// when migrate is true.
+func openStore(ctx context.Context, cfg config.Database, migrate bool) (openedStore, error) {
+	switch cfg.Driver {
+	case config.DriverSQLite:
+		var opts []sqlite.Option
+		if !migrate {
+			opts = append(opts, sqlite.WithoutMigrations())
+		}
+		s, err := sqlite.Open(ctx, cfg.DSN, opts...)
+		if err != nil {
+			return openedStore{}, err
+		}
+		return openedStore{Store: s, migrator: s, close: func() { _ = s.Close() }}, nil
+	case config.DriverPostgres:
+		var opts []postgres.Option
+		if !migrate {
+			opts = append(opts, postgres.WithoutMigrations())
+		}
+		s, err := postgres.Open(ctx, cfg.DSN, opts...)
+		if err != nil {
+			return openedStore{}, err
+		}
+		return openedStore{Store: s, migrator: s, close: s.Close}, nil
+	default:
+		return openedStore{}, fmt.Errorf("unsupported database driver %q", cfg.Driver)
+	}
+}

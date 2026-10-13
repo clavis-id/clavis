@@ -52,6 +52,9 @@ log:
 		"CLAVIS_SERVER_ADDRESS=0.0.0.0:8443",
 		"CLAVIS_SERVER_SHUTDOWN_TIMEOUT=1m",
 		"CLAVIS_LOG_FORMAT=text",
+		"CLAVIS_DATABASE_DRIVER=postgres",
+		"CLAVIS_DATABASE_DSN=postgres://clavis@db.internal/clavis",
+		"CLAVIS_DATABASE_AUTO_MIGRATE=false",
 		"CLAVIS_CONFIG=/ignored/because/it/is/the/file/path",
 		"CLAVIS_SERVICE_HOST=10.0.0.12",
 		"CLAVIS_PORT=tcp://10.0.0.12:8080",
@@ -69,6 +72,7 @@ log:
 	want.Server.ShutdownTimeout = time.Minute
 	want.Log.Level = "debug"
 	want.Log.Format = "text"
+	want.Database = Database{Driver: "postgres", DSN: "postgres://clavis@db.internal/clavis", AutoMigrate: false}
 	if diff := cmp.Diff(want, res.Config); diff != "" {
 		t.Errorf("Load() config mismatch (-want +got):\n%s", diff)
 	}
@@ -108,6 +112,9 @@ issuer: http://auth.example.com
 server:
   address: "8080"
   write_timeout: 0s
+database:
+  driver: mysql
+  dsn: ""
 log:
   level: verbose
   format: xml
@@ -116,6 +123,8 @@ log:
 				"issuer:",
 				"server.address:",
 				"server.write_timeout: must be positive",
+				"database.driver:",
+				"database.dsn:",
 				"log.level:",
 				"log.format:",
 			},
@@ -162,6 +171,9 @@ func TestEnvKeysCoverEveryField(t *testing.T) {
 		"CLAVIS_SERVER_WRITE_TIMEOUT":       "server.write_timeout",
 		"CLAVIS_SERVER_IDLE_TIMEOUT":        "server.idle_timeout",
 		"CLAVIS_SERVER_SHUTDOWN_TIMEOUT":    "server.shutdown_timeout",
+		"CLAVIS_DATABASE_DRIVER":            "database.driver",
+		"CLAVIS_DATABASE_DSN":               "database.dsn",
+		"CLAVIS_DATABASE_AUTO_MIGRATE":      "database.auto_migrate",
 		"CLAVIS_LOG_LEVEL":                  "log.level",
 		"CLAVIS_LOG_FORMAT":                 "log.format",
 	}

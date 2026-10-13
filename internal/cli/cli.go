@@ -39,47 +39,75 @@ func newRootCommand(environ []string) *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
-	root.AddCommand(newServeCommand(environ), newVersionCommand())
+	root.AddCommand(newServeCommand(environ), newMigrateCommand(environ), newVersionCommand())
 	return root
 }
+
+// configHelp describes where commands read their configuration from.
+const configHelp = "Configuration is read from the file given by --config (or " + config.EnvConfigFile + ")\n" +
+	"and overridden by " + config.EnvPrefix + "* environment variables."
 
 func newServeCommand(environ []string) *cobra.Command {
 	var configPath string
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the Clavis HTTP server",
-		Long: "Run the Clavis HTTP server until it receives an interrupt or termination signal.\n\n" +
-			"Configuration is read from the file given by --config (or " + config.EnvConfigFile + ")\n" +
-			"and overridden by " + config.EnvPrefix + "* environment variables.",
-		Args: cobra.NoArgs,
+		Long:  "Run the Clavis HTTP server until it receives an interrupt or termination signal.\n\n" + configHelp,
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if configPath == "" {
-				configPath = lookupEnv(environ, config.EnvConfigFile)
-			}
-			return serve(cmd.Context(), configPath, environ, cmd.ErrOrStderr())
+			return serve(cmd.Context(), configPathOrEnv(configPath, environ), environ, cmd.ErrOrStderr())
 		},
 	}
 	cmd.Flags().StringVar(&configPath, "config", "", "path to the YAML configuration file")
 	return cmd
 }
 
-func serve(ctx context.Context, configPath string, environ []string, logOutput io.Writer) error {
+func newMigrateCommand(environ []string) *cobra.Command {
+	var configPath string
+	cmd := &cobra.Command{
+		Use:   "migrate",
+		Short: "Apply pending database migrations and exit",
+		Long: "Apply pending database migrations and exit. Use it as a deployment step when\n" +
+			"database.auto_migrate is false.\n\n" + configHelp,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return migrate(cmd.Context(), configPathOrEnv(configPath, environ), environ, cmd.ErrOrStderr())
+		},
+	}
+	cmd.Flags().StringVar(&configPath, "config", "", "path to the YAML configuration file")
+	return cmd
+}
+
+// setup loads the configuration and builds the logger shared by commands.
+func setup(ctx context.Context, configPath string, environ []string, logOutput io.Writer) (config.Config, *slog.Logger, error) {
 	res, err := config.Load(configPath, environ)
 	if err != nil {
-		return err
+		return config.Config{}, nil, err
 	}
-	cfg := res.Config
-
-	logger, err := logging.New(logOutput, cfg.Log.Level, cfg.Log.Format)
+	logger, err := logging.New(logOutput, res.Config.Log.Level, res.Config.Log.Format)
 	if err != nil {
-		return err
+		return config.Config{}, nil, err
 	}
 	for _, name := range res.IgnoredEnv {
 		logger.LogAttrs(ctx, slog.LevelWarn, "ignoring environment variable that matches no configuration key",
 			slog.String("name", name))
 	}
+	return res.Config, logger, nil
+}
 
-	srv, err := clavis.New(ctx, clavis.Config{Issuer: cfg.Issuer, Logger: logger})
+func serve(ctx context.Context, configPath string, environ []string, logOutput io.Writer) error {
+	cfg, logger, err := setup(ctx, configPath, environ, logOutput)
+	if err != nil {
+		return err
+	}
+
+	st, err := openStore(ctx, cfg.Database, cfg.Database.AutoMigrate)
+	if err != nil {
+		return err
+	}
+	defer st.close()
+
+	srv, err := clavis.New(ctx, clavis.Config{Issuer: cfg.Issuer, Store: st, Logger: logger})
 	if err != nil {
 		return err
 	}
@@ -92,7 +120,8 @@ func serve(ctx context.Context, configPath string, environ []string, logOutput i
 	info := version.Get()
 	logger.LogAttrs(ctx, slog.LevelInfo, "starting clavis",
 		slog.String("version", info.Version),
-		slog.String("issuer", srv.Issuer()))
+		slog.String("issuer", srv.Issuer()),
+		slog.String("database_driver", cfg.Database.Driver))
 
 	return server.Serve(ctx, ln, server.Options{
 		Handler:           srv.Handler(),
@@ -103,6 +132,25 @@ func serve(ctx context.Context, configPath string, environ []string, logOutput i
 		IdleTimeout:       cfg.Server.IdleTimeout,
 		ShutdownTimeout:   cfg.Server.ShutdownTimeout,
 	})
+}
+
+func migrate(ctx context.Context, configPath string, environ []string, logOutput io.Writer) error {
+	cfg, logger, err := setup(ctx, configPath, environ, logOutput)
+	if err != nil {
+		return err
+	}
+	st, err := openStore(ctx, cfg.Database, false)
+	if err != nil {
+		return err
+	}
+	defer st.close()
+
+	if err := st.Migrate(ctx); err != nil {
+		return err
+	}
+	logger.LogAttrs(ctx, slog.LevelInfo, "database migrations applied",
+		slog.String("database_driver", cfg.Database.Driver))
+	return nil
 }
 
 func newVersionCommand() *cobra.Command {
@@ -127,6 +175,15 @@ func newVersionCommand() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// configPathOrEnv returns flagValue, or the configuration file named by the
+// environment when the flag is not set.
+func configPathOrEnv(flagValue string, environ []string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	return lookupEnv(environ, config.EnvConfigFile)
 }
 
 // lookupEnv returns the value of name in environ, or "" when it is unset.
