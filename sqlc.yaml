@@ -1,0 +1,11 @@
+# Generates the query code of the storage adapters. Run with `make generate`.
+version: "2"
+sql:
+  - engine: sqlite
+    schema: store/sqlite/migrations
+    queries: store/sqlite/queries
+    gen:
+      go:
+        package: db
+        out: store/sqlite/internal/db
+        emit_empty_slices: true
