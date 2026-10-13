@@ -137,3 +137,35 @@ func TestParseSecret(t *testing.T) {
 		}
 	}
 }
+
+// FuzzDecrypt feeds arbitrary ciphertexts to Decrypt, which must fail with
+// ErrDecrypt rather than panic. Stored ciphertexts are untrusted: anyone with
+// write access to the database can change them.
+func FuzzDecrypt(f *testing.F) {
+	l, err := NewLocal(make([]byte, SecretSize))
+	if err != nil {
+		f.Fatalf("NewLocal() unexpected error: %v", err)
+	}
+	valid, err := l.Encrypt(f.Context(), []byte("private key"), []byte("record"))
+	if err != nil {
+		f.Fatalf("Encrypt() unexpected error: %v", err)
+	}
+	f.Add(valid.Data, []byte("record"))
+	f.Add([]byte{}, []byte{})
+	f.Add(make([]byte, 28), []byte("record"))
+	f.Fuzz(func(t *testing.T, data, aad []byte) {
+		got, err := l.Decrypt(t.Context(), Ciphertext{KeyID: l.PrimaryKeyID(), Data: data}, aad)
+		if err != nil {
+			if !errors.Is(err, ErrDecrypt) {
+				t.Fatalf("Decrypt() error = %v, want ErrDecrypt", err)
+			}
+			return
+		}
+		// Only genuine ciphertexts decrypt. Fuzz workers run in separate
+		// processes with their own seed ciphertexts, so compare the content
+		// rather than the bytes.
+		if string(got) != "private key" || string(aad) != "record" {
+			t.Fatalf("Decrypt() accepted forged data and returned %q", got)
+		}
+	})
+}

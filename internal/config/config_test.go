@@ -272,3 +272,28 @@ func TestEnvKeysCoverEveryField(t *testing.T) {
 		t.Errorf("envKeys() mismatch (-want +got):\n%s", diff)
 	}
 }
+
+// FuzzParse feeds arbitrary YAML to the configuration parser, which must
+// return an error rather than panic on any input.
+func FuzzParse(f *testing.F) {
+	for _, seed := range []string{
+		"",
+		"issuer: https://auth.example.com\n",
+		"server:\n  address: :8080\n  read_timeout: 5s\n",
+		"keys:\n  algorithms: [RS256, ES256]\n  rotation_period: 720h\n",
+		"telemetry:\n  tracing:\n    sample_ratio: 0.5\n",
+		"server: [1, 2]\n",
+		"log: {level: {nested: true}}\n",
+	} {
+		f.Add([]byte(seed))
+	}
+	environ := []string{"CLAVIS_KEYS_ENCRYPTION_KEY=" + testKey}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		res, err := parse(data, environ)
+		if err == nil {
+			if verr := res.Config.Validate(); verr != nil {
+				t.Fatalf("parse() returned a configuration that fails validation: %v", verr)
+			}
+		}
+	})
+}

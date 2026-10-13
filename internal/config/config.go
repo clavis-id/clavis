@@ -194,15 +194,28 @@ type Result struct {
 // overrides from environ (in os.Environ format) and validates the result.
 // Unknown keys in the file and invalid values are errors.
 func Load(path string, environ []string) (Result, error) {
-	k := koanf.New(".")
-
+	var data []byte
 	if path != "" {
-		data, err := os.ReadFile(path) //nolint:gosec // The path is chosen by the operator.
+		var err error
+		data, err = os.ReadFile(path) //nolint:gosec // The path is chosen by the operator.
 		if err != nil {
 			return Result{}, fmt.Errorf("reading config file: %w", err)
 		}
+	}
+	res, err := parse(data, environ)
+	if err != nil && path != "" {
+		return Result{}, fmt.Errorf("config file %s: %w", path, err)
+	}
+	return res, err
+}
+
+// parse builds the configuration from YAML data, which may be empty, and
+// environ.
+func parse(data []byte, environ []string) (Result, error) {
+	k := koanf.New(".")
+	if len(data) > 0 {
 		if err := k.Load(rawbytes.Provider(data), yaml.Parser()); err != nil {
-			return Result{}, fmt.Errorf("parsing config file %s: %w", path, err)
+			return Result{}, fmt.Errorf("parsing config file: %w", err)
 		}
 	}
 
