@@ -13,6 +13,10 @@ TOOL = $(GO) tool -modfile=tools/$(1)/go.mod $(1)
 TOOL_MODULES = $(wildcard tools/*/go.mod)
 
 COVER_PROFILE ?= coverage.out
+# Security-critical packages must keep at least COVER_FLOOR percent coverage.
+COVER_FLOOR ?= 80
+COVER_FLOOR_PKGS = ./internal/issuer ./internal/keys ./kek
+FUZZTIME ?= 30s
 
 # Container images, pinned by digest. sqlc runs in Docker because its
 # PostgreSQL parser needs CGo.
@@ -74,6 +78,24 @@ generate: ## Regenerate code (sqlc runs in Docker)
 generate-check: generate ## Fail if generated code is out of date
 	@test -z "$$(git status --porcelain -- store)" || \
 		{ git status --porcelain -- store; echo "generated code is out of date: run make generate"; exit 1; }
+
+.PHONY: cover-check
+cover-check: ## Fail if a security-critical package is below the coverage floor
+	@fail=0; for pkg in $(COVER_FLOOR_PKGS); do \
+		pct=$$($(GO) test -count=1 -cover $$pkg | sed -nE 's/.*coverage: ([0-9.]+)% of statements.*/\1/p'); \
+		echo "$$pkg: $${pct:-0}% (floor $(COVER_FLOOR)%)"; \
+		awk -v p="$${pct:-0}" -v f="$(COVER_FLOOR)" 'BEGIN { exit !(p >= f) }' || fail=1; \
+	done; exit $$fail
+
+.PHONY: fuzz
+fuzz: ## Run every fuzz target for FUZZTIME each (default 30s)
+	@grep -rlE --include='*_test.go' '^func Fuzz' . | sort | while read -r file; do \
+		dir=$$(dirname "$$file"); \
+		for name in $$(sed -nE 's/^func (Fuzz[A-Za-z0-9_]+)\(.*/\1/p' "$$file"); do \
+			echo "fuzzing $$name in $$dir for $(FUZZTIME)"; \
+			$(GO) test -run='^$$' -fuzz="^$$name$$" -fuzztime=$(FUZZTIME) "./$$dir" || exit 1; \
+		done; \
+	done
 
 .PHONY: lint
 lint: ## Run golangci-lint and lint the GitHub Actions workflows
