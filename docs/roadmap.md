@@ -3,10 +3,10 @@
 Each phase ends with explicit exit criteria. A phase is not complete until every criterion is
 met in CI. Versions before v1.0 make no compatibility promises.
 
-Current phase: **Phase 0, code complete.** The remaining exit criterion is the first tagged
+Current phase: **Phase 1.** Phase 0 was completed on 2026-10-13 with the `v0.1.0-alpha.1`
 pre-release.
 
-## Phase 0: Foundations
+## Phase 0: Foundations (complete)
 
 Scope:
 - Go 1.27 toolchain, `go.mod` with module path `clavisid.org/clavis` (ADR 0012).
