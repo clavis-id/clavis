@@ -270,11 +270,12 @@ func (s *Server) handleJWKS(w http.ResponseWriter, r *http.Request) {
 }
 
 // internalError logs err and answers with a generic 500 response that
-// reveals nothing about the failure.
+// reveals nothing about the failure. It logs the matched route pattern rather
+// than the request path, so clients cannot write their own text into the logs.
 func (s *Server) internalError(w http.ResponseWriter, r *http.Request, action string, err error) {
 	s.logger.LogAttrs(r.Context(), slog.LevelError, "request failed",
 		slog.String("action", action),
-		slog.String("path", r.URL.Path),
+		slog.String("route", r.Pattern),
 		slog.String("error", err.Error()))
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

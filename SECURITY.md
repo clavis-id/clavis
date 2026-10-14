@@ -5,8 +5,8 @@ project.
 
 ## Supported versions
 
-Clavis has not published a release yet. Until v1.0, only the latest release receives security
-fixes.
+Clavis is pre-release software (v0.x) and is not ready for production. Until v1.0, only the
+latest release receives security fixes.
 
 ## Reporting a vulnerability
 
