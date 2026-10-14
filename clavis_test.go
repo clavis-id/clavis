@@ -1,12 +1,16 @@
 package clavis
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -265,6 +269,60 @@ func TestJWKSHidesStoreErrors(t *testing.T) {
 	}
 	if got := rec.Body.String(); got != "internal error\n" {
 		t.Errorf("body = %q, want a generic message", got)
+	}
+}
+
+// syncBuffer is a bytes.Buffer that is safe for concurrent writes, for loggers
+// shared with the background goroutines of a Server.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestInternalErrorsLogTheRouteNotThePath(t *testing.T) {
+	t.Parallel()
+
+	var logs syncBuffer
+	st := openStore(t)
+	cfg := testConfig(t, st)
+	cfg.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	h := mustNew(t, cfg).Handler()
+	if err := st.Close(); err != nil {
+		t.Fatalf("closing store: %v", err)
+	}
+	serve(t, h, http.MethodGet, "/oauth2/jwks")
+
+	found := false
+	for line := range strings.Lines(logs.String()) {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("decoding log line %q: %v", line, err)
+		}
+		if entry["msg"] != "request failed" {
+			continue
+		}
+		found = true
+		if got, want := entry["route"], "GET /oauth2/jwks"; got != want {
+			t.Errorf("route = %v, want %q", got, want)
+		}
+		if _, ok := entry["path"]; ok {
+			t.Errorf("log entry has a path attribute, which carries client input: %v", entry)
+		}
+	}
+	if !found {
+		t.Errorf("no %q entry in the logs:\n%s", "request failed", logs.String())
 	}
 }
 
