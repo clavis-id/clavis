@@ -25,6 +25,7 @@ The design decisions this plan relies on are recorded as ADRs:
 | [0015](../adr/0015-password-hashing-and-fips-mode.md) | argon2id by default, PBKDF2-HMAC-SHA256 in FIPS mode, PHC string format |
 | [0016](../adr/0016-administration-and-the-admin-tenant.md) | Admin API authenticated with OAuth tokens from a reserved `admin` tenant; CLI bootstrap |
 | [0017](../adr/0017-openid-conformance-suite-in-ci.md) | OpenID conformance suite in CI with committed expected failures |
+| [0018](../adr/0018-pkce-exemption-is-a-client-setting.md) | The PKCE exemption for confidential clients is a client setting (supersedes the PKCE policy of 0014) |
 
 ## Rules for every work item
 
@@ -219,9 +220,9 @@ validation middleware, and meets every Phase 1 exit criterion.
 
 ## Risks
 
-- **Conformance and PKCE.** The suite may omit PKCE in most Basic OP tests. ADR 0014 allows a
-  confidential client to accept OpenID Connect requests without PKCE when they carry a nonce,
-  as RFC 9700 permits. Work item 1.2 confirms whether conformance clients need that setting.
+- **Conformance and PKCE.** Work item 1.2 confirmed that Basic OP tests omit PKCE, and that
+  one test omits the nonce too. ADR 0018 makes the PKCE exemption a client setting, which the
+  conformance clients use.
 - **CI time.** The conformance suite and Playwright are slow. They run nightly and on pull
   requests that touch the relevant paths, not on every change.
 - **Footprint.** templ, WebAuthn and the admin API grow the binary. Release-check already gates

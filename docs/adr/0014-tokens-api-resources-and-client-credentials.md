@@ -1,6 +1,6 @@
 # 0014. Tokens, API resources and client credentials
 
-- Status: Accepted
+- Status: Accepted; the PKCE policy is superseded by [0018](0018-pkce-exemption-is-a-client-setting.md)
 - Date: 2026-10-14
 
 ## Context
