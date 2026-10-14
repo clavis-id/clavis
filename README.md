@@ -63,6 +63,8 @@ if err != nil {
 }
 
 mux.Handle("/auth/", http.StripPrefix("/auth", auth.Handler()))
+// RFC 8414 metadata lives at the host root when the issuer has a path.
+mux.Handle("/.well-known/oauth-authorization-server/", auth.WellKnownHandler())
 mux.Handle("/api/", middleware.Require(auth.Verifier(), middleware.Scopes("orders:read"))(api))
 ```
 
