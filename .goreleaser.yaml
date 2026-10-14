@@ -78,6 +78,11 @@ docker_signs:
 changelog:
   use: github
   sort: asc
+  # One line per commit: subject, short SHA and the author's GitHub login. The
+  # first release has no previous tag, so GoReleaser reads git history instead
+  # of the GitHub API and the login is left out.
+  abbrev: 7
+  format: "{{ .Message }} ({{ .SHA }}){{ with .AuthorUsername }} by @{{ . }}{{ end }}"
   filters:
     exclude:
       - "^docs"
@@ -104,3 +109,11 @@ release:
   # Releases are created as drafts so a maintainer reviews them before they
   # become visible.
   draft: true
+  footer: |
+    ## Container image
+
+    ```
+    docker pull ghcr.io/clavis-id/clavis:{{ .Version }}
+    ```
+
+    To verify the downloads and the image, see [Verifying a release](https://github.com/clavis-id/clavis/blob/{{ .Tag }}/docs/releasing.md#verifying-a-release).

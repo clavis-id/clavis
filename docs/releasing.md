@@ -26,8 +26,9 @@ times, so a release can be rebuilt bit for bit from its tag.
    it with a merge commit.
 2. Tag the merge commit on `master` with a semantic version, for example `v0.1.0-alpha.1`, and
    push the tag. Versions with a pre-release suffix become GitHub pre-releases.
-3. The Release workflow creates a draft GitHub release. Review the notes and artifacts, then
-   publish it.
+3. The Release workflow creates a draft GitHub release. Its notes list the commits since the
+   previous tag, grouped by type, followed by the image name and a link to the verification
+   steps. Add a short summary of the release at the top, review the artifacts, then publish it.
 
 Test the configuration locally with `make release-snapshot` (no signing, no SBOM, nothing
 published). Pull requests that change release files run the same snapshot in CI, including a
