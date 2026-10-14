@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -334,19 +335,19 @@ func TestProtocolRoutesAreTraced(t *testing.T) {
 	cfg.TracerProvider = sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	h := mustNew(t, cfg).Handler()
 
-	for _, path := range []string{"/healthz", "/readyz", "/oauth2/jwks"} {
+	for _, path := range []string{"/healthz", "/readyz", "/oauth2/jwks", "/.well-known/oauth-authorization-server"} {
 		serve(t, h, http.MethodGet, path)
 	}
-	spans := recorder.Ended()
-	if len(spans) != 1 {
-		names := make([]string, 0, len(spans))
-		for _, sp := range spans {
-			names = append(names, sp.Name())
-		}
-		t.Fatalf("recorded spans %v, want only the JWKS request", names)
+	// Rejected methods are not traced, as for route patterns.
+	serve(t, h, http.MethodPost, "/.well-known/oauth-authorization-server")
+
+	var names []string
+	for _, sp := range recorder.Ended() {
+		names = append(names, sp.Name())
 	}
-	if got := spans[0].Name(); got != "GET /oauth2/jwks" {
-		t.Errorf("span name = %q, want the route pattern", got)
+	want := []string{"GET /oauth2/jwks", "GET /.well-known/oauth-authorization-server"}
+	if !slices.Equal(names, want) {
+		t.Errorf("recorded spans %v, want %v: protocol routes only, named after their pattern", names, want)
 	}
 }
 

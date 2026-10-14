@@ -54,7 +54,10 @@ func ValidateTenantSlug(slug string) error {
 	return nil
 }
 
-// validateTenantName reports whether name can be displayed safely.
+// validateTenantName reports whether name can be displayed safely: control
+// characters, bidirectional formatting characters (which can make text
+// display differently from how it is stored) and line or paragraph
+// separators are rejected.
 func validateTenantName(name string) error {
 	if !utf8.ValidString(name) {
 		return fmt.Errorf("%w: name is not valid UTF-8", ErrInvalidTenant)
@@ -63,8 +66,9 @@ func validateTenantName(name string) error {
 		return fmt.Errorf("%w: name must have 1 to %d characters", ErrInvalidTenant, MaxTenantNameLength)
 	}
 	for _, r := range name {
-		if unicode.IsControl(r) {
-			return fmt.Errorf("%w: name must not contain control characters", ErrInvalidTenant)
+		if unicode.In(r, unicode.Cc, unicode.Bidi_Control, unicode.Zl, unicode.Zp) {
+			return fmt.Errorf("%w: name must not contain control, bidirectional formatting or "+
+				"line separator characters", ErrInvalidTenant)
 		}
 	}
 	return nil
@@ -131,7 +135,8 @@ func TenantBySlug(ctx context.Context, d Deps, slug string) (store.Tenant, error
 	return t, nil
 }
 
-// ListTenants returns every tenant in creation order.
+// ListTenants returns every tenant in ID order, which follows creation time
+// because IDs are version 7 UUIDs.
 func ListTenants(ctx context.Context, d Deps) ([]store.Tenant, error) {
 	var all []store.Tenant
 	after := uuid.Nil()

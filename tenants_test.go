@@ -5,9 +5,12 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"flag"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"clavisid.org/clavis/internal/app"
@@ -157,9 +160,58 @@ func TestUnknownTenantsAreNotFound(t *testing.T) {
 		"/.well-known/oauth-authorization-server/t/acme/extra",
 		"/.well-known/oauth-authorization-server/other",
 	} {
-		if rec := serve(t, h, http.MethodGet, path); rec.Code != http.StatusNotFound {
+		rec := serve(t, h, http.MethodGet, path)
+		if rec.Code != http.StatusNotFound {
 			t.Errorf("GET %s status = %d, want 404", path, rec.Code)
 		}
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("GET %s Cache-Control = %q, want no-store so the tenant can appear later", path, got)
+		}
+	}
+}
+
+func TestTenantLookupFailureIsInternalError(t *testing.T) {
+	t.Parallel()
+
+	var logs syncBuffer
+	st := openStore(t)
+	cfg := testConfig(t, st)
+	cfg.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	s := mustNew(t, cfg)
+	createTenant(t, s, "acme")
+	if err := st.Close(); err != nil {
+		t.Fatalf("closing store: %v", err)
+	}
+
+	rec := serve(t, s.Handler(), http.MethodGet, "/t/acme/oauth2/jwks")
+	if rec.Code != http.StatusInternalServerError || rec.Body.String() != "internal error\n" {
+		t.Errorf("status = %d, body = %q; want 500 with a generic message", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(logs.String(), `"route":"GET /t/{tenant}/oauth2/jwks"`) {
+		t.Errorf("logs lack the route pattern:\n%s", logs.String())
+	}
+	if strings.Contains(logs.String(), "/t/acme") {
+		t.Errorf("logs contain the request path:\n%s", logs.String())
+	}
+}
+
+func TestNewCopiesSigningAlgorithms(t *testing.T) {
+	t.Parallel()
+
+	cfg := testConfig(t, openStore(t))
+	cfg.SigningKeys.Algorithms = []string{"RS256", "ES256"}
+	h := mustNew(t, cfg).Handler()
+	cfg.SigningKeys.Algorithms[1] = "EdDSA"
+
+	rec := serve(t, h, http.MethodGet, "/.well-known/openid-configuration")
+	var doc struct {
+		Algs []string `json:"id_token_signing_alg_values_supported"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decoding metadata: %v", err)
+	}
+	if !slices.Equal(doc.Algs, []string{"RS256", "ES256"}) {
+		t.Errorf("algorithms = %v, want the values passed to New", doc.Algs)
 	}
 }
 

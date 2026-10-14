@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -195,7 +196,8 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		stop:          stop,
 		done:          make(chan struct{}),
 	}
-	s.wellKnown = s.instrument(oidc.AuthorizationServerMetadataPath, http.HandlerFunc(s.handleWellKnown))
+	s.wellKnown = allowGet(s.instrument(http.MethodGet+" "+oidc.AuthorizationServerMetadataPath,
+		http.HandlerFunc(s.handleWellKnown)))
 	s.handler = s.routes()
 	go func() {
 		defer close(s.done)
@@ -350,16 +352,24 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request, t tenant
 	s.writePublicJSON(w, r, "application/json", metadataMaxAge, oidc.NewMetadata(t.issuer, s.algorithms))
 }
 
+// allowGet answers requests other than GET and HEAD with 405 before they
+// reach h, as http.ServeMux does for "GET" route patterns.
+func allowGet(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
 // handleWellKnown serves RFC 8414 metadata at
 // /.well-known/oauth-authorization-server<issuer path>[/t/<slug>]. It parses
 // the path itself because the issuer's path is configuration, not a route
 // pattern.
 func (s *Server) handleWellKnown(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		w.Header().Set("Allow", "GET, HEAD")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	rest, ok := strings.CutPrefix(r.URL.Path, oidc.AuthorizationServerMetadataPath+s.issuer.Path)
 	switch {
 	case !ok:
@@ -393,9 +403,11 @@ func (s *Server) writePublicJSON(w http.ResponseWriter, r *http.Request, content
 	_, _ = w.Write(body)
 }
 
-// notFound answers with a plain 404 response.
+// notFound answers with a plain 404 response that caches must not store,
+// so a tenant becomes reachable as soon as it is created.
 func (s *Server) notFound(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusNotFound)
 	_, _ = w.Write([]byte("not found\n"))
 }
@@ -419,7 +431,9 @@ func (s *Server) internalError(w http.ResponseWriter, r *http.Request, action st
 func (p SigningKeyPolicy) withDefaults() keys.Policy {
 	policy := keys.DefaultPolicy()
 	if len(p.Algorithms) > 0 {
-		policy.Algorithms = p.Algorithms
+		// Copied, so later changes to the caller's Config cannot reach the
+		// running Server.
+		policy.Algorithms = slices.Clone(p.Algorithms)
 	}
 	if p.RotationPeriod != 0 {
 		policy.RotationPeriod = p.RotationPeriod
