@@ -42,12 +42,17 @@ of the product. No change merges without the tests described here.
 
 ### Protocol conformance
 
-- The OpenID Foundation conformance suite runs in Docker against a Clavis instance.
-- Triggered on every change under `internal/oauth`, `internal/oidc` or `internal/keys`, and
-  nightly on `develop`.
-- Profiles grow with the roadmap: Basic OP, Config OP, Form Post, RP-Initiated Logout
-  (Phase 1); Dynamic OP and PAR (Phase 2); FAPI 2.0 Security Profile (later).
-- A failing conformance module blocks the merge.
+- The OpenID Foundation conformance suite runs in Docker against the current commit of Clavis
+  (`make conformance`; see [`conformance/README.md`](../conformance/README.md) and ADR 0017).
+- The Conformance workflow runs nightly on `develop`, on pull requests that change protocol
+  code or `conformance/`, and on demand.
+- `conformance/expected-failures.json` and `expected-skips.json` list the known gaps, each with
+  its reason. Any other failure, and any listed entry that no longer happens, fails the run.
+- Profiles grow with the roadmap: Config OP (from work item 1.2), Basic OP, Form Post and
+  RP-Initiated Logout (Phase 1); Dynamic OP and PAR (Phase 2); FAPI 2.0 Security Profile
+  (later).
+- A failing conformance run is fixed before merging. It is not a required status check, because
+  it only runs for the pull requests that change protocol code.
 
 ### Security tests
 
