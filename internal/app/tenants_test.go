@@ -127,6 +127,9 @@ func TestCreateTenantRejections(t *testing.T) {
 		{name: "control character in name", slug: "beta", tenantName: "Beta\nCorp", want: ErrInvalidTenant},
 		{name: "name too long", slug: "beta", tenantName: strings.Repeat("x", MaxTenantNameLength+1), want: ErrInvalidTenant},
 		{name: "invalid UTF-8 name", slug: "beta", tenantName: "\xff", want: ErrInvalidTenant},
+		{name: "right-to-left override in name", slug: "beta", tenantName: "Acme\u202Etset", want: ErrInvalidTenant},
+		{name: "right-to-left mark in name", slug: "beta", tenantName: "Acme\u200F", want: ErrInvalidTenant},
+		{name: "line separator in name", slug: "beta", tenantName: "Acme\u2028Corp", want: ErrInvalidTenant},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
