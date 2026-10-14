@@ -79,7 +79,7 @@ clavis serve --config clavis.yaml
 - [Vision and market analysis](docs/vision.md)
 - [Architecture](docs/architecture.md)
 - [Testing strategy](docs/testing.md)
-- [Roadmap](docs/roadmap.md)
+- [Roadmap](docs/roadmap.md) and the [Phase 1 plan](docs/plans/phase-1.md)
 - [Releasing](docs/releasing.md)
 - [Architecture decision records](docs/adr/)
 
