@@ -50,7 +50,7 @@ userinfo, with the Basic OP and Config OP conformance plans running in CI.
 
 1. **Tenant routing and discovery.**
    - Serve the `default` tenant at the issuer root and every other tenant under `/t/{slug}`.
-     Unknown or disabled tenants answer 404.
+     Unknown tenants answer 404.
    - Serve OpenID Connect Discovery 1.0 metadata per tenant.
    - Serve RFC 8414 metadata, including the path-inserted form for tenant issuers. When Clavis
      is embedded under a path, the host mounts a separate well-known handler at its root.
@@ -189,7 +189,8 @@ validation middleware, and meets every Phase 1 exit criterion.
    - Bearer token authentication with admin scopes.
    - A CI check rejects breaking changes to the contract.
 2. **Admin API resources.**
-   - Tenants, clients, users, API resources and audit events, with cursor pagination.
+   - Tenants (including disabling a tenant, which then answers 404), clients, users, API
+     resources and audit events, with cursor pagination.
    - A generated Go client in `client/`.
    - This item may split into one pull request per resource.
 3. **Embedding and resource servers.**

@@ -276,3 +276,70 @@ func TestServeExposesMetrics(t *testing.T) {
 		t.Errorf("exit code = %d, want 0 after cancellation", code)
 	}
 }
+
+func TestTenantsCommands(t *testing.T) {
+	t.Parallel()
+
+	dsn := filepath.Join(t.TempDir(), "clavis.db")
+	environ := []string{"CLAVIS_ISSUER=https://auth.example.com", "CLAVIS_DATABASE_DSN=" + dsn, testKey}
+	run := func(args ...string) (stdout, stderr string, code int) {
+		var out, errOut bytes.Buffer
+		code = Execute(t.Context(), args, &out, &errOut, environ)
+		return out.String(), errOut.String(), code
+	}
+
+	out, errOut, code := run("tenants", "create", "acme", "--name", "Acme Corp")
+	if code != 0 {
+		t.Fatalf("tenants create: exit code %d, stderr %q", code, errOut)
+	}
+	if !strings.Contains(out, "Created tenant acme") || !strings.Contains(out, "Issuer: https://auth.example.com/t/acme") {
+		t.Errorf("tenants create output %q lacks the slug or the issuer", out)
+	}
+	st, err := sqlite.Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+	acme, err := st.Tenants().GetBySlug(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("tenant not stored: %v", err)
+	}
+	if keys, err := st.SigningKeys().List(t.Context(), acme.ID); err != nil || len(keys) != 1 {
+		t.Errorf("signing keys of the new tenant = %d, %v; want 1 key", len(keys), err)
+	}
+	_ = st.Close()
+
+	if out, errOut, code = run("tenants", "list"); code != 0 || !strings.Contains(out, "acme") || !strings.Contains(out, "Acme Corp") {
+		t.Errorf("tenants list: exit code %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	if _, errOut, code = run("tenants", "create", "acme"); code != 1 || !strings.Contains(errOut, "already exists") {
+		t.Errorf("duplicate create: exit code %d, stderr %q", code, errOut)
+	}
+	if _, errOut, code = run("tenants", "delete", "acme"); code != 1 || !strings.Contains(errOut, "--yes") {
+		t.Errorf("delete without --yes: exit code %d, stderr %q", code, errOut)
+	}
+	if _, errOut, code = run("tenants", "delete", "default", "--yes"); code != 1 || !strings.Contains(errOut, "cannot be deleted") {
+		t.Errorf("delete default: exit code %d, stderr %q", code, errOut)
+	}
+	if out, errOut, code = run("tenants", "delete", "acme", "--yes"); code != 0 || !strings.Contains(out, "Deleted tenant acme") {
+		t.Errorf("delete: exit code %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	if out, _, _ = run("tenants", "list"); strings.Contains(out, "acme") {
+		t.Errorf("deleted tenant still listed: %q", out)
+	}
+}
+
+func TestTenantsCreateNeedsEncryptionKey(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	environ := []string{
+		"CLAVIS_ISSUER=https://auth.example.com",
+		"CLAVIS_DATABASE_DSN=" + filepath.Join(t.TempDir(), "clavis.db"),
+	}
+	if code := Execute(t.Context(), []string{"tenants", "create", "acme"}, &stdout, &stderr, environ); code != 1 {
+		t.Errorf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "encryption_key") {
+		t.Errorf("stderr %q does not mention the missing encryption key", stderr.String())
+	}
+}

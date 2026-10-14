@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 	"uuid"
@@ -20,6 +21,7 @@ import (
 	"clavisid.org/clavis/internal/app"
 	"clavisid.org/clavis/internal/issuer"
 	"clavisid.org/clavis/internal/keys"
+	"clavisid.org/clavis/internal/oidc"
 	"clavisid.org/clavis/kek"
 	"clavisid.org/clavis/store"
 )
@@ -31,6 +33,13 @@ const readinessTimeout = 2 * time.Second
 // than the default publish-ahead period, so cached sets always contain a
 // successor key before it starts signing.
 const jwksMaxAge = 5 * time.Minute
+
+// metadataMaxAge is how long clients may cache the provider metadata.
+const metadataMaxAge = 5 * time.Minute
+
+// tenantPathPrefix is the path below the issuer under which every tenant
+// other than the default one is served (ADR 0009).
+const tenantPathPrefix = "/t/"
 
 // Config configures a Clavis server.
 type Config struct {
@@ -91,16 +100,22 @@ type SigningKeyPolicy struct {
 // Server is a Clavis instance. Mount the value returned by Handler on any
 // router, or serve it directly with net/http.
 //
+// The default tenant is served at the issuer and every other tenant at
+// <issuer>/t/<slug>, each with its own metadata and keys.
+//
 // A Server is safe for concurrent use.
 type Server struct {
 	issuer        *url.URL
 	store         store.Store
 	keys          *keys.Manager
-	defaultTenant uuid.UUID
+	deps          app.Deps
+	defaultTenant store.Tenant
+	algorithms    []string
 	logger        *slog.Logger
 	tracer        trace.TracerProvider
 	meter         metric.MeterProvider
 	handler       http.Handler
+	wellKnown     http.Handler
 
 	stop      context.CancelFunc
 	done      chan struct{}
@@ -171,13 +186,16 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		issuer:        iss,
 		store:         cfg.Store,
 		keys:          manager,
-		defaultTenant: tenant.ID,
+		deps:          deps,
+		defaultTenant: tenant,
+		algorithms:    policy.Algorithms,
 		logger:        logger,
 		tracer:        tracer,
 		meter:         meter,
 		stop:          stop,
 		done:          make(chan struct{}),
 	}
+	s.wellKnown = s.instrument(oidc.AuthorizationServerMetadataPath, http.HandlerFunc(s.handleWellKnown))
 	s.handler = s.routes()
 	go func() {
 		defer close(s.done)
@@ -201,9 +219,26 @@ func (s *Server) Issuer() string {
 	return s.issuer.String()
 }
 
-// Handler returns the HTTP handler that serves every Clavis endpoint.
+// Handler returns the HTTP handler that serves every Clavis endpoint. It
+// expects request paths relative to the issuer: mount it where the issuer's
+// path points, removing that path, as in the example of New.
 func (s *Server) Handler() http.Handler {
 	return s.handler
+}
+
+// WellKnownHandler serves the RFC 8414 authorization server metadata of
+// every tenant. RFC 8414, section 3.1, places it at the root of the issuer's
+// host, at /.well-known/oauth-authorization-server followed by the issuer's
+// path, so Handler cannot receive it when the issuer has a path. In that
+// case, mount WellKnownHandler at the root of the host's router:
+//
+//	mux.Handle("/.well-known/oauth-authorization-server/", auth.WellKnownHandler())
+//
+// When the issuer has no path, Handler already serves these URLs.
+// OpenID Connect discovery (<issuer>/.well-known/openid-configuration) is
+// always served by Handler.
+func (s *Server) WellKnownHandler() http.Handler {
+	return s.wellKnown
 }
 
 // routes builds the request multiplexer. Probes are not instrumented, so
@@ -212,18 +247,65 @@ func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.HandleFunc("GET /readyz", s.handleReady)
-	s.handle(mux, "GET /oauth2/jwks", s.handleJWKS)
+	s.handleTenant(mux, http.MethodGet, oidc.DiscoveryPath, s.handleMetadata)
+	s.handleTenant(mux, http.MethodGet, oidc.JWKSPath, s.handleJWKS)
+	if s.issuer.Path == "" {
+		mux.Handle(oidc.AuthorizationServerMetadataPath, s.wellKnown)
+		mux.Handle(oidc.AuthorizationServerMetadataPath+"/", s.wellKnown)
+	}
 	return mux
 }
 
-// handle registers an instrumented route. Spans are named after the route
+// tenant is the tenant a request addresses, with its issuer identifier.
+type tenant struct {
+	store.Tenant
+	issuer string
+}
+
+// tenantHandler serves a request addressed to one tenant.
+type tenantHandler func(http.ResponseWriter, *http.Request, tenant)
+
+// handleTenant registers h at path for the default tenant and at
+// /t/{tenant}<path> for every other tenant.
+func (s *Server) handleTenant(mux *http.ServeMux, method, path string, h tenantHandler) {
+	root := method + " " + path
+	mux.Handle(root, s.instrument(root, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.serveTenant(w, r, "", h)
+	})))
+	scoped := method + " " + tenantPathPrefix + "{tenant}" + path
+	mux.Handle(scoped, s.instrument(scoped, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.serveTenant(w, r, r.PathValue("tenant"), h)
+	})))
+}
+
+// serveTenant resolves the tenant with the given slug, or the default tenant
+// when slug is empty, and passes the request to h. Unknown tenants get a 404
+// response.
+func (s *Server) serveTenant(w http.ResponseWriter, r *http.Request, slug string, h tenantHandler) {
+	if slug == "" {
+		h(w, r, tenant{Tenant: s.defaultTenant, issuer: s.issuer.String()})
+		return
+	}
+	t, err := app.TenantBySlug(r.Context(), s.deps, slug)
+	switch {
+	case errors.Is(err, app.ErrTenantNotFound):
+		s.notFound(w)
+		return
+	case err != nil:
+		s.internalError(w, r, "resolving the tenant", err)
+		return
+	}
+	h(w, r, tenant{Tenant: t, issuer: s.issuer.String() + tenantPathPrefix + t.Slug})
+}
+
+// instrument wraps h so that it records a span and HTTP metrics named after
 // pattern, which keeps their cardinality bounded.
-func (s *Server) handle(mux *http.ServeMux, pattern string, h http.HandlerFunc) {
-	mux.Handle(pattern, otelhttp.NewHandler(h, pattern,
+func (s *Server) instrument(pattern string, h http.Handler) http.Handler {
+	return otelhttp.NewHandler(h, pattern,
 		otelhttp.WithTracerProvider(s.tracer),
 		otelhttp.WithMeterProvider(s.meter),
 		otelhttp.WithSpanNameFormatter(func(operation string, _ *http.Request) string { return operation }),
-	))
+	)
 }
 
 // handleHealth reports that the process is alive. It never touches
@@ -251,22 +333,71 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("ok\n"))
 }
 
-// handleJWKS serves the public signing keys of the default tenant as a JWK
-// set (RFC 7517, section 5).
-func (s *Server) handleJWKS(w http.ResponseWriter, r *http.Request) {
-	set, err := s.keys.JWKS(r.Context(), s.defaultTenant)
+// handleJWKS serves the public signing keys of a tenant as a JWK set
+// (RFC 7517, section 5).
+func (s *Server) handleJWKS(w http.ResponseWriter, r *http.Request, t tenant) {
+	set, err := s.keys.JWKS(r.Context(), t.ID)
 	if err != nil {
 		s.internalError(w, r, "loading the JWK set", err)
 		return
 	}
-	body, err := json.Marshal(set)
-	if err != nil {
-		s.internalError(w, r, "encoding the JWK set", err)
+	s.writePublicJSON(w, r, "application/jwk-set+json", jwksMaxAge, set)
+}
+
+// handleMetadata serves the provider metadata of a tenant, for OpenID
+// Connect Discovery 1.0, section 4, and RFC 8414, section 3.
+func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request, t tenant) {
+	s.writePublicJSON(w, r, "application/json", metadataMaxAge, oidc.NewMetadata(t.issuer, s.algorithms))
+}
+
+// handleWellKnown serves RFC 8414 metadata at
+// /.well-known/oauth-authorization-server<issuer path>[/t/<slug>]. It parses
+// the path itself because the issuer's path is configuration, not a route
+// pattern.
+func (s *Server) handleWellKnown(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Content-Type", "application/jwk-set+json")
-	w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", int(jwksMaxAge.Seconds())))
+	rest, ok := strings.CutPrefix(r.URL.Path, oidc.AuthorizationServerMetadataPath+s.issuer.Path)
+	switch {
+	case !ok:
+		s.notFound(w)
+	case rest == "":
+		s.serveTenant(w, r, "", s.handleMetadata)
+	default:
+		slug, ok := strings.CutPrefix(rest, tenantPathPrefix)
+		if !ok || slug == "" || strings.Contains(slug, "/") {
+			s.notFound(w)
+			return
+		}
+		s.serveTenant(w, r, slug, s.handleMetadata)
+	}
+}
+
+// writePublicJSON encodes v as the body of a response that any origin may
+// read and cache for maxAge. It suits public documents such as metadata and
+// key sets, which browser-based clients fetch across origins.
+func (s *Server) writePublicJSON(w http.ResponseWriter, r *http.Request, contentType string,
+	maxAge time.Duration, v any,
+) {
+	body, err := json.Marshal(v)
+	if err != nil {
+		s.internalError(w, r, "encoding the response", err)
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", int(maxAge.Seconds())))
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	_, _ = w.Write(body)
+}
+
+// notFound answers with a plain 404 response.
+func (s *Server) notFound(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = w.Write([]byte("not found\n"))
 }
 
 // internalError logs err and answers with a generic 500 response that

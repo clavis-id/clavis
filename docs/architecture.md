@@ -44,6 +44,8 @@ if err != nil {
 }
 
 mux.Handle("/auth/", http.StripPrefix("/auth", auth.Handler()))
+// RFC 8414 metadata lives at the host root when the issuer has a path.
+mux.Handle("/.well-known/oauth-authorization-server/", auth.WellKnownHandler())
 mux.Handle("/api/", middleware.Require(auth.Verifier(), middleware.Scopes("orders:read"))(api))
 ```
 
@@ -65,7 +67,8 @@ multi-architecture.
 
 ```
 clavis/
-  cmd/clavis/            CLI and server entry point (serve, migrate, plan, apply, keys, import)
+  cmd/clavis/            CLI and server entry point (serve, migrate, tenants, keys; later plan,
+                         apply, import)
   clavis.go              Public embed API: New, Config, Server, Server.Handler, Server.Verifier
   middleware/            Public: resource-server token validation for net/http
   store/                 Public: storage ports and record types
@@ -141,10 +144,17 @@ clavis/
 
 ## Protocol surface (per tenant)
 
+Paths are relative to the tenant's issuer: the issuer itself for the `default` tenant and
+`<issuer>/t/<slug>` for the others. RFC 8414 metadata is the exception: section 3.1 of the RFC
+places it at `/.well-known/oauth-authorization-server` followed by the issuer's path, at the root
+of the host. `Server.Handler` serves it when the issuer has no path; otherwise the host mounts
+`Server.WellKnownHandler` at its root. Unknown tenants get a 404 response, and the `default`
+tenant is not reachable under `/t/default`.
+
 | Endpoint | Specification | Phase |
 |---|---|---|
-| `/.well-known/openid-configuration` | OpenID Connect Discovery 1.0 | 1 |
-| `/.well-known/oauth-authorization-server` | RFC 8414 | 1 |
+| `/.well-known/openid-configuration` | OpenID Connect Discovery 1.0 | 1 (implemented) |
+| `/.well-known/oauth-authorization-server` | RFC 8414 | 1 (implemented) |
 | `/oauth2/authorize` | RFC 6749, OAuth 2.1, PKCE (RFC 7636) | 1 |
 | `/oauth2/token` | RFC 6749, OAuth 2.1 | 1 |
 | `/oauth2/jwks` | RFC 7517 | 0 (implemented) |
