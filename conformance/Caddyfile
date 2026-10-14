@@ -1,0 +1,11 @@
+# TLS in front of Clavis for the conformance suite, which needs an https issuer.
+# The certificate comes from Caddy's internal CA; the suite does not verify it.
+{
+	admin off
+	skip_install_trust
+}
+
+clavis.test {
+	tls internal
+	reverse_proxy clavis:8080
+}

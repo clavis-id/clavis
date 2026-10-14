@@ -1,0 +1,7 @@
+{
+    "alias": "clavis",
+    "description": "Clavis, default tenant",
+    "server": {
+        "discoveryUrl": "https://clavis.test/.well-known/openid-configuration"
+    }
+}

@@ -1,0 +1,4 @@
+# Dependencies of the conformance suite runner scripts. Compile the hash-pinned
+# requirements.txt with the command in conformance/README.md.
+httpx
+pyparsing

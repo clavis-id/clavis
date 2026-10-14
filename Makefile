@@ -65,6 +65,10 @@ test-postgres: ## Run the store tests against a throwaway PostgreSQL container
 	CLAVIS_TEST_POSTGRES_DSN="postgres://postgres:clavis@127.0.0.1:$(POSTGRES_PORT)/postgres?sslmode=disable" \
 		$(MAKE) --no-print-directory test-store
 
+.PHONY: conformance
+conformance: ## Run the OpenID conformance suite against Clavis (needs Docker; see conformance/README.md)
+	./conformance/run.sh
+
 .PHONY: test-go-import
 test-go-import: ## Test the Cloudflare Worker that serves the clavisid.org/clavis import path (needs Node.js)
 	node --test deploy/cloudflare/go-import/index.test.mjs

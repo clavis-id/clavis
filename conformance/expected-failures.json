@@ -1,0 +1,38 @@
+[
+    {
+        "test-name": "oidcc-discovery-endpoint-verification",
+        "variant": {
+            "server_metadata": "discovery",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": "config/clavis-oidcc.json",
+        "current-block": "",
+        "condition": "CheckDiscEndpointScopesSupportedContainsOpenId",
+        "expected-result": "warning",
+        "comment": "scopes_supported is published with the scopes and userinfo in work item 1.6 (#23)"
+    },
+    {
+        "test-name": "oidcc-discovery-endpoint-verification",
+        "variant": {
+            "server_metadata": "discovery",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": "config/clavis-oidcc.json",
+        "current-block": "",
+        "condition": "CheckDiscEndpointUserinfoEndpoint",
+        "expected-result": "warning",
+        "comment": "userinfo_endpoint arrives with the userinfo endpoint in work item 1.6 (#23)"
+    },
+    {
+        "test-name": "oidcc-discovery-endpoint-verification",
+        "variant": {
+            "server_metadata": "discovery",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": "config/clavis-oidcc.json",
+        "current-block": "",
+        "condition": "OIDCCCheckDiscEndpointClaimsSupported",
+        "expected-result": "warning",
+        "comment": "claims_supported is published with the userinfo claims in work item 1.6 (#23)"
+    }
+]
