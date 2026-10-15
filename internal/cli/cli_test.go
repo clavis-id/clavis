@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"uuid"
 
 	"clavisid.org/clavis/internal/oauth"
 	"clavisid.org/clavis/kek"
@@ -486,5 +487,34 @@ func TestClientsCreateInDefaultTenantOfNewDatabase(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Created client web-app in tenant default") {
 		t.Errorf("stdout %q does not confirm the client in the default tenant", stdout.String())
+	}
+}
+
+func TestClientsReadCommandsDoNotCreateTheDefaultTenant(t *testing.T) {
+	t.Parallel()
+
+	dsn := filepath.Join(t.TempDir(), "clavis.db")
+	environ := []string{"CLAVIS_DATABASE_DSN=" + dsn}
+	for _, args := range [][]string{
+		{"clients", "list"},
+		{"clients", "show", "web-app"},
+		{"clients", "rotate-secret", "web-app", "--yes"},
+		{"clients", "delete", "web-app", "--yes"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := Execute(t.Context(), args, &stdout, &stderr, environ); code != 1 {
+			t.Errorf("%v: exit code = %d, want 1", args, code)
+		}
+		if !strings.Contains(stderr.String(), `tenant not found: "default"; it is created when the server first starts`) {
+			t.Errorf("%v: stderr %q does not explain the missing default tenant", args, stderr.String())
+		}
+	}
+	st, err := sqlite.Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+	defer st.Close()
+	if tenants, err := st.Tenants().List(t.Context(), uuid.Nil(), 10); err != nil || len(tenants) != 0 {
+		t.Errorf("tenants after read commands = %d, %v; want none", len(tenants), err)
 	}
 }
