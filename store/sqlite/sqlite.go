@@ -45,6 +45,8 @@ type Store struct {
 	tenants     tenants
 	signingKeys signingKeys
 	clients     clients
+	users       users
+	passwords   passwords
 }
 
 var _ store.Store = (*Store)(nil)
@@ -86,7 +88,14 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("sqlite: opening %s: %w", path, err)
 	}
 	q := db.New(conn)
-	s := &Store{db: conn, tenants: tenants{q: q}, signingKeys: signingKeys{q: q}, clients: clients{q: q}}
+	s := &Store{
+		db:          conn,
+		tenants:     tenants{q: q},
+		signingKeys: signingKeys{q: q},
+		clients:     clients{q: q},
+		users:       users{q: q},
+		passwords:   passwords{q: q},
+	}
 
 	if err := s.Ping(ctx); err != nil {
 		_ = conn.Close()
@@ -163,6 +172,12 @@ func (s *Store) SigningKeys() store.SigningKeys { return s.signingKeys }
 
 // Clients returns the client repository.
 func (s *Store) Clients() store.Clients { return s.clients }
+
+// Users returns the user repository.
+func (s *Store) Users() store.Users { return s.users }
+
+// Passwords returns the password repository.
+func (s *Store) Passwords() store.Passwords { return s.passwords }
 
 type tenants struct {
 	q *db.Queries
@@ -435,6 +450,157 @@ func clientFromRow(row db.Client) (store.Client, error) {
 		CreatedAt:   time.UnixMicro(row.CreatedAt).UTC(),
 		UpdatedAt:   time.UnixMicro(row.UpdatedAt).UTC(),
 	}, nil
+}
+
+type users struct {
+	q *db.Queries
+}
+
+func (r users) Create(ctx context.Context, u store.User) error {
+	profile, err := json.Marshal(u.Profile)
+	if err != nil {
+		return fmt.Errorf("sqlite: creating user: encoding the profile: %w", err)
+	}
+	err = r.q.CreateUser(ctx, db.CreateUserParams{
+		ID:            u.ID.String(),
+		TenantID:      u.TenantID.String(),
+		Email:         u.Email,
+		EmailVerified: boolInt(u.EmailVerified),
+		Status:        string(u.Status),
+		Profile:       string(profile),
+		CreatedAt:     u.CreatedAt.UnixMicro(),
+		UpdatedAt:     u.UpdatedAt.UnixMicro(),
+	})
+	return mapError("creating user", err)
+}
+
+func (r users) Get(ctx context.Context, tenantID, id uuid.UUID) (store.User, error) {
+	row, err := r.q.GetUser(ctx, db.GetUserParams{TenantID: tenantID.String(), ID: id.String()})
+	if err != nil {
+		return store.User{}, mapError("getting user", err)
+	}
+	return userFromRow(row)
+}
+
+func (r users) GetByEmail(ctx context.Context, tenantID uuid.UUID, email string) (store.User, error) {
+	row, err := r.q.GetUserByEmail(ctx, db.GetUserByEmailParams{TenantID: tenantID.String(), Email: email})
+	if err != nil {
+		return store.User{}, mapError("getting user by email", err)
+	}
+	return userFromRow(row)
+}
+
+func (r users) List(ctx context.Context, tenantID, after uuid.UUID, limit int) ([]store.User, error) {
+	if limit < 1 || limit > store.MaxPageSize {
+		return nil, fmt.Errorf("sqlite: listing users: %w: limit %d is outside [1, %d]",
+			store.ErrInvalidArgument, limit, store.MaxPageSize)
+	}
+	rows, err := r.q.ListUsers(ctx, db.ListUsersParams{
+		TenantID: tenantID.String(),
+		After:    after.String(),
+		PageSize: int64(limit),
+	})
+	if err != nil {
+		return nil, mapError("listing users", err)
+	}
+	out := make([]store.User, 0, len(rows))
+	for _, row := range rows {
+		u, err := userFromRow(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, nil
+}
+
+func (r users) Delete(ctx context.Context, tenantID, id uuid.UUID) error {
+	n, err := r.q.DeleteUser(ctx, db.DeleteUserParams{TenantID: tenantID.String(), ID: id.String()})
+	if err != nil {
+		return mapError("deleting user", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("sqlite: deleting user: %w", store.ErrNotFound)
+	}
+	return nil
+}
+
+func userFromRow(row db.User) (store.User, error) {
+	id, err := uuid.Parse(row.ID)
+	if err != nil {
+		return store.User{}, fmt.Errorf("sqlite: corrupt user id %q: %w", row.ID, err)
+	}
+	tenantID, err := uuid.Parse(row.TenantID)
+	if err != nil {
+		return store.User{}, fmt.Errorf("sqlite: corrupt tenant id %q of user %s: %w", row.TenantID, id, err)
+	}
+	var profile store.Profile
+	if err := json.Unmarshal([]byte(row.Profile), &profile); err != nil {
+		return store.User{}, fmt.Errorf("sqlite: corrupt profile of user %s: %w", id, err)
+	}
+	return store.User{
+		ID:            id,
+		TenantID:      tenantID,
+		Email:         row.Email,
+		EmailVerified: row.EmailVerified != 0,
+		Status:        store.UserStatus(row.Status),
+		Profile:       profile,
+		CreatedAt:     time.UnixMicro(row.CreatedAt).UTC(),
+		UpdatedAt:     time.UnixMicro(row.UpdatedAt).UTC(),
+	}, nil
+}
+
+type passwords struct {
+	q *db.Queries
+}
+
+func (r passwords) Set(ctx context.Context, p store.Password) error {
+	n, err := r.q.SetPassword(ctx, db.SetPasswordParams{
+		UserID:   p.UserID.String(),
+		TenantID: p.TenantID.String(),
+		Hash:     p.Hash,
+		SetAt:    p.SetAt.UnixMicro(),
+	})
+	if err != nil {
+		return mapError("setting password", err)
+	}
+	if n == 0 {
+		// The user has a password in another tenant.
+		return fmt.Errorf("sqlite: setting password: %w", store.ErrNotFound)
+	}
+	return nil
+}
+
+func (r passwords) Get(ctx context.Context, tenantID, userID uuid.UUID) (store.Password, error) {
+	row, err := r.q.GetPassword(ctx, db.GetPasswordParams{TenantID: tenantID.String(), UserID: userID.String()})
+	if err != nil {
+		return store.Password{}, mapError("getting password", err)
+	}
+	return store.Password{
+		TenantID: tenantID,
+		UserID:   userID,
+		Hash:     row.Hash,
+		SetAt:    time.UnixMicro(row.SetAt).UTC(),
+	}, nil
+}
+
+func (r passwords) Rehash(ctx context.Context, tenantID, userID uuid.UUID, oldHash, newHash string) error {
+	n, err := r.q.RehashPassword(ctx, db.RehashPasswordParams{
+		NewHash:  newHash,
+		TenantID: tenantID.String(),
+		UserID:   userID.String(),
+		OldHash:  oldHash,
+	})
+	if err != nil {
+		return mapError("rehashing password", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	if _, err := r.Get(ctx, tenantID, userID); err != nil {
+		return err
+	}
+	return fmt.Errorf("sqlite: rehashing password: the hash changed: %w", store.ErrConflict)
 }
 
 // seconds converts a duration to whole seconds, the precision of stored

@@ -31,6 +31,13 @@ type Client struct {
 	UpdatedAt                           time.Time
 }
 
+type Password struct {
+	UserID   uuid.UUID
+	TenantID uuid.UUID
+	Hash     string
+	SetAt    time.Time
+}
+
 type SigningKey struct {
 	ID              uuid.UUID
 	TenantID        uuid.UUID
@@ -52,4 +59,15 @@ type Tenant struct {
 	Name      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type User struct {
+	ID            uuid.UUID
+	TenantID      uuid.UUID
+	Email         string
+	EmailVerified bool
+	Status        string
+	Profile       []byte
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }

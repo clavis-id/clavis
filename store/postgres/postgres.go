@@ -7,6 +7,7 @@ package postgres
 import (
 	"context"
 	"embed"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -45,6 +46,8 @@ type Store struct {
 	tenants     tenants
 	signingKeys signingKeys
 	clients     clients
+	users       users
+	passwords   passwords
 }
 
 var _ store.Store = (*Store)(nil)
@@ -89,7 +92,14 @@ func New(ctx context.Context, pool *pgxpool.Pool, opts ...Option) (*Store, error
 		opt(&o)
 	}
 	q := db.New(pool)
-	s := &Store{pool: pool, tenants: tenants{q: q}, signingKeys: signingKeys{q: q}, clients: clients{q: q}}
+	s := &Store{
+		pool:        pool,
+		tenants:     tenants{q: q},
+		signingKeys: signingKeys{q: q},
+		clients:     clients{q: q},
+		users:       users{q: q},
+		passwords:   passwords{q: q},
+	}
 	if err := s.Ping(ctx); err != nil {
 		return nil, err
 	}
@@ -147,6 +157,12 @@ func (s *Store) SigningKeys() store.SigningKeys { return s.signingKeys }
 
 // Clients returns the client repository.
 func (s *Store) Clients() store.Clients { return s.clients }
+
+// Users returns the user repository.
+func (s *Store) Users() store.Users { return s.users }
+
+// Passwords returns the password repository.
+func (s *Store) Passwords() store.Passwords { return s.passwords }
 
 type tenants struct {
 	q *db.Queries
@@ -373,6 +389,140 @@ func clientFromRow(row db.Client) store.Client {
 		CreatedAt:   row.CreatedAt.UTC(),
 		UpdatedAt:   row.UpdatedAt.UTC(),
 	}
+}
+
+type users struct {
+	q *db.Queries
+}
+
+func (r users) Create(ctx context.Context, u store.User) error {
+	profile, err := json.Marshal(u.Profile)
+	if err != nil {
+		return fmt.Errorf("postgres: creating user: encoding the profile: %w", err)
+	}
+	err = r.q.CreateUser(ctx, db.CreateUserParams{
+		ID:            u.ID,
+		TenantID:      u.TenantID,
+		Email:         u.Email,
+		EmailVerified: u.EmailVerified,
+		Status:        string(u.Status),
+		Profile:       profile,
+		CreatedAt:     u.CreatedAt,
+		UpdatedAt:     u.UpdatedAt,
+	})
+	return mapError("creating user", err)
+}
+
+func (r users) Get(ctx context.Context, tenantID, id uuid.UUID) (store.User, error) {
+	row, err := r.q.GetUser(ctx, db.GetUserParams{TenantID: tenantID, ID: id})
+	if err != nil {
+		return store.User{}, mapError("getting user", err)
+	}
+	return userFromRow(row)
+}
+
+func (r users) GetByEmail(ctx context.Context, tenantID uuid.UUID, email string) (store.User, error) {
+	row, err := r.q.GetUserByEmail(ctx, db.GetUserByEmailParams{TenantID: tenantID, Email: email})
+	if err != nil {
+		return store.User{}, mapError("getting user by email", err)
+	}
+	return userFromRow(row)
+}
+
+func (r users) List(ctx context.Context, tenantID, after uuid.UUID, limit int) ([]store.User, error) {
+	if limit < 1 || limit > store.MaxPageSize {
+		return nil, fmt.Errorf("postgres: listing users: %w: limit %d is outside [1, %d]",
+			store.ErrInvalidArgument, limit, store.MaxPageSize)
+	}
+	rows, err := r.q.ListUsers(ctx, db.ListUsersParams{TenantID: tenantID, After: after, PageSize: int32(limit)})
+	if err != nil {
+		return nil, mapError("listing users", err)
+	}
+	out := make([]store.User, 0, len(rows))
+	for _, row := range rows {
+		u, err := userFromRow(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, nil
+}
+
+func (r users) Delete(ctx context.Context, tenantID, id uuid.UUID) error {
+	n, err := r.q.DeleteUser(ctx, db.DeleteUserParams{TenantID: tenantID, ID: id})
+	if err != nil {
+		return mapError("deleting user", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("postgres: deleting user: %w", store.ErrNotFound)
+	}
+	return nil
+}
+
+func userFromRow(row db.User) (store.User, error) {
+	var profile store.Profile
+	if err := json.Unmarshal(row.Profile, &profile); err != nil {
+		return store.User{}, fmt.Errorf("postgres: corrupt profile of user %s: %w", row.ID, err)
+	}
+	return store.User{
+		ID:            row.ID,
+		TenantID:      row.TenantID,
+		Email:         row.Email,
+		EmailVerified: row.EmailVerified,
+		Status:        store.UserStatus(row.Status),
+		Profile:       profile,
+		CreatedAt:     row.CreatedAt.UTC(),
+		UpdatedAt:     row.UpdatedAt.UTC(),
+	}, nil
+}
+
+type passwords struct {
+	q *db.Queries
+}
+
+func (r passwords) Set(ctx context.Context, p store.Password) error {
+	n, err := r.q.SetPassword(ctx, db.SetPasswordParams{
+		UserID:   p.UserID,
+		TenantID: p.TenantID,
+		Hash:     p.Hash,
+		SetAt:    p.SetAt,
+	})
+	if err != nil {
+		return mapError("setting password", err)
+	}
+	if n == 0 {
+		// The user has a password in another tenant.
+		return fmt.Errorf("postgres: setting password: %w", store.ErrNotFound)
+	}
+	return nil
+}
+
+func (r passwords) Get(ctx context.Context, tenantID, userID uuid.UUID) (store.Password, error) {
+	row, err := r.q.GetPassword(ctx, db.GetPasswordParams{TenantID: tenantID, UserID: userID})
+	if err != nil {
+		return store.Password{}, mapError("getting password", err)
+	}
+	return store.Password{TenantID: row.TenantID, UserID: row.UserID, Hash: row.Hash, SetAt: row.SetAt.UTC()}, nil
+}
+
+func (r passwords) Rehash(ctx context.Context, tenantID, userID uuid.UUID, oldHash, newHash string) error {
+	n, err := r.q.RehashPassword(ctx, db.RehashPasswordParams{
+		NewHash:  newHash,
+		TenantID: tenantID,
+		UserID:   userID,
+		OldHash:  oldHash,
+	})
+	if err != nil {
+		return mapError("rehashing password", err)
+	}
+	if n > 0 {
+		return nil
+	}
+	if _, err := r.Get(ctx, tenantID, userID); err != nil {
+		return err
+	}
+	return fmt.Errorf("postgres: rehashing password: the hash changed: %w", store.ErrConflict)
 }
 
 // orEmpty returns an empty slice for nil, which pgx would otherwise send as

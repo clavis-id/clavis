@@ -13,6 +13,17 @@ keys:
   # machine. Generate real keys with `clavis keys new-encryption-key`.
   encryption_key: 4/5XH1+uUgl+6LUm5X36DZuhOwYK5J0Dky6EpUnU9/0= # gitleaks:allow
 
+# Password hashing (ADR 0015). The values shown are the defaults.
+# passwords:
+#   min_length: 8
+#   argon2id:
+#     memory_kib: 19456
+#     iterations: 2
+#     parallelism: 1
+#   pbkdf2_iterations: 600000    # used instead of argon2id in FIPS mode
+#   max_concurrent_hashes: 0     # 0 means one per CPU
+#   fips_migrate_argon2id: true
+
 log:
   level: debug
   format: text

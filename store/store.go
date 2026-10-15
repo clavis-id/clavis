@@ -42,6 +42,10 @@ type Store interface {
 	SigningKeys() SigningKeys
 	// Clients returns the client repository.
 	Clients() Clients
+	// Users returns the user repository.
+	Users() Users
+	// Passwords returns the password repository.
+	Passwords() Passwords
 	// Ping reports whether the underlying database is reachable.
 	Ping(ctx context.Context) error
 }
@@ -192,4 +196,109 @@ type Clients interface {
 	// Delete removes the client of a tenant with the given ID, or returns
 	// ErrNotFound.
 	Delete(ctx context.Context, tenantID, id uuid.UUID) error
+}
+
+// UserStatus says whether a user can sign in.
+type UserStatus string
+
+const (
+	// UserActive is a user who can sign in.
+	UserActive UserStatus = "active"
+	// UserDisabled is a user who cannot sign in.
+	UserDisabled UserStatus = "disabled"
+)
+
+// User is a person with an account in a tenant.
+type User struct {
+	// ID is a version 7 UUID assigned on creation.
+	ID       uuid.UUID
+	TenantID uuid.UUID
+	// Email is unique within the tenant. Adapters compare it exactly, so
+	// callers normalize it first.
+	Email         string
+	EmailVerified bool
+	Status        UserStatus
+	Profile       Profile
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// Profile holds the standard OpenID Connect claims about a user, other than
+// sub and the email claims (OpenID Connect Core 1.0, section 5.1). Empty
+// values are unset. Adapters store a Profile as a JSON object with the names
+// in its field tags.
+type Profile struct {
+	Name              string `json:"name,omitzero"`
+	GivenName         string `json:"given_name,omitzero"`
+	FamilyName        string `json:"family_name,omitzero"`
+	MiddleName        string `json:"middle_name,omitzero"`
+	Nickname          string `json:"nickname,omitzero"`
+	PreferredUsername string `json:"preferred_username,omitzero"`
+	// ProfileURL is the "profile" claim: the URL of the user's profile page.
+	ProfileURL          string  `json:"profile,omitzero"`
+	Picture             string  `json:"picture,omitzero"`
+	Website             string  `json:"website,omitzero"`
+	Gender              string  `json:"gender,omitzero"`
+	Birthdate           string  `json:"birthdate,omitzero"`
+	Zoneinfo            string  `json:"zoneinfo,omitzero"`
+	Locale              string  `json:"locale,omitzero"`
+	PhoneNumber         string  `json:"phone_number,omitzero"`
+	PhoneNumberVerified bool    `json:"phone_number_verified,omitzero"`
+	Address             Address `json:"address,omitzero"`
+}
+
+// Address is the "address" claim (OpenID Connect Core 1.0, section 5.1.1).
+type Address struct {
+	Formatted     string `json:"formatted,omitzero"`
+	StreetAddress string `json:"street_address,omitzero"`
+	Locality      string `json:"locality,omitzero"`
+	Region        string `json:"region,omitzero"`
+	PostalCode    string `json:"postal_code,omitzero"`
+	Country       string `json:"country,omitzero"`
+}
+
+// Users stores users. Every method works within one tenant.
+type Users interface {
+	// Create inserts u. It returns ErrConflict when the ID, or the email
+	// within the tenant, is already in use, and ErrNotFound when the tenant
+	// does not exist.
+	Create(ctx context.Context, u User) error
+	// Get returns the user of a tenant with the given ID, or ErrNotFound.
+	Get(ctx context.Context, tenantID, id uuid.UUID) (User, error)
+	// GetByEmail returns the user of a tenant with the given email, or
+	// ErrNotFound.
+	GetByEmail(ctx context.Context, tenantID uuid.UUID, email string) (User, error)
+	// List returns up to limit users of a tenant with an ID greater than
+	// after, in ascending ID order. Paging and limits work as in
+	// Tenants.List.
+	List(ctx context.Context, tenantID, after uuid.UUID, limit int) ([]User, error)
+	// Delete removes the user of a tenant with the given ID together with
+	// the user's credentials, or returns ErrNotFound.
+	Delete(ctx context.Context, tenantID, id uuid.UUID) error
+}
+
+// Password is the password credential of a user.
+type Password struct {
+	TenantID uuid.UUID
+	UserID   uuid.UUID
+	// Hash is a PHC string, which names its algorithm and parameters.
+	Hash string
+	// SetAt is when the user set this password. Replacing the hash of the
+	// same password, as a rehash on login does, keeps it.
+	SetAt time.Time
+}
+
+// Passwords stores the passwords of users. A user has at most one.
+type Passwords interface {
+	// Set stores p, replacing the user's previous password. It returns
+	// ErrNotFound when the user does not exist in the tenant.
+	Set(ctx context.Context, p Password) error
+	// Get returns the password of a user of a tenant, or ErrNotFound when
+	// the user has none.
+	Get(ctx context.Context, tenantID, userID uuid.UUID) (Password, error)
+	// Rehash replaces the hash of a user's password with newHash only while
+	// it still equals oldHash, so a rehash never overwrites a password set
+	// in the meantime. It returns ErrConflict when the hash has changed and
+	// ErrNotFound when the user has no password.
+	Rehash(ctx context.Context, tenantID, userID uuid.UUID, oldHash, newHash string) error
 }

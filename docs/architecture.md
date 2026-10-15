@@ -67,8 +67,8 @@ multi-architecture.
 
 ```
 clavis/
-  cmd/clavis/            CLI and server entry point (serve, migrate, tenants, clients, keys;
-                         later plan, apply, import)
+  cmd/clavis/            CLI and server entry point (serve, migrate, tenants, clients, users,
+                         keys; later plan, apply, import)
   clavis.go              Public embed API (New, Config, Server, Server.Handler, Server.Verifier)
                          and the HTTP handlers of the protocol endpoints
   middleware/            Public: resource-server token validation for net/http
@@ -176,6 +176,17 @@ tenant is not reachable under `/t/default`.
 - **Passwords:** argon2id with at least the OWASP baseline (19 MiB memory, 2 iterations,
   1 lane), or PBKDF2-HMAC-SHA-256 with 600,000 iterations in FIPS mode; parameters stored with
   each hash and upgraded transparently on login. See ADR 0015.
+  - Passwords are normalized to Unicode NFKC before hashing (NIST SP 800-63B-4) and have 8 to
+    256 characters; `passwords.min_length` raises the minimum.
+  - A login for an unknown account, or for an account without a password, does the work of a
+    verification with the current parameters, and a semaphore
+    (`passwords.max_concurrent_hashes`) bounds the memory hashing can use.
+  - Stored hashes are parsed with the same upper bounds as the configuration, so a hash cannot
+    make a verification arbitrarily expensive.
+  - FIPS exception: by default, FIPS mode verifies an argon2id hash made before FIPS mode was
+    enabled, once, and replaces it with a PBKDF2 hash, logging the event. argon2id is not an
+    approved algorithm; deployments that must not run it at all set
+    `passwords.fips_migrate_argon2id: false`, and those users reset their passwords.
 - **Signing keys:** one sequence per tenant and algorithm (RS256 always; ES256 and EdDSA
   optional), encrypted at rest through `kek.Encrypter` (AES-256-GCM by default, bound to the
   record by additional data). Rotated every 30 days by default; a successor is published at

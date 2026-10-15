@@ -2,10 +2,14 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io"
-	"log/slog"
+	"time"
+	"uuid"
 
+	"github.com/spf13/cobra"
+
+	"clavisid.org/clavis/internal/app"
 	"clavisid.org/clavis/internal/config"
 	"clavisid.org/clavis/store"
 	"clavisid.org/clavis/store/postgres"
@@ -53,17 +57,45 @@ func openStore(ctx context.Context, cfg config.Database, migrate bool) (openedSt
 	}
 }
 
-// openDatabase loads the database and log configuration and opens the store,
-// for commands that need no other configuration.
-func openDatabase(ctx context.Context, configPath string, environ []string, logOutput io.Writer,
-) (*slog.Logger, openedStore, error) {
-	cfg, logger, err := setup(ctx, config.LoadDatabase, configPath, environ, logOutput)
+// withTenant loads the configuration with load, opens the database, resolves
+// the tenant with the given slug and calls fn, for commands that manage the
+// records of one tenant.
+//
+// Only commands that create records pass createDefault: the server creates
+// the default tenant when it first starts, and its signing keys on every
+// start, so records can be created before that. Other commands report a
+// missing default tenant, which also reveals a mistyped database location.
+func withTenant(cmd *cobra.Command, load func(string, []string) (config.Result, error), configPath string,
+	environ []string, slug string, createDefault bool,
+	fn func(context.Context, config.Config, app.Deps, store.Tenant) error,
+) error {
+	ctx := cmd.Context()
+	cfg, logger, err := setup(ctx, load, configPath, environ, cmd.ErrOrStderr())
 	if err != nil {
-		return nil, openedStore{}, err
+		return err
 	}
 	st, err := openStore(ctx, cfg.Database, cfg.Database.AutoMigrate)
 	if err != nil {
-		return nil, openedStore{}, err
+		return err
 	}
-	return logger, st, nil
+	defer st.close()
+
+	d := app.Deps{Store: st, Logger: logger, Now: time.Now, NewID: uuid.NewV7}
+	var t store.Tenant
+	switch {
+	case slug == app.DefaultTenantSlug && createDefault:
+		t, err = app.EnsureDefaultTenant(ctx, d)
+	case slug == app.DefaultTenantSlug:
+		t, err = app.FindTenant(ctx, d, slug)
+		if errors.Is(err, app.ErrTenantNotFound) {
+			err = fmt.Errorf("%w; it is created when the server first starts or when the first "+
+				"record is created", err)
+		}
+	default:
+		t, err = app.FindTenant(ctx, d, slug)
+	}
+	if err != nil {
+		return err
+	}
+	return fn(ctx, cfg, d, t)
 }

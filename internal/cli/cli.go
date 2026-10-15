@@ -24,9 +24,15 @@ import (
 )
 
 // Execute runs the command described by args and returns the process exit
-// code. environ holds the environment in os.Environ format.
-func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, environ []string) int {
+// code. Commands that read input, such as passwords, read stdin, which may be
+// nil when there is none. environ holds the environment in os.Environ
+// format.
+func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, environ []string) int {
 	root := newRootCommand(environ) //nolint:contextcheck // Commands receive ctx through ExecuteContext and cmd.Context().
+	if stdin == nil {
+		stdin = strings.NewReader("")
+	}
+	root.SetIn(stdin)
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
@@ -45,7 +51,7 @@ func newRootCommand(environ []string) *cobra.Command {
 		SilenceUsage:  true,
 	}
 	root.AddCommand(newServeCommand(environ), newMigrateCommand(environ), newTenantsCommand(environ),
-		newClientsCommand(environ), newKeysCommand(), newVersionCommand())
+		newClientsCommand(environ), newUsersCommand(environ), newKeysCommand(), newVersionCommand())
 	return root
 }
 
