@@ -60,8 +60,9 @@ of the product. No change merges without the tests described here.
   tests: open redirectors, authorization code injection and replay, PKCE downgrade, mix-up,
   refresh token replay, token leakage through referrers, clickjacking headers, CSRF.
 - Native Go fuzzing. Current targets: issuer parsing (`internal/issuer`), configuration parsing
-  (`internal/config`), ciphertext decryption (`kek`), tenant slugs (`internal/app`), and
-  redirect URI validation and matching (`internal/oauth`). Planned: scope parsing, JWS and JWT
+  (`internal/config`), ciphertext decryption (`kek`), tenant slugs and email addresses
+  (`internal/app`), redirect URI validation and matching (`internal/oauth`), and stored
+  password hashes (`internal/authn/password`). Planned: scope parsing, JWS and JWT
   parsing, client metadata documents, authorization request parsing (Phase 1 and 2) and SCIM
   filters (Phase 3). Short runs on every pull request; long nightly runs are planned.
 - Static and supply chain analysis: `govulncheck`, `gosec` through golangci-lint, CodeQL,
@@ -99,8 +100,8 @@ of the product. No change merges without the tests described here.
   (`go.uber.org/goleak`, test-only), so a goroutine that outlives the tests fails the run.
 - Security-critical packages keep at least 80 percent statement coverage, enforced in CI by
   `make cover-check`. The list in the Makefile (`COVER_FLOOR_PKGS`) currently holds
-  `internal/issuer`, `internal/keys`, `internal/oauth`, `internal/oidc` and `kek`;
-  `internal/authn` joins it when it is created.
+  `internal/authn/password`, `internal/issuer`, `internal/keys`, `internal/oauth`,
+  `internal/oidc` and `kek`; every new package under `internal/authn` joins it.
 - Every fuzz target runs for 15 seconds in CI on each pull request (`make fuzz`).
 - No test depends on the network outside servers or containers it starts itself.
 - No test depends on test execution order. Time-dependent behavior uses an injected clock or
