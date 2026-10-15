@@ -1,0 +1,40 @@
+-- name: CreateUser :exec
+INSERT INTO users (id, tenant_id, email, email_verified, status, profile, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: GetUser :one
+SELECT id, tenant_id, email, email_verified, status, profile, created_at, updated_at
+FROM users
+WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id);
+
+-- name: GetUserByEmail :one
+SELECT id, tenant_id, email, email_verified, status, profile, created_at, updated_at
+FROM users
+WHERE tenant_id = sqlc.arg(tenant_id) AND email = sqlc.arg(email);
+
+-- name: ListUsers :many
+SELECT id, tenant_id, email, email_verified, status, profile, created_at, updated_at
+FROM users
+WHERE tenant_id = sqlc.arg(tenant_id) AND id > sqlc.arg(after)
+ORDER BY id
+LIMIT sqlc.arg(page_size);
+
+-- name: DeleteUser :execrows
+DELETE FROM users
+WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id);
+
+-- name: SetPassword :execrows
+INSERT INTO passwords (user_id, tenant_id, hash, set_at)
+VALUES (sqlc.arg(user_id), sqlc.arg(tenant_id), sqlc.arg(hash), sqlc.arg(set_at))
+ON CONFLICT (user_id) DO UPDATE SET hash = excluded.hash, set_at = excluded.set_at
+WHERE passwords.tenant_id = excluded.tenant_id;
+
+-- name: GetPassword :one
+SELECT user_id, tenant_id, hash, set_at
+FROM passwords
+WHERE tenant_id = sqlc.arg(tenant_id) AND user_id = sqlc.arg(user_id);
+
+-- name: RehashPassword :execrows
+UPDATE passwords
+SET hash = sqlc.arg(new_hash)
+WHERE tenant_id = sqlc.arg(tenant_id) AND user_id = sqlc.arg(user_id) AND hash = sqlc.arg(old_hash);

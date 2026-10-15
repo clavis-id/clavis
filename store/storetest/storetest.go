@@ -47,6 +47,14 @@ func Run(t *testing.T, open OpenFunc) {
 		t.Parallel()
 		runClients(t, open)
 	})
+	t.Run("Users", func(t *testing.T) {
+		t.Parallel()
+		runUsers(t, open)
+	})
+	t.Run("Passwords", func(t *testing.T) {
+		t.Parallel()
+		runPasswords(t, open)
+	})
 }
 
 func runTenants(t *testing.T, open OpenFunc) {
@@ -693,4 +701,430 @@ func normalizeClient(c store.Client) store.Client {
 	c.CreatedAt = c.CreatedAt.UTC().Truncate(time.Microsecond)
 	c.UpdatedAt = c.UpdatedAt.UTC().Truncate(time.Microsecond)
 	return c
+}
+
+func runUsers(t *testing.T, open OpenFunc) {
+	t.Run("CreateAndGet", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		want := newUser(tn.ID, "ada@example.com")
+		mustCreateUser(t, s.Users(), want)
+
+		got, err := s.Users().Get(t.Context(), tn.ID, want.ID)
+		if err != nil {
+			t.Fatalf("Get() unexpected error: %v", err)
+		}
+		if diff := cmp.Diff(normalizeUser(want), got); diff != "" {
+			t.Errorf("Get() mismatch (-want +got):\n%s", diff)
+		}
+		got, err = s.Users().GetByEmail(t.Context(), tn.ID, want.Email)
+		if err != nil {
+			t.Fatalf("GetByEmail() unexpected error: %v", err)
+		}
+		if diff := cmp.Diff(normalizeUser(want), got); diff != "" {
+			t.Errorf("GetByEmail() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("EmptyProfile", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		want := newUser(tn.ID, "ada@example.com")
+		want.Profile = store.Profile{}
+		mustCreateUser(t, s.Users(), want)
+		got, err := s.Users().Get(t.Context(), tn.ID, want.ID)
+		if err != nil {
+			t.Fatalf("Get() unexpected error: %v", err)
+		}
+		if diff := cmp.Diff(normalizeUser(want), got); diff != "" {
+			t.Errorf("Get() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("EmailIsComparedExactly", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		mustCreateUser(t, s.Users(), newUser(tn.ID, "ada@example.com"))
+		if _, err := s.Users().GetByEmail(t.Context(), tn.ID, "Ada@example.com"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetByEmail() with another case error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("NotFound", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		missing := uuid.NewV7()
+		if _, err := s.Users().Get(t.Context(), tn.ID, missing); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Get() error = %v, want ErrNotFound", err)
+		}
+		if _, err := s.Users().GetByEmail(t.Context(), tn.ID, "missing@example.com"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetByEmail() error = %v, want ErrNotFound", err)
+		}
+		if err := s.Users().Delete(t.Context(), tn.ID, missing); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Delete() error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("ConflictOnDuplicateEmailWithinTenant", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		a, b := newTenant("a"), newTenant("b")
+		mustCreate(t, s.Tenants(), a)
+		mustCreate(t, s.Tenants(), b)
+		mustCreateUser(t, s.Users(), newUser(a.ID, "ada@example.com"))
+		if err := s.Users().Create(t.Context(), newUser(a.ID, "ada@example.com")); !errors.Is(err, store.ErrConflict) {
+			t.Errorf("Create() with a duplicate email error = %v, want ErrConflict", err)
+		}
+		// Another tenant can have a user with the same email.
+		mustCreateUser(t, s.Users(), newUser(b.ID, "ada@example.com"))
+	})
+
+	t.Run("ConflictOnDuplicateID", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		first := newUser(tn.ID, "ada@example.com")
+		mustCreateUser(t, s.Users(), first)
+		dup := newUser(tn.ID, "grace@example.com")
+		dup.ID = first.ID
+		if err := s.Users().Create(t.Context(), dup); !errors.Is(err, store.ErrConflict) {
+			t.Errorf("Create() with a duplicate ID error = %v, want ErrConflict", err)
+		}
+	})
+
+	t.Run("UnknownTenant", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		if err := s.Users().Create(t.Context(), newUser(uuid.NewV7(), "ada@example.com")); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Create() for an unknown tenant error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("Delete", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		keep, drop := newUser(tn.ID, "keep@example.com"), newUser(tn.ID, "drop@example.com")
+		mustCreateUser(t, s.Users(), keep)
+		mustCreateUser(t, s.Users(), drop)
+		if err := s.Users().Delete(t.Context(), tn.ID, drop.ID); err != nil {
+			t.Fatalf("Delete() unexpected error: %v", err)
+		}
+		if _, err := s.Users().Get(t.Context(), tn.ID, drop.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Get() after Delete() error = %v, want ErrNotFound", err)
+		}
+		if _, err := s.Users().Get(t.Context(), tn.ID, keep.ID); err != nil {
+			t.Errorf("Delete() removed another user: %v", err)
+		}
+		// The email becomes available again.
+		mustCreateUser(t, s.Users(), newUser(tn.ID, "drop@example.com"))
+	})
+
+	t.Run("TenantIsolation", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		a, b := newTenant("a"), newTenant("b")
+		mustCreate(t, s.Tenants(), a)
+		mustCreate(t, s.Tenants(), b)
+		u := newUser(a.ID, "ada@example.com")
+		mustCreateUser(t, s.Users(), u)
+		users := s.Users()
+
+		if _, err := users.Get(t.Context(), b.ID, u.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Get() through tenant b error = %v, want ErrNotFound", err)
+		}
+		if _, err := users.GetByEmail(t.Context(), b.ID, u.Email); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetByEmail() through tenant b error = %v, want ErrNotFound", err)
+		}
+		if got, err := users.List(t.Context(), b.ID, uuid.Nil(), store.MaxPageSize); err != nil || len(got) != 0 {
+			t.Errorf("List() for tenant b = %d users, %v; want none", len(got), err)
+		}
+		if err := users.Delete(t.Context(), b.ID, u.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Delete() through tenant b error = %v, want ErrNotFound", err)
+		}
+		if _, err := users.Get(t.Context(), a.ID, u.ID); err != nil {
+			t.Errorf("user of tenant a is gone: %v", err)
+		}
+	})
+
+	t.Run("ListPagesInIDOrderWithinTenant", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		a, b := newTenant("a"), newTenant("b")
+		mustCreate(t, s.Tenants(), a)
+		mustCreate(t, s.Tenants(), b)
+		var want []uuid.UUID
+		for i := range 5 {
+			u := newUser(a.ID, fmt.Sprintf("user-%d@example.com", i))
+			mustCreateUser(t, s.Users(), u)
+			want = append(want, u.ID)
+			mustCreateUser(t, s.Users(), newUser(b.ID, fmt.Sprintf("user-%d@example.com", i)))
+		}
+
+		var got []uuid.UUID
+		after := uuid.Nil()
+		for {
+			page, err := s.Users().List(t.Context(), a.ID, after, 2)
+			if err != nil {
+				t.Fatalf("List() unexpected error: %v", err)
+			}
+			if len(page) > 2 {
+				t.Fatalf("List() returned %d records, want at most 2", len(page))
+			}
+			if len(page) == 0 {
+				break
+			}
+			for _, u := range page {
+				if u.TenantID != a.ID {
+					t.Errorf("List() for tenant a returned user %s of tenant %s", u.ID, u.TenantID)
+				}
+				got = append(got, u.ID)
+			}
+			after = page[len(page)-1].ID
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("paged IDs mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("ListRejectsInvalidLimits", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		for _, limit := range []int{-1, 0, store.MaxPageSize + 1} {
+			if _, err := s.Users().List(t.Context(), tn.ID, uuid.Nil(), limit); !errors.Is(err, store.ErrInvalidArgument) {
+				t.Errorf("List(limit=%d) error = %v, want ErrInvalidArgument", limit, err)
+			}
+		}
+	})
+
+	t.Run("DeletedWithTenant", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		u := newUser(tn.ID, "ada@example.com")
+		mustCreateUser(t, s.Users(), u)
+		mustSetPassword(t, s.Passwords(), newPassword(u, "hash"))
+		if err := s.Tenants().Delete(t.Context(), tn.ID); err != nil {
+			t.Fatalf("deleting tenant: %v", err)
+		}
+		if got, err := s.Users().List(t.Context(), tn.ID, uuid.Nil(), store.MaxPageSize); err != nil || len(got) != 0 {
+			t.Errorf("List() after deleting the tenant = %d users, %v; want none", len(got), err)
+		}
+		if _, err := s.Passwords().Get(t.Context(), tn.ID, u.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("password after deleting the tenant error = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+func runPasswords(t *testing.T, open OpenFunc) {
+	// setup returns a store with one user in tenant a and an empty tenant b.
+	setup := func(t *testing.T) (store.Store, store.User, store.Tenant) {
+		t.Helper()
+		s := open(t)
+		a, b := newTenant("a"), newTenant("b")
+		mustCreate(t, s.Tenants(), a)
+		mustCreate(t, s.Tenants(), b)
+		u := newUser(a.ID, "ada@example.com")
+		mustCreateUser(t, s.Users(), u)
+		return s, u, b
+	}
+	get := func(t *testing.T, s store.Store, u store.User) store.Password {
+		t.Helper()
+		p, err := s.Passwords().Get(t.Context(), u.TenantID, u.ID)
+		if err != nil {
+			t.Fatalf("Get() unexpected error: %v", err)
+		}
+		return p
+	}
+
+	t.Run("SetAndGet", func(t *testing.T) {
+		t.Parallel()
+		s, u, _ := setup(t)
+		want := newPassword(u, "$argon2id$v=19$m=19456,t=2,p=1$first")
+		mustSetPassword(t, s.Passwords(), want)
+		if diff := cmp.Diff(normalizePassword(want), get(t, s, u)); diff != "" {
+			t.Errorf("Get() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("SetReplaces", func(t *testing.T) {
+		t.Parallel()
+		s, u, _ := setup(t)
+		mustSetPassword(t, s.Passwords(), newPassword(u, "first"))
+		second := newPassword(u, "second")
+		second.SetAt = second.SetAt.Add(time.Hour)
+		mustSetPassword(t, s.Passwords(), second)
+		if diff := cmp.Diff(normalizePassword(second), get(t, s, u)); diff != "" {
+			t.Errorf("Get() after a second Set() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("NotFound", func(t *testing.T) {
+		t.Parallel()
+		s, u, _ := setup(t)
+		if _, err := s.Passwords().Get(t.Context(), u.TenantID, u.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Get() for a user without a password error = %v, want ErrNotFound", err)
+		}
+		if err := s.Passwords().Rehash(t.Context(), u.TenantID, u.ID, "old", "new"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Rehash() for a user without a password error = %v, want ErrNotFound", err)
+		}
+		ghost := u
+		ghost.ID = uuid.NewV7()
+		if err := s.Passwords().Set(t.Context(), newPassword(ghost, "hash")); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Set() for an unknown user error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("Rehash", func(t *testing.T) {
+		t.Parallel()
+		s, u, _ := setup(t)
+		first := newPassword(u, "old-hash")
+		mustSetPassword(t, s.Passwords(), first)
+		if err := s.Passwords().Rehash(t.Context(), u.TenantID, u.ID, "old-hash", "new-hash"); err != nil {
+			t.Fatalf("Rehash() unexpected error: %v", err)
+		}
+		want := normalizePassword(first)
+		want.Hash = "new-hash"
+		if diff := cmp.Diff(want, get(t, s, u)); diff != "" {
+			t.Errorf("Get() after Rehash() mismatch (-want +got):\n%s", diff)
+		}
+
+		// A rehash based on a hash that changed in the meantime fails.
+		if err := s.Passwords().Rehash(t.Context(), u.TenantID, u.ID, "old-hash", "stale"); !errors.Is(err, store.ErrConflict) {
+			t.Errorf("Rehash() of a changed hash error = %v, want ErrConflict", err)
+		}
+		if got := get(t, s, u); got.Hash != "new-hash" {
+			t.Errorf("a failed Rehash() changed the hash to %q", got.Hash)
+		}
+	})
+
+	t.Run("TenantIsolation", func(t *testing.T) {
+		t.Parallel()
+		s, u, other := setup(t)
+		mustSetPassword(t, s.Passwords(), newPassword(u, "hash-a"))
+
+		through := newPassword(u, "hash-b")
+		through.TenantID = other.ID
+		if err := s.Passwords().Set(t.Context(), through); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Set() through tenant b error = %v, want ErrNotFound", err)
+		}
+		if _, err := s.Passwords().Get(t.Context(), other.ID, u.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Get() through tenant b error = %v, want ErrNotFound", err)
+		}
+		if err := s.Passwords().Rehash(t.Context(), other.ID, u.ID, "hash-a", "hash-b"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Rehash() through tenant b error = %v, want ErrNotFound", err)
+		}
+		if got := get(t, s, u); got.Hash != "hash-a" {
+			t.Errorf("the password changed through tenant b: %q", got.Hash)
+		}
+
+		// A user of tenant b cannot take a password for the user of tenant a.
+		bob := newUser(other.ID, "bob@example.com")
+		mustCreateUser(t, s.Users(), bob)
+		mismatched := newPassword(u, "hash-c")
+		mismatched.TenantID = other.ID
+		if err := s.Passwords().Set(t.Context(), mismatched); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Set() with the user of another tenant error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("DeletedWithUser", func(t *testing.T) {
+		t.Parallel()
+		s, u, _ := setup(t)
+		mustSetPassword(t, s.Passwords(), newPassword(u, "hash"))
+		if err := s.Users().Delete(t.Context(), u.TenantID, u.ID); err != nil {
+			t.Fatalf("deleting user: %v", err)
+		}
+		if _, err := s.Passwords().Get(t.Context(), u.TenantID, u.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Get() after deleting the user error = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+// newUser returns an active user record with every profile claim set.
+func newUser(tenantID uuid.UUID, email string) store.User {
+	created := time.Date(2026, 10, 15, 9, 30, 0, 123456789, time.UTC)
+	return store.User{
+		ID:            uuid.NewV7(),
+		TenantID:      tenantID,
+		Email:         email,
+		EmailVerified: true,
+		Status:        store.UserActive,
+		Profile: store.Profile{
+			Name:                "Ada Lovelace",
+			GivenName:           "Ada",
+			FamilyName:          "Lovelace",
+			MiddleName:          "Augusta",
+			Nickname:            "ada",
+			PreferredUsername:   "ada.l",
+			ProfileURL:          "https://example.com/ada",
+			Picture:             "https://example.com/ada.png",
+			Website:             "https://ada.example.com",
+			Gender:              "female",
+			Birthdate:           "1815-12-10",
+			Zoneinfo:            "Europe/London",
+			Locale:              "en-GB",
+			PhoneNumber:         "+44 20 7946 0000",
+			PhoneNumberVerified: true,
+			Address: store.Address{
+				Formatted:     "12 St James's Square, London",
+				StreetAddress: "12 St James's Square",
+				Locality:      "London",
+				Region:        "England",
+				PostalCode:    "SW1Y 4JH",
+				Country:       "GB",
+			},
+		},
+		CreatedAt: created,
+		UpdatedAt: created.Add(time.Minute),
+	}
+}
+
+func mustCreateUser(t *testing.T, users store.Users, u store.User) {
+	t.Helper()
+	if err := users.Create(t.Context(), u); err != nil {
+		t.Fatalf("Create(%q) unexpected error: %v", u.Email, err)
+	}
+}
+
+// normalizeUser returns u as a store returns it.
+func normalizeUser(u store.User) store.User {
+	u.CreatedAt = u.CreatedAt.UTC().Truncate(time.Microsecond)
+	u.UpdatedAt = u.UpdatedAt.UTC().Truncate(time.Microsecond)
+	return u
+}
+
+func newPassword(u store.User, hash string) store.Password {
+	return store.Password{
+		TenantID: u.TenantID,
+		UserID:   u.ID,
+		Hash:     hash,
+		SetAt:    time.Date(2026, 10, 15, 10, 0, 0, 987654321, time.UTC),
+	}
+}
+
+func mustSetPassword(t *testing.T, passwords store.Passwords, p store.Password) {
+	t.Helper()
+	if err := passwords.Set(t.Context(), p); err != nil {
+		t.Fatalf("Set() unexpected error: %v", err)
+	}
+}
+
+// normalizePassword returns p as a store returns it.
+func normalizePassword(p store.Password) store.Password {
+	p.SetAt = p.SetAt.UTC().Truncate(time.Microsecond)
+	return p
 }

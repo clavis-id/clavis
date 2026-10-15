@@ -25,6 +25,13 @@ type Client struct {
 	UpdatedAt                           int64
 }
 
+type Password struct {
+	UserID   string
+	TenantID string
+	Hash     string
+	SetAt    int64
+}
+
 type SigningKey struct {
 	ID              string
 	TenantID        string
@@ -46,4 +53,15 @@ type Tenant struct {
 	Name      string
 	CreatedAt int64
 	UpdatedAt int64
+}
+
+type User struct {
+	ID            string
+	TenantID      string
+	Email         string
+	EmailVerified int64
+	Status        string
+	Profile       string
+	CreatedAt     int64
+	UpdatedAt     int64
 }
