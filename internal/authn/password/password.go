@@ -181,14 +181,22 @@ func (h *Hasher) FIPS() bool { return h.fips }
 // CheckNew reports whether password can be set as a new password: valid
 // UTF-8 with MinLength to MaxLength characters after normalization.
 func (h *Hasher) CheckNew(password string) error {
+	// Bound the input before normalizing it, which takes time in proportion
+	// to its length.
+	if len(password) > maxBytes {
+		return h.lengthError()
+	}
 	if !utf8.ValidString(password) {
 		return fmt.Errorf("%w: the password is not valid UTF-8", ErrPolicy)
 	}
-	if n := utf8.RuneCountInString(normalize(password)); n < h.cfg.MinLength || n > MaxLength ||
-		len(password) > maxBytes {
-		return fmt.Errorf("%w: the password must have %d to %d characters", ErrPolicy, h.cfg.MinLength, MaxLength)
+	if n := utf8.RuneCountInString(normalize(password)); n < h.cfg.MinLength || n > MaxLength {
+		return h.lengthError()
 	}
 	return nil
+}
+
+func (h *Hasher) lengthError() error {
+	return fmt.Errorf("%w: the password must have %d to %d characters", ErrPolicy, h.cfg.MinLength, MaxLength)
 }
 
 // Hash returns the PHC string of a new hash of password. It does not check

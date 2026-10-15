@@ -312,6 +312,13 @@ func TestCheckNew(t *testing.T) {
 	if err := h.CheckNew(strings.Repeat("é", 9)); !errors.Is(err, ErrPolicy) {
 		t.Errorf("CheckNew(9 composed characters) = %v, want ErrPolicy", err)
 	}
+	// The byte bound comes before validation and normalization, whose cost
+	// grows with the input, so an oversized password fails on its length even
+	// when it is not valid UTF-8.
+	if err := h.CheckNew(strings.Repeat("a", maxBytes) + "\xff"); !errors.Is(err, ErrPolicy) ||
+		strings.Contains(err.Error(), "UTF-8") {
+		t.Errorf("CheckNew(oversized invalid UTF-8) = %v, want the length error", err)
+	}
 }
 
 func TestConcurrencyLimit(t *testing.T) {
