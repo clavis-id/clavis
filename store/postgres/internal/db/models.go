@@ -10,6 +10,27 @@ import (
 	"uuid"
 )
 
+type Client struct {
+	ID                                  uuid.UUID
+	TenantID                            uuid.UUID
+	ClientID                            string
+	Name                                string
+	Type                                string
+	SecretHash                          []byte
+	RedirectUris                        []string
+	PostLogoutRedirectUris              []string
+	GrantTypes                          []string
+	Scopes                              []string
+	AccessTokenLifetimeSeconds          int64
+	IDTokenLifetimeSeconds              int64
+	RefreshTokenIdleLifetimeSeconds     int64
+	RefreshTokenAbsoluteLifetimeSeconds int64
+	SkipConsent                         bool
+	PkceExempt                          bool
+	CreatedAt                           time.Time
+	UpdatedAt                           time.Time
+}
+
 type SigningKey struct {
 	ID              uuid.UUID
 	TenantID        uuid.UUID

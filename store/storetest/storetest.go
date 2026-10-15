@@ -16,6 +16,7 @@ import (
 	"uuid"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"clavisid.org/clavis/store"
 )
@@ -41,6 +42,10 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("SigningKeys", func(t *testing.T) {
 		t.Parallel()
 		runSigningKeys(t, open)
+	})
+	t.Run("Clients", func(t *testing.T) {
+		t.Parallel()
+		runClients(t, open)
 	})
 }
 
@@ -386,4 +391,306 @@ func normalizeKey(k store.SigningKey) store.SigningKey {
 		*ts = ts.UTC().Truncate(time.Microsecond)
 	}
 	return k
+}
+
+func runClients(t *testing.T, open OpenFunc) {
+	t.Run("CreateAndGet", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		want := newClient(tn.ID, "web-app")
+		mustCreateClient(t, s.Clients(), want)
+
+		got, err := s.Clients().GetByClientID(t.Context(), tn.ID, want.ClientID)
+		if err != nil {
+			t.Fatalf("GetByClientID() unexpected error: %v", err)
+		}
+		if diff := cmp.Diff(normalizeClient(want), got, cmpopts.EquateEmpty()); diff != "" {
+			t.Errorf("GetByClientID() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("PublicClientWithoutSecretOrLists", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		now := time.Now()
+		want := store.Client{
+			ID:        uuid.NewV7(),
+			TenantID:  tn.ID,
+			ClientID:  "spa",
+			Name:      "Single-page app",
+			Type:      store.ClientPublic,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		mustCreateClient(t, s.Clients(), want)
+
+		got, err := s.Clients().GetByClientID(t.Context(), tn.ID, want.ClientID)
+		if err != nil {
+			t.Fatalf("GetByClientID() unexpected error: %v", err)
+		}
+		if diff := cmp.Diff(normalizeClient(want), got, cmpopts.EquateEmpty()); diff != "" {
+			t.Errorf("GetByClientID() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("ClientIDIsCaseSensitive", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		mustCreateClient(t, s.Clients(), newClient(tn.ID, "app"))
+		mustCreateClient(t, s.Clients(), newClient(tn.ID, "App"))
+		if _, err := s.Clients().GetByClientID(t.Context(), tn.ID, "APP"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetByClientID() with another case error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("NotFound", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		clients := s.Clients()
+		if _, err := clients.GetByClientID(t.Context(), tn.ID, "missing"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetByClientID() error = %v, want ErrNotFound", err)
+		}
+		missing := uuid.NewV7()
+		if err := clients.UpdateSecret(t.Context(), tn.ID, missing, []byte("hash"), time.Now()); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("UpdateSecret() error = %v, want ErrNotFound", err)
+		}
+		if err := clients.Delete(t.Context(), tn.ID, missing); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Delete() error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("ConflictOnDuplicateClientIDWithinTenant", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		a, b := newTenant("a"), newTenant("b")
+		mustCreate(t, s.Tenants(), a)
+		mustCreate(t, s.Tenants(), b)
+		mustCreateClient(t, s.Clients(), newClient(a.ID, "web-app"))
+		if err := s.Clients().Create(t.Context(), newClient(a.ID, "web-app")); !errors.Is(err, store.ErrConflict) {
+			t.Errorf("Create() with a duplicate client ID error = %v, want ErrConflict", err)
+		}
+		// Another tenant can use the same client ID.
+		mustCreateClient(t, s.Clients(), newClient(b.ID, "web-app"))
+	})
+
+	t.Run("ConflictOnDuplicateID", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		first := newClient(tn.ID, "first")
+		mustCreateClient(t, s.Clients(), first)
+		dup := newClient(tn.ID, "second")
+		dup.ID = first.ID
+		if err := s.Clients().Create(t.Context(), dup); !errors.Is(err, store.ErrConflict) {
+			t.Errorf("Create() with a duplicate ID error = %v, want ErrConflict", err)
+		}
+	})
+
+	t.Run("UnknownTenant", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		if err := s.Clients().Create(t.Context(), newClient(uuid.NewV7(), "web-app")); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Create() for an unknown tenant error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("UpdateSecret", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		c := newClient(tn.ID, "web-app")
+		mustCreateClient(t, s.Clients(), c)
+
+		updatedAt := c.UpdatedAt.Add(time.Hour)
+		newHash := []byte("new-hash-" + c.ID.String())
+		if err := s.Clients().UpdateSecret(t.Context(), tn.ID, c.ID, newHash, updatedAt); err != nil {
+			t.Fatalf("UpdateSecret() unexpected error: %v", err)
+		}
+		got, err := s.Clients().GetByClientID(t.Context(), tn.ID, c.ClientID)
+		if err != nil {
+			t.Fatalf("GetByClientID() unexpected error: %v", err)
+		}
+		want := c
+		want.SecretHash = newHash
+		want.UpdatedAt = updatedAt
+		if diff := cmp.Diff(normalizeClient(want), got, cmpopts.EquateEmpty()); diff != "" {
+			t.Errorf("client after UpdateSecret() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("Delete", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		keep, drop := newClient(tn.ID, "keep"), newClient(tn.ID, "drop")
+		mustCreateClient(t, s.Clients(), keep)
+		mustCreateClient(t, s.Clients(), drop)
+		if err := s.Clients().Delete(t.Context(), tn.ID, drop.ID); err != nil {
+			t.Fatalf("Delete() unexpected error: %v", err)
+		}
+		if _, err := s.Clients().GetByClientID(t.Context(), tn.ID, drop.ClientID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetByClientID() after Delete() error = %v, want ErrNotFound", err)
+		}
+		if _, err := s.Clients().GetByClientID(t.Context(), tn.ID, keep.ClientID); err != nil {
+			t.Errorf("Delete() removed another client: %v", err)
+		}
+		// The client ID becomes available again.
+		mustCreateClient(t, s.Clients(), newClient(tn.ID, "drop"))
+	})
+
+	t.Run("TenantIsolation", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		a, b := newTenant("a"), newTenant("b")
+		mustCreate(t, s.Tenants(), a)
+		mustCreate(t, s.Tenants(), b)
+		c := newClient(a.ID, "web-app")
+		mustCreateClient(t, s.Clients(), c)
+		clients := s.Clients()
+
+		if _, err := clients.GetByClientID(t.Context(), b.ID, c.ClientID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetByClientID() through tenant b error = %v, want ErrNotFound", err)
+		}
+		if got, err := clients.List(t.Context(), b.ID, uuid.Nil(), store.MaxPageSize); err != nil || len(got) != 0 {
+			t.Errorf("List() for tenant b = %d clients, %v; want none", len(got), err)
+		}
+		if err := clients.UpdateSecret(t.Context(), b.ID, c.ID, []byte("other"), time.Now()); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("UpdateSecret() through tenant b error = %v, want ErrNotFound", err)
+		}
+		if err := clients.Delete(t.Context(), b.ID, c.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Delete() through tenant b error = %v, want ErrNotFound", err)
+		}
+		got, err := clients.GetByClientID(t.Context(), a.ID, c.ClientID)
+		if err != nil {
+			t.Fatalf("client of tenant a is gone: %v", err)
+		}
+		if diff := cmp.Diff(normalizeClient(c), got, cmpopts.EquateEmpty()); diff != "" {
+			t.Errorf("client of tenant a changed through tenant b (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("ListPagesInIDOrderWithinTenant", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		a, b := newTenant("a"), newTenant("b")
+		mustCreate(t, s.Tenants(), a)
+		mustCreate(t, s.Tenants(), b)
+		var want []uuid.UUID
+		for i := range 5 {
+			c := newClient(a.ID, fmt.Sprintf("client-%d", i))
+			mustCreateClient(t, s.Clients(), c)
+			want = append(want, c.ID)
+			// Clients of another tenant interleave in ID order.
+			mustCreateClient(t, s.Clients(), newClient(b.ID, fmt.Sprintf("client-%d", i)))
+		}
+
+		var got []uuid.UUID
+		after := uuid.Nil()
+		for {
+			page, err := s.Clients().List(t.Context(), a.ID, after, 2)
+			if err != nil {
+				t.Fatalf("List() unexpected error: %v", err)
+			}
+			if len(page) > 2 {
+				t.Fatalf("List() returned %d records, want at most 2", len(page))
+			}
+			if len(page) == 0 {
+				break
+			}
+			for _, c := range page {
+				if c.TenantID != a.ID {
+					t.Errorf("List() for tenant a returned client %s of tenant %s", c.ClientID, c.TenantID)
+				}
+				got = append(got, c.ID)
+			}
+			after = page[len(page)-1].ID
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("paged IDs mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("ListRejectsInvalidLimits", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		for _, limit := range []int{-1, 0, store.MaxPageSize + 1} {
+			if _, err := s.Clients().List(t.Context(), tn.ID, uuid.Nil(), limit); !errors.Is(err, store.ErrInvalidArgument) {
+				t.Errorf("List(limit=%d) error = %v, want ErrInvalidArgument", limit, err)
+			}
+		}
+	})
+
+	t.Run("DeletedWithTenant", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		mustCreateClient(t, s.Clients(), newClient(tn.ID, "web-app"))
+		if err := s.Tenants().Delete(t.Context(), tn.ID); err != nil {
+			t.Fatalf("deleting tenant: %v", err)
+		}
+		got, err := s.Clients().List(t.Context(), tn.ID, uuid.Nil(), store.MaxPageSize)
+		if err != nil {
+			t.Fatalf("List() unexpected error: %v", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("%d clients survived the deletion of their tenant", len(got))
+		}
+	})
+}
+
+// newClient returns a confidential client record with every field set. The
+// values are placeholders: stores do not validate them.
+func newClient(tenantID uuid.UUID, clientID string) store.Client {
+	id := uuid.NewV7()
+	created := time.Date(2026, 10, 15, 9, 30, 0, 123456789, time.UTC)
+	return store.Client{
+		ID:                     id,
+		TenantID:               tenantID,
+		ClientID:               clientID,
+		Name:                   "Client " + clientID,
+		Type:                   store.ClientConfidential,
+		SecretHash:             []byte("hash-" + id.String()),
+		RedirectURIs:           []string{"https://app.example.com/callback", "http://127.0.0.1/callback"},
+		PostLogoutRedirectURIs: []string{"https://app.example.com/"},
+		GrantTypes:             []string{"authorization_code", "refresh_token"},
+		Scopes:                 []string{"openid", "profile", "orders:read"},
+		Lifetimes: store.TokenLifetimes{
+			AccessToken:          15 * time.Minute,
+			IDToken:              5 * time.Minute,
+			RefreshTokenIdle:     72 * time.Hour,
+			RefreshTokenAbsolute: 30 * 24 * time.Hour,
+		},
+		SkipConsent: true,
+		PKCEExempt:  true,
+		CreatedAt:   created,
+		UpdatedAt:   created.Add(time.Minute),
+	}
+}
+
+func mustCreateClient(t *testing.T, clients store.Clients, c store.Client) {
+	t.Helper()
+	if err := clients.Create(t.Context(), c); err != nil {
+		t.Fatalf("Create(%q) unexpected error: %v", c.ClientID, err)
+	}
+}
+
+// normalizeClient returns c as a store returns it.
+func normalizeClient(c store.Client) store.Client {
+	c.CreatedAt = c.CreatedAt.UTC().Truncate(time.Microsecond)
+	c.UpdatedAt = c.UpdatedAt.UTC().Truncate(time.Microsecond)
+	return c
 }

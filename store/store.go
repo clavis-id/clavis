@@ -8,7 +8,8 @@
 // Records are plain values. Adapters persist them as given and do not apply
 // business rules beyond uniqueness; validation happens before a record
 // reaches the store. Times are stored with microsecond precision and returned
-// in UTC.
+// in UTC, durations with second precision. Empty lists may come back as nil
+// or as empty slices.
 package store
 
 import (
@@ -39,6 +40,8 @@ type Store interface {
 	Tenants() Tenants
 	// SigningKeys returns the signing key repository.
 	SigningKeys() SigningKeys
+	// Clients returns the client repository.
+	Clients() Clients
 	// Ping reports whether the underlying database is reachable.
 	Ping(ctx context.Context) error
 }
@@ -113,4 +116,80 @@ type SigningKeys interface {
 	// DeleteExpired removes the keys of every tenant whose ExpiresAt is not
 	// after now, and returns how many were removed.
 	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
+}
+
+// ClientType says whether a client can keep a secret (RFC 6749, section 2.1).
+type ClientType string
+
+const (
+	// ClientConfidential is a client that authenticates with a secret, such
+	// as a web application that runs on a server.
+	ClientConfidential ClientType = "confidential"
+	// ClientPublic is a client that cannot keep a secret, such as a
+	// single-page or native application.
+	ClientPublic ClientType = "public"
+)
+
+// Client is an application registered with a tenant.
+type Client struct {
+	// ID is a version 7 UUID assigned on creation.
+	ID       uuid.UUID
+	TenantID uuid.UUID
+	// ClientID is the OAuth client identifier, unique within the tenant.
+	ClientID string
+	// Name is a human-readable display name.
+	Name string
+	Type ClientType
+	// SecretHash is the SHA-256 hash of the client secret, or nil for a
+	// public client.
+	SecretHash             []byte
+	RedirectURIs           []string
+	PostLogoutRedirectURIs []string
+	// GrantTypes lists the OAuth grant types the client may use, such as
+	// "authorization_code".
+	GrantTypes []string
+	// Scopes lists the scopes the client may request.
+	Scopes []string
+	// Lifetimes overrides the default lifetimes of the tokens issued to the
+	// client.
+	Lifetimes TokenLifetimes
+	// SkipConsent lets the client obtain tokens without asking the user for
+	// consent, which suits first-party clients.
+	SkipConsent bool
+	// PKCEExempt lets a confidential client send authorization requests
+	// without PKCE.
+	PKCEExempt bool
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// TokenLifetimes holds the lifetimes of the tokens issued to a client. A zero
+// value selects the default lifetime.
+type TokenLifetimes struct {
+	AccessToken          time.Duration
+	IDToken              time.Duration
+	RefreshTokenIdle     time.Duration
+	RefreshTokenAbsolute time.Duration
+}
+
+// Clients stores clients. Every method works within one tenant, so a client
+// is never reached through another tenant.
+type Clients interface {
+	// Create inserts c. It returns ErrConflict when the ID, or the client ID
+	// within the tenant, is already in use, and ErrNotFound when the tenant
+	// does not exist.
+	Create(ctx context.Context, c Client) error
+	// GetByClientID returns the client of a tenant with the given client ID,
+	// or ErrNotFound.
+	GetByClientID(ctx context.Context, tenantID uuid.UUID, clientID string) (Client, error)
+	// List returns up to limit clients of a tenant with an ID greater than
+	// after, in ascending ID order. Paging and limits work as in
+	// Tenants.List.
+	List(ctx context.Context, tenantID, after uuid.UUID, limit int) ([]Client, error)
+	// UpdateSecret replaces the secret hash of the client of a tenant with the
+	// given ID and sets its UpdatedAt, or returns ErrNotFound.
+	UpdateSecret(ctx context.Context, tenantID, id uuid.UUID, secretHash []byte, updatedAt time.Time) error
+	// Delete removes the client of a tenant with the given ID, or returns
+	// ErrNotFound.
+	Delete(ctx context.Context, tenantID, id uuid.UUID) error
 }
