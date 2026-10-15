@@ -191,6 +191,9 @@ database:
 keys:
   algorithms: [ES256]
   check_interval: 48h
+passwords:
+  argon2id:
+    memory_kib: 1024
 telemetry:
   tracing:
     endpoint: "collector:4318"
@@ -211,6 +214,7 @@ log:
 				"keys.encryption_key: required",
 				"algorithms must include RS256",
 				"check_interval (48h0m0s) must be positive and no longer than publish_ahead",
+				"passwords: argon2id memory must be between",
 				"telemetry.tracing.sample_ratio:",
 				"telemetry.tracing.endpoint:",
 				"telemetry.metrics.address:",
@@ -253,30 +257,37 @@ func TestEnvKeysCoverEveryField(t *testing.T) {
 	t.Parallel()
 
 	want := map[string]string{
-		"CLAVIS_ISSUER":                         "issuer",
-		"CLAVIS_SERVER_ADDRESS":                 "server.address",
-		"CLAVIS_SERVER_READ_HEADER_TIMEOUT":     "server.read_header_timeout",
-		"CLAVIS_SERVER_READ_TIMEOUT":            "server.read_timeout",
-		"CLAVIS_SERVER_WRITE_TIMEOUT":           "server.write_timeout",
-		"CLAVIS_SERVER_IDLE_TIMEOUT":            "server.idle_timeout",
-		"CLAVIS_SERVER_SHUTDOWN_TIMEOUT":        "server.shutdown_timeout",
-		"CLAVIS_DATABASE_DRIVER":                "database.driver",
-		"CLAVIS_DATABASE_DSN":                   "database.dsn",
-		"CLAVIS_DATABASE_AUTO_MIGRATE":          "database.auto_migrate",
-		"CLAVIS_KEYS_ENCRYPTION_KEY":            "keys.encryption_key",
-		"CLAVIS_KEYS_PREVIOUS_ENCRYPTION_KEYS":  "keys.previous_encryption_keys",
-		"CLAVIS_KEYS_ALGORITHMS":                "keys.algorithms",
-		"CLAVIS_KEYS_ROTATION_PERIOD":           "keys.rotation_period",
-		"CLAVIS_KEYS_PUBLISH_AHEAD":             "keys.publish_ahead",
-		"CLAVIS_KEYS_RETENTION":                 "keys.retention",
-		"CLAVIS_KEYS_CHECK_INTERVAL":            "keys.check_interval",
-		"CLAVIS_TELEMETRY_TRACING_ENABLED":      "telemetry.tracing.enabled",
-		"CLAVIS_TELEMETRY_TRACING_ENDPOINT":     "telemetry.tracing.endpoint",
-		"CLAVIS_TELEMETRY_TRACING_SAMPLE_RATIO": "telemetry.tracing.sample_ratio",
-		"CLAVIS_TELEMETRY_METRICS_ENABLED":      "telemetry.metrics.enabled",
-		"CLAVIS_TELEMETRY_METRICS_ADDRESS":      "telemetry.metrics.address",
-		"CLAVIS_LOG_LEVEL":                      "log.level",
-		"CLAVIS_LOG_FORMAT":                     "log.format",
+		"CLAVIS_ISSUER":                          "issuer",
+		"CLAVIS_SERVER_ADDRESS":                  "server.address",
+		"CLAVIS_SERVER_READ_HEADER_TIMEOUT":      "server.read_header_timeout",
+		"CLAVIS_SERVER_READ_TIMEOUT":             "server.read_timeout",
+		"CLAVIS_SERVER_WRITE_TIMEOUT":            "server.write_timeout",
+		"CLAVIS_SERVER_IDLE_TIMEOUT":             "server.idle_timeout",
+		"CLAVIS_SERVER_SHUTDOWN_TIMEOUT":         "server.shutdown_timeout",
+		"CLAVIS_DATABASE_DRIVER":                 "database.driver",
+		"CLAVIS_DATABASE_DSN":                    "database.dsn",
+		"CLAVIS_DATABASE_AUTO_MIGRATE":           "database.auto_migrate",
+		"CLAVIS_KEYS_ENCRYPTION_KEY":             "keys.encryption_key",
+		"CLAVIS_KEYS_PREVIOUS_ENCRYPTION_KEYS":   "keys.previous_encryption_keys",
+		"CLAVIS_KEYS_ALGORITHMS":                 "keys.algorithms",
+		"CLAVIS_KEYS_ROTATION_PERIOD":            "keys.rotation_period",
+		"CLAVIS_KEYS_PUBLISH_AHEAD":              "keys.publish_ahead",
+		"CLAVIS_KEYS_RETENTION":                  "keys.retention",
+		"CLAVIS_KEYS_CHECK_INTERVAL":             "keys.check_interval",
+		"CLAVIS_PASSWORDS_MIN_LENGTH":            "passwords.min_length",
+		"CLAVIS_PASSWORDS_ARGON2ID_MEMORY_KIB":   "passwords.argon2id.memory_kib",
+		"CLAVIS_PASSWORDS_ARGON2ID_ITERATIONS":   "passwords.argon2id.iterations",
+		"CLAVIS_PASSWORDS_ARGON2ID_PARALLELISM":  "passwords.argon2id.parallelism",
+		"CLAVIS_PASSWORDS_PBKDF2_ITERATIONS":     "passwords.pbkdf2_iterations",
+		"CLAVIS_PASSWORDS_MAX_CONCURRENT_HASHES": "passwords.max_concurrent_hashes",
+		"CLAVIS_PASSWORDS_FIPS_MIGRATE_ARGON2ID": "passwords.fips_migrate_argon2id",
+		"CLAVIS_TELEMETRY_TRACING_ENABLED":       "telemetry.tracing.enabled",
+		"CLAVIS_TELEMETRY_TRACING_ENDPOINT":      "telemetry.tracing.endpoint",
+		"CLAVIS_TELEMETRY_TRACING_SAMPLE_RATIO":  "telemetry.tracing.sample_ratio",
+		"CLAVIS_TELEMETRY_METRICS_ENABLED":       "telemetry.metrics.enabled",
+		"CLAVIS_TELEMETRY_METRICS_ADDRESS":       "telemetry.metrics.address",
+		"CLAVIS_LOG_LEVEL":                       "log.level",
+		"CLAVIS_LOG_FORMAT":                      "log.format",
 	}
 	if diff := cmp.Diff(want, envKeys(reflect.TypeFor[Config](), "")); diff != "" {
 		t.Errorf("envKeys() mismatch (-want +got):\n%s", diff)
@@ -320,5 +331,24 @@ func TestLoadDatabaseNeedsOnlyDatabaseSettings(t *testing.T) {
 	}
 	if _, err := LoadDatabase("", []string{"CLAVIS_DATABASE_DRIVER=mysql"}); err == nil {
 		t.Error("LoadDatabase() accepted an invalid driver")
+	}
+}
+
+func TestLoadPasswordsNeedsNoEncryptionKey(t *testing.T) {
+	t.Parallel()
+
+	res, err := LoadPasswords("", []string{"CLAVIS_PASSWORDS_MIN_LENGTH=15", "CLAVIS_PASSWORDS_ARGON2ID_PARALLELISM=2"})
+	if err != nil {
+		t.Fatalf("LoadPasswords() unexpected error: %v", err)
+	}
+	policy := res.Config.Passwords.Policy()
+	if policy.MinLength != 15 || policy.Argon2id.Parallelism != 2 || policy.PBKDF2Iterations != 600_000 ||
+		!policy.FIPSMigrateArgon2id {
+		t.Errorf("Policy() = %+v, want the environment values over the defaults", policy)
+	}
+	for _, env := range []string{"CLAVIS_PASSWORDS_MIN_LENGTH=4", "CLAVIS_DATABASE_DRIVER=mysql"} {
+		if _, err := LoadPasswords("", []string{env}); err == nil {
+			t.Errorf("LoadPasswords() accepted %s", env)
+		}
 	}
 }

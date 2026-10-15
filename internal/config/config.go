@@ -25,6 +25,7 @@ import (
 	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/knadh/koanf/v2"
 
+	"clavisid.org/clavis/internal/authn/password"
 	"clavisid.org/clavis/internal/issuer"
 	"clavisid.org/clavis/internal/keys"
 	"clavisid.org/clavis/kek"
@@ -48,6 +49,8 @@ type Config struct {
 	Database Database `koanf:"database"`
 	// Keys configures token signing keys and their encryption at rest.
 	Keys Keys `koanf:"keys"`
+	// Passwords configures password hashing.
+	Passwords Passwords `koanf:"passwords"`
 	// Telemetry configures traces and metrics.
 	Telemetry Telemetry `koanf:"telemetry"`
 	// Log configures structured logging.
@@ -137,6 +140,60 @@ type Keys struct {
 	CheckInterval time.Duration `koanf:"check_interval"`
 }
 
+// Passwords configures password hashing (ADR 0015).
+type Passwords struct {
+	// MinLength is the minimum number of characters of a new password, at
+	// least 8. NIST SP 800-63B-4 asks for 15 when a password is the only
+	// authentication factor.
+	MinLength int `koanf:"min_length"`
+	// Argon2id sets the cost of new argon2id hashes. The defaults are the
+	// OWASP baseline, which is also the minimum.
+	Argon2id Argon2id `koanf:"argon2id"`
+	// PBKDF2Iterations is the iteration count of new PBKDF2-HMAC-SHA-256
+	// hashes, which replace argon2id in FIPS mode. At least 600,000.
+	PBKDF2Iterations int `koanf:"pbkdf2_iterations"`
+	// MaxConcurrentHashes bounds how many hashes are computed at once;
+	// further logins wait. 0 uses the number of CPUs. Each argon2id hash
+	// uses argon2id.memory_kib of memory.
+	MaxConcurrentHashes int `koanf:"max_concurrent_hashes"`
+	// FIPSMigrateArgon2id lets FIPS mode verify an argon2id hash created
+	// before FIPS mode was enabled, once, so the login replaces it with a
+	// PBKDF2 hash. argon2id is not FIPS approved: set it to false to refuse
+	// such hashes instead, and have their users reset their passwords.
+	FIPSMigrateArgon2id bool `koanf:"fips_migrate_argon2id"`
+}
+
+// Argon2id sets the cost of argon2id hashes.
+type Argon2id struct {
+	// MemoryKiB is the memory of one hash, in KiB.
+	MemoryKiB   uint32 `koanf:"memory_kib"`
+	Iterations  uint32 `koanf:"iterations"`
+	Parallelism uint8  `koanf:"parallelism"`
+}
+
+// Policy returns the password policy described by p.
+func (p Passwords) Policy() password.Config {
+	return password.Config{
+		MinLength: p.MinLength,
+		Argon2id: password.Argon2idParams{
+			MemoryKiB:   p.Argon2id.MemoryKiB,
+			Iterations:  p.Argon2id.Iterations,
+			Parallelism: p.Argon2id.Parallelism,
+		},
+		PBKDF2Iterations:    p.PBKDF2Iterations,
+		MaxConcurrent:       p.MaxConcurrentHashes,
+		FIPSMigrateArgon2id: p.FIPSMigrateArgon2id,
+	}
+}
+
+// validate reports the problems in the passwords section.
+func (p Passwords) validate() []error {
+	if err := p.Policy().Validate(); err != nil {
+		return []error{fmt.Errorf("passwords: %w", err)}
+	}
+	return nil
+}
+
 // Log configures structured logging.
 type Log struct {
 	// Level is the minimum level: debug, info, warn or error.
@@ -148,6 +205,7 @@ type Log struct {
 // Default returns the configuration used when nothing overrides it.
 func Default() Config {
 	defaultPolicy := keys.DefaultPolicy()
+	defaultPasswords := password.DefaultConfig()
 	return Config{
 		Issuer: "http://localhost:8080",
 		Server: Server{
@@ -169,6 +227,17 @@ func Default() Config {
 			PublishAhead:   defaultPolicy.PublishAhead,
 			Retention:      defaultPolicy.Retention,
 			CheckInterval:  defaultPolicy.CheckInterval,
+		},
+		Passwords: Passwords{
+			MinLength: defaultPasswords.MinLength,
+			Argon2id: Argon2id{
+				MemoryKiB:   defaultPasswords.Argon2id.MemoryKiB,
+				Iterations:  defaultPasswords.Argon2id.Iterations,
+				Parallelism: defaultPasswords.Argon2id.Parallelism,
+			},
+			PBKDF2Iterations:    defaultPasswords.PBKDF2Iterations,
+			MaxConcurrentHashes: defaultPasswords.MaxConcurrent,
+			FIPSMigrateArgon2id: defaultPasswords.FIPSMigrateArgon2id,
 		},
 		Telemetry: Telemetry{
 			Tracing: Tracing{SampleRatio: 1},
@@ -203,6 +272,13 @@ func Load(path string, environ []string) (Result, error) {
 // need secrets they never use, such as the key encryption key.
 func LoadDatabase(path string, environ []string) (Result, error) {
 	return load(path, environ, Config.validateDatabase)
+}
+
+// LoadPasswords reads the same sources as Load but validates only the
+// database, log and passwords sections, for commands that manage users and
+// their passwords.
+func LoadPasswords(path string, environ []string) (Result, error) {
+	return load(path, environ, Config.validatePasswords)
 }
 
 // load reads the file at path, if any, and builds the configuration checked
@@ -312,6 +388,7 @@ func (c Config) Validate() error {
 		}
 	}
 	errs = append(errs, c.Keys.validate()...)
+	errs = append(errs, c.Passwords.validate()...)
 	errs = append(errs, c.Telemetry.validate()...)
 	return joinProblems(errs)
 }
@@ -319,6 +396,13 @@ func (c Config) Validate() error {
 // validateDatabase reports the problems in the database and log sections.
 func (c Config) validateDatabase() error {
 	return joinProblems(append(c.Database.validate(), c.Log.validate()...))
+}
+
+// validatePasswords reports the problems in the database, log and passwords
+// sections.
+func (c Config) validatePasswords() error {
+	errs := append(c.Database.validate(), c.Log.validate()...)
+	return joinProblems(append(errs, c.Passwords.validate()...))
 }
 
 // joinProblems sorts errs for stable output and joins them, or returns nil.
