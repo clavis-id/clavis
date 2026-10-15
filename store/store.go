@@ -10,6 +10,11 @@
 // reaches the store. Times are stored with microsecond precision and returned
 // in UTC, durations with second precision. Empty lists may come back as nil
 // or as empty slices.
+//
+// Strings must not contain U+0000. PostgreSQL cannot store it in text or JSON
+// values and fails the write, while SQLite stores it, so callers reject it
+// before a record reaches the store; an adapter's behavior with it is
+// undefined.
 package store
 
 import (
@@ -226,7 +231,8 @@ type User struct {
 // Profile holds the standard OpenID Connect claims about a user, other than
 // sub and the email claims (OpenID Connect Core 1.0, section 5.1). Empty
 // values are unset. Adapters store a Profile as a JSON object with the names
-// in its field tags.
+// in its field tags. Like every string in a record, its values must not
+// contain U+0000 (see the package documentation).
 type Profile struct {
 	Name              string `json:"name,omitzero"`
 	GivenName         string `json:"given_name,omitzero"`

@@ -110,14 +110,14 @@ func CreateUser(ctx context.Context, d Deps, tenantID uuid.UUID, spec UserSpec) 
 	if err != nil {
 		return store.User{}, err
 	}
-	for field, value := range map[string]string{
-		"name": spec.Name, "given_name": spec.GivenName, "family_name": spec.FamilyName,
+	for _, f := range []struct{ claim, value string }{
+		{"name", spec.Name}, {"given_name", spec.GivenName}, {"family_name", spec.FamilyName},
 	} {
-		if value == "" {
+		if f.value == "" {
 			continue
 		}
-		if err := validateDisplayName(value); err != nil {
-			return store.User{}, fmt.Errorf("%w: %s: %w", ErrInvalidUser, field, err)
+		if err := validateDisplayName(f.value); err != nil {
+			return store.User{}, fmt.Errorf("%w: %s: %w", ErrInvalidUser, f.claim, err)
 		}
 	}
 	now := d.Now()
@@ -228,6 +228,12 @@ func AuthenticatePassword(ctx context.Context, d Deps, h PasswordHasher, tenantI
 ) (store.User, error) {
 	u, err := FindUser(ctx, d, tenantID, email)
 	if errors.Is(err, ErrUserNotFound) {
+		// Look up a password that cannot exist, so an unknown account makes
+		// as many queries as a known one and the time of a round trip to the
+		// database does not reveal which accounts exist.
+		if _, err := d.Store.Passwords().Get(ctx, tenantID, uuid.Nil()); err != nil && !errors.Is(err, store.ErrNotFound) {
+			return store.User{}, fmt.Errorf("looking up password: %w", err)
+		}
 		return store.User{}, failLogin(ctx, h, pw)
 	}
 	if err != nil {
