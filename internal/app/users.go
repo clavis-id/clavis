@@ -110,14 +110,14 @@ func CreateUser(ctx context.Context, d Deps, tenantID uuid.UUID, spec UserSpec) 
 	if err != nil {
 		return store.User{}, err
 	}
-	for field, value := range map[string]string{
-		"name": spec.Name, "given_name": spec.GivenName, "family_name": spec.FamilyName,
+	for _, f := range []struct{ claim, value string }{
+		{"name", spec.Name}, {"given_name", spec.GivenName}, {"family_name", spec.FamilyName},
 	} {
-		if value == "" {
+		if f.value == "" {
 			continue
 		}
-		if err := validateDisplayName(value); err != nil {
-			return store.User{}, fmt.Errorf("%w: %s: %w", ErrInvalidUser, field, err)
+		if err := validateDisplayName(f.value); err != nil {
+			return store.User{}, fmt.Errorf("%w: %s: %w", ErrInvalidUser, f.claim, err)
 		}
 	}
 	now := d.Now()

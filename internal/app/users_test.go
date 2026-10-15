@@ -115,6 +115,13 @@ func TestCreateUser(t *testing.T) {
 	if _, err := CreateUser(t.Context(), d, uuid.NewV7(), UserSpec{Email: "grace@example.com"}); !errors.Is(err, ErrTenantNotFound) {
 		t.Errorf("CreateUser() in an unknown tenant = %v, want ErrTenantNotFound", err)
 	}
+	// With several invalid names, the error always names the first one.
+	invalid := UserSpec{Email: "grace@example.com", Name: "\n", GivenName: "\n", FamilyName: "\n"}
+	for range 20 {
+		if _, err := CreateUser(t.Context(), d, tn.ID, invalid); err == nil || !strings.Contains(err.Error(), ": name: ") {
+			t.Fatalf("CreateUser() with three invalid names = %v, want an error about name", err)
+		}
+	}
 }
 
 func TestFindListAndDeleteUsers(t *testing.T) {
