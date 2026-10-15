@@ -232,28 +232,72 @@ func TestAuthenticatePassword(t *testing.T) {
 	}
 }
 
+// countingStore counts the lookups of users and passwords.
+type countingStore struct {
+	store.Store
+	lookups *int
+}
+
+func (c countingStore) Users() store.Users { return countingUsers{c.Store.Users(), c.lookups} }
+
+func (c countingStore) Passwords() store.Passwords {
+	return countingPasswords{c.Store.Passwords(), c.lookups}
+}
+
+type countingUsers struct {
+	store.Users
+	lookups *int
+}
+
+func (c countingUsers) Get(ctx context.Context, tenantID, id uuid.UUID) (store.User, error) {
+	*c.lookups++
+	return c.Users.Get(ctx, tenantID, id)
+}
+
+func (c countingUsers) GetByEmail(ctx context.Context, tenantID uuid.UUID, email string) (store.User, error) {
+	*c.lookups++
+	return c.Users.GetByEmail(ctx, tenantID, email)
+}
+
+type countingPasswords struct {
+	store.Passwords
+	lookups *int
+}
+
+func (c countingPasswords) Get(ctx context.Context, tenantID, userID uuid.UUID) (store.Password, error) {
+	*c.lookups++
+	return c.Passwords.Get(ctx, tenantID, userID)
+}
+
 // TestAuthenticatePasswordEqualizesFailures checks that every failure that
 // could reveal whether an account exists costs exactly one verification,
-// real or dummy, and returns the same error.
+// real or dummy, makes the same database lookups, and returns the same
+// error. An invalid address makes one lookup fewer, but it cannot belong to
+// an account.
 func TestAuthenticatePasswordEqualizesFailures(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name, email         string
-		wantReal, wantDummy int
+		name, email                      string
+		wantReal, wantDummy, wantLookups int
 	}{
-		{"wrong password", "ada@example.com", 1, 0},
-		{"unknown email", "nobody@example.com", 0, 1},
-		{"user without a password", "grace@example.com", 0, 1},
-		{"invalid email", "not an email", 0, 1},
+		{"wrong password", "ada@example.com", 1, 0, 2},
+		{"unknown email", "nobody@example.com", 0, 1, 2},
+		{"user without a password", "grace@example.com", 0, 1, 2},
+		{"invalid email", "not an email", 0, 1, 1},
 	}
 	for _, tt := range tests {
 		h := &fakeHasher{}
 		d, tn, _ := newLoginFixture(t, h)
+		var lookups int
+		d.Store = countingStore{d.Store, &lookups}
 		if _, err := AuthenticatePassword(t.Context(), d, h, tn.ID, tt.email, "wrong horse"); !errors.Is(err, ErrInvalidCredentials) {
 			t.Errorf("%s: AuthenticatePassword() = %v, want ErrInvalidCredentials", tt.name, err)
 		}
 		if v, dummies := h.calls(); v != tt.wantReal || dummies != tt.wantDummy {
 			t.Errorf("%s: %d verifications and %d dummy ones, want %d and %d", tt.name, v, dummies, tt.wantReal, tt.wantDummy)
+		}
+		if lookups != tt.wantLookups {
+			t.Errorf("%s: %d database lookups, want %d", tt.name, lookups, tt.wantLookups)
 		}
 	}
 }
@@ -363,6 +407,36 @@ func TestAuthenticatePasswordRehashes(t *testing.T) {
 	}
 	if _, err := AuthenticatePassword(t.Context(), d, strong, tn.ID, "ada@example.com", "correct horse"); err != nil {
 		t.Errorf("login with the rehashed password = %v", err)
+	}
+}
+
+// failingPasswords fails every password lookup.
+type failingPasswords struct{ store.Passwords }
+
+func (failingPasswords) Get(context.Context, uuid.UUID, uuid.UUID) (store.Password, error) {
+	return store.Password{}, errUnavailable
+}
+
+type failingPasswordStore struct{ store.Store }
+
+func (f failingPasswordStore) Passwords() store.Passwords {
+	return failingPasswords{f.Store.Passwords()}
+}
+
+// TestAuthenticatePasswordReportsStoreFailures checks that a failing password
+// lookup is reported as an error for known and unknown accounts alike.
+func TestAuthenticatePasswordReportsStoreFailures(t *testing.T) {
+	t.Parallel()
+	h := &fakeHasher{}
+	d, tn, _ := newLoginFixture(t, h)
+	d.Store = failingPasswordStore{d.Store}
+	for _, email := range []string{"ada@example.com", "nobody@example.com"} {
+		if _, err := AuthenticatePassword(t.Context(), d, h, tn.ID, email, "correct horse"); !errors.Is(err, errUnavailable) {
+			t.Errorf("AuthenticatePassword(%s) = %v, want the store error", email, err)
+		}
+	}
+	if v, dummies := h.calls(); v != 0 || dummies != 0 {
+		t.Errorf("failed lookups made %d verifications and %d dummy ones, want none", v, dummies)
 	}
 }
 

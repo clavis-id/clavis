@@ -228,6 +228,12 @@ func AuthenticatePassword(ctx context.Context, d Deps, h PasswordHasher, tenantI
 ) (store.User, error) {
 	u, err := FindUser(ctx, d, tenantID, email)
 	if errors.Is(err, ErrUserNotFound) {
+		// Look up a password that cannot exist, so an unknown account makes
+		// as many queries as a known one and the time of a round trip to the
+		// database does not reveal which accounts exist.
+		if _, err := d.Store.Passwords().Get(ctx, tenantID, uuid.Nil()); err != nil && !errors.Is(err, store.ErrNotFound) {
+			return store.User{}, fmt.Errorf("looking up password: %w", err)
+		}
 		return store.User{}, failLogin(ctx, h, pw)
 	}
 	if err != nil {
