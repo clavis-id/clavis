@@ -31,45 +31,49 @@ func TestValidateRedirectURI(t *testing.T) {
 	}
 
 	invalid := map[string]string{
-		"empty":                     "",
-		"too long":                  "https://app.example.com/" + strings.Repeat("a", MaxRedirectURILength),
-		"relative":                  "/callback",
-		"no scheme":                 "app.example.com/callback",
-		"fragment":                  "https://app.example.com/callback#done",
-		"empty fragment":            "https://app.example.com/callback#",
-		"wildcard host":             "https://*.example.com/callback",
-		"wildcard path":             "https://app.example.com/*",
-		"space":                     "https://app.example.com/a b",
-		"tab":                       "https://app.example.com/\tb",
-		"newline":                   "https://app.example.com/\nb",
-		"non-ASCII host":            "https://exämple.com/callback",
-		"backslash":                 `https://app.example.com\.evil.com/`,
-		"angle bracket":             "https://app.example.com/<script>",
-		"user information":          "https://app.example.com@evil.com/callback",
-		"user and password":         "https://user:pass@app.example.com/callback",
-		"uppercase scheme":          "HTTPS://app.example.com/callback",
-		"mixed-case scheme":         "Https://app.example.com/callback",
-		"uppercase host":            "https://App.Example.com/callback",
-		"percent-encoded host":      "https://app%2eexample.com/callback",
-		"https without host":        "https:///callback",
-		"https with only a port":    "https://:443/callback",
-		"port zero":                 "https://app.example.com:0/callback",
-		"port too large":            "https://app.example.com:65536/callback",
-		"invalid port":              "https://app.example.com:http/callback",
-		"invalid escape":            "https://app.example.com/%zz",
-		"http on a public host":     "http://app.example.com/callback",
-		"http on a private IP":      "http://192.168.1.10/callback",
-		"http on another loopback":  "http://127.0.0.2/callback",
-		"http on long-form ::1":     "http://[0:0:0:0:0:0:0:1]/callback",
-		"http on localhost.":        "http://localhost./callback",
-		"http on LOCALHOST":         "http://LOCALHOST/callback",
-		"javascript":                "javascript:alert(1)",
-		"javascript with slashes":   "javascript://app.example.com/%0aalert(1)",
-		"data":                      "data:text/html,hello",
-		"file":                      "file:///etc/passwd",
-		"custom scheme without dot": "myapp://callback",
-		"opaque custom scheme":      "com.example.app:callback",
-		"mailto":                    "mailto:admin@example.com",
+		"empty":                          "",
+		"too long":                       "https://app.example.com/" + strings.Repeat("a", MaxRedirectURILength),
+		"relative":                       "/callback",
+		"no scheme":                      "app.example.com/callback",
+		"fragment":                       "https://app.example.com/callback#done",
+		"empty fragment":                 "https://app.example.com/callback#",
+		"wildcard host":                  "https://*.example.com/callback",
+		"wildcard path":                  "https://app.example.com/*",
+		"space":                          "https://app.example.com/a b",
+		"tab":                            "https://app.example.com/\tb",
+		"newline":                        "https://app.example.com/\nb",
+		"non-ASCII host":                 "https://exämple.com/callback",
+		"backslash":                      `https://app.example.com\.evil.com/`,
+		"angle bracket":                  "https://app.example.com/<script>",
+		"user information":               "https://app.example.com@evil.com/callback",
+		"user and password":              "https://user:pass@app.example.com/callback",
+		"uppercase scheme":               "HTTPS://app.example.com/callback",
+		"mixed-case scheme":              "Https://app.example.com/callback",
+		"uppercase host":                 "https://App.Example.com/callback",
+		"percent-encoded host":           "https://app%2eexample.com/callback",
+		"percent-encoded non-ASCII host": "https://app%C3%A9.example.com/callback",
+		"percent-encoded custom host":    "com.example.app://c%41llback",
+		"IPv6 zone":                      "https://[fe80::1%25en0]/callback",
+		"uppercase custom host":          "com.example.app://Callback",
+		"https without host":             "https:///callback",
+		"https with only a port":         "https://:443/callback",
+		"port zero":                      "https://app.example.com:0/callback",
+		"port too large":                 "https://app.example.com:65536/callback",
+		"invalid port":                   "https://app.example.com:http/callback",
+		"invalid escape":                 "https://app.example.com/%zz",
+		"http on a public host":          "http://app.example.com/callback",
+		"http on a private IP":           "http://192.168.1.10/callback",
+		"http on another loopback":       "http://127.0.0.2/callback",
+		"http on long-form ::1":          "http://[0:0:0:0:0:0:0:1]/callback",
+		"http on localhost.":             "http://localhost./callback",
+		"http on LOCALHOST":              "http://LOCALHOST/callback",
+		"javascript":                     "javascript:alert(1)",
+		"javascript with slashes":        "javascript://app.example.com/%0aalert(1)",
+		"data":                           "data:text/html,hello",
+		"file":                           "file:///etc/passwd",
+		"custom scheme without dot":      "myapp://callback",
+		"opaque custom scheme":           "com.example.app:callback",
+		"mailto":                         "mailto:admin@example.com",
 	}
 	for name, raw := range invalid {
 		if err := ValidateRedirectURI(raw); !errors.Is(err, ErrInvalidRedirectURI) {
@@ -165,6 +169,7 @@ func FuzzValidateRedirectURI(f *testing.F) {
 		"https://app.example.com/#x",
 		"javascript:alert(1)",
 		"https://[::1%25en0]/",
+		"https://app%C3%A9.example.com/",
 	} {
 		f.Add(seed)
 	}
@@ -178,6 +183,9 @@ func FuzzValidateRedirectURI(f *testing.F) {
 		}
 		if u.Fragment != "" || strings.Contains(raw, "#") || u.User != nil || u.Opaque != "" {
 			t.Errorf("accepted %q, which has a fragment, user information or an opaque part", raw)
+		}
+		if a := rawAuthority(raw, u.Scheme); strings.Contains(a, "%") || a != strings.ToLower(a) {
+			t.Errorf("accepted %q, whose host is percent-encoded or not lowercase", raw)
 		}
 		switch u.Scheme {
 		case "https":
