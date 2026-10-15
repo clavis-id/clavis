@@ -69,7 +69,11 @@ func ValidateRedirectURI(raw string) error {
 		return fmt.Errorf("%w: %q must have a path that starts with a slash", ErrInvalidRedirectURI, raw)
 	case u.User != nil:
 		return fmt.Errorf("%w: %q must not contain user information", ErrInvalidRedirectURI, raw)
-	case u.Host != strings.ToLower(u.Host) || strings.Contains(u.Host, "%"):
+	}
+	// url.Parse decodes the host, so check it as written: a browser turns a
+	// percent-encoded host into another name (WHATWG URL, host parsing).
+	if authority := rawAuthority(raw, u.Scheme); authority != strings.ToLower(authority) ||
+		strings.Contains(authority, "%") {
 		return fmt.Errorf("%w: the host of %q must be lowercase and not percent-encoded",
 			ErrInvalidRedirectURI, raw)
 	}
@@ -100,10 +104,27 @@ func ValidateRedirectURI(raw string) error {
 	return nil
 }
 
+// rawAuthority returns the authority of raw as written, or "" when raw has
+// none.
+func rawAuthority(raw, scheme string) string {
+	rest, ok := strings.CutPrefix(raw, scheme+"://")
+	if !ok {
+		return ""
+	}
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		rest = rest[:i]
+	}
+	return rest
+}
+
 // MatchRedirectURI reports whether requested is one of the registered redirect
-// URIs. Strings are compared exactly (RFC 9700, section 4.1.3), except that
-// the port of an http URI on a loopback IP literal is ignored, so native apps
-// can listen on an ephemeral port (RFC 8252, section 7.3).
+// URIs of an authorization request. Strings are compared exactly (RFC 9700,
+// section 4.1.3), except that the port of an http URI on a loopback IP literal
+// is ignored, so native apps can listen on an ephemeral port (RFC 8252,
+// section 7.3).
+//
+// Post-logout redirect URIs must not use it: they match exactly, without the
+// port exception (OpenID Connect RP-Initiated Logout 1.0, section 3).
 func MatchRedirectURI(registered []string, requested string) bool {
 	for _, r := range registered {
 		if r == requested {

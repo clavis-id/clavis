@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -25,7 +26,14 @@ func newClientsCommand(environ []string) *cobra.Command {
 	}
 	cmd.PersistentFlags().StringVar(&configPath, "config", "", "path to the YAML configuration file")
 	cmd.PersistentFlags().StringVar(&tenant, "tenant", app.DefaultTenantSlug, "slug of the tenant that owns the clients")
-	run := func(cmd *cobra.Command, fn func(context.Context, app.Deps, store.Tenant, io.Writer) error) error {
+	// run opens the database, resolves the tenant and calls fn. Only create
+	// passes createDefault: the server creates the default tenant when it
+	// first starts, and its signing keys on every start, so clients can be
+	// registered before that. The other commands report a missing default
+	// tenant, which also reveals a mistyped database location.
+	run := func(cmd *cobra.Command, createDefault bool,
+		fn func(context.Context, app.Deps, store.Tenant, io.Writer) error,
+	) error {
 		ctx := cmd.Context()
 		logger, st, err := openDatabase(ctx, configPathOrEnv(configPath, environ), environ, cmd.ErrOrStderr())
 		if err != nil {
@@ -34,12 +42,16 @@ func newClientsCommand(environ []string) *cobra.Command {
 		defer st.close()
 		d := app.Deps{Store: st, Logger: logger, Now: time.Now, NewID: uuid.NewV7}
 		var t store.Tenant
-		if tenant == app.DefaultTenantSlug {
-			// The server creates the default tenant when it first starts, and
-			// its signing keys on every start; clients can be registered
-			// before that.
+		switch {
+		case tenant == app.DefaultTenantSlug && createDefault:
 			t, err = app.EnsureDefaultTenant(ctx, d)
-		} else {
+		case tenant == app.DefaultTenantSlug:
+			t, err = app.FindTenant(ctx, d, tenant)
+			if errors.Is(err, app.ErrTenantNotFound) {
+				err = fmt.Errorf("%w; it is created when the server first starts or when the first "+
+					"client is created", err)
+			}
+		default:
 			t, err = app.FindTenant(ctx, d, tenant)
 		}
 		if err != nil {
@@ -64,7 +76,7 @@ func newClientsCommand(environ []string) *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			spec.Type = store.ClientType(clientType)
-			return run(cmd, func(ctx context.Context, d app.Deps, t store.Tenant, out io.Writer) error {
+			return run(cmd, true, func(ctx context.Context, d app.Deps, t store.Tenant, out io.Writer) error {
 				c, secret, err := app.CreateClient(ctx, d, t.ID, spec)
 				if err != nil {
 					return err
@@ -108,7 +120,7 @@ func newClientsCommand(environ []string) *cobra.Command {
 		Short: "List clients",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return run(cmd, func(ctx context.Context, d app.Deps, t store.Tenant, out io.Writer) error {
+			return run(cmd, false, func(ctx context.Context, d app.Deps, t store.Tenant, out io.Writer) error {
 				clients, err := app.ListClients(ctx, d, t.ID)
 				if err != nil {
 					return err
@@ -129,7 +141,7 @@ func newClientsCommand(environ []string) *cobra.Command {
 		Short: "Show the settings of a client",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return run(cmd, func(ctx context.Context, d app.Deps, t store.Tenant, out io.Writer) error {
+			return run(cmd, false, func(ctx context.Context, d app.Deps, t store.Tenant, out io.Writer) error {
 				c, err := app.GetClient(ctx, d, t.ID, args[0])
 				if err != nil {
 					return err
@@ -151,7 +163,7 @@ func newClientsCommand(environ []string) *cobra.Command {
 				return fmt.Errorf("rotating the secret of client %q makes the current secret stop working "+
 					"immediately; run the command again with --yes to confirm", args[0])
 			}
-			return run(cmd, func(ctx context.Context, d app.Deps, t store.Tenant, out io.Writer) error {
+			return run(cmd, false, func(ctx context.Context, d app.Deps, t store.Tenant, out io.Writer) error {
 				secret, err := app.RotateClientSecret(ctx, d, t.ID, args[0])
 				if err != nil {
 					return err
@@ -173,7 +185,7 @@ func newClientsCommand(environ []string) *cobra.Command {
 				return fmt.Errorf("deleting client %q stops it from obtaining tokens; run the command "+
 					"again with --yes to confirm", args[0])
 			}
-			return run(cmd, func(ctx context.Context, d app.Deps, t store.Tenant, out io.Writer) error {
+			return run(cmd, false, func(ctx context.Context, d app.Deps, t store.Tenant, out io.Writer) error {
 				if err := app.DeleteClient(ctx, d, t.ID, args[0]); err != nil {
 					return err
 				}

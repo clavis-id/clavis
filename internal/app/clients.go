@@ -252,11 +252,14 @@ func validateLifetimes(l store.TokenLifetimes) error {
 }
 
 // dedupe returns list without repeated entries, keeping the first occurrence
-// of each.
+// of each. It runs before the size limits are checked, so it takes linear
+// time.
 func dedupe(list []string) []string {
+	seen := make(map[string]bool, len(list))
 	out := make([]string, 0, len(list))
 	for _, s := range list {
-		if !slices.Contains(out, s) {
+		if !seen[s] {
+			seen[s] = true
 			out = append(out, s)
 		}
 	}
