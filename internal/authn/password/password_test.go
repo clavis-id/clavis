@@ -380,3 +380,24 @@ func TestVerifyDummyUsesTheCurrentParameters(t *testing.T) {
 		}
 	}
 }
+
+// TestDeriveRejectsOutOfRangeParameters covers the guards in derive, which
+// parse and Validate make unreachable from the exported API.
+func TestDeriveRejectsOutOfRangeParameters(t *testing.T) {
+	t.Parallel()
+	h := newHasher(cheapConfig())
+	salt := make([]byte, saltLength)
+	for name, tt := range map[string]struct {
+		p      params
+		length int
+	}{
+		"short key":           {params{algorithm: Argon2id, memory: 64, iterations: 1, lanes: 1, salt: salt}, minKeyLength - 1},
+		"long key":            {params{algorithm: Argon2id, memory: 64, iterations: 1, lanes: 1, salt: salt}, maxKeyLength + 1},
+		"no PBKDF2 iteration": {params{algorithm: PBKDF2SHA256, iterations: 0, salt: salt}, keyLength},
+		"too many iterations": {params{algorithm: PBKDF2SHA256, iterations: maxPBKDF2Iterations + 1, salt: salt}, keyLength},
+	} {
+		if _, err := h.derive(t.Context(), tt.p, "password", tt.length); err == nil {
+			t.Errorf("%s: derive() succeeded, want an error", name)
+		}
+	}
+}

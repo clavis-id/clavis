@@ -59,22 +59,28 @@ func parse(encoded string) (params, error) {
 		// The base64 decoder skips line breaks.
 		return params{}, fmt.Errorf("%w: contains a line break", ErrMalformedHash)
 	}
-	fields := strings.Split(encoded, "$")
-	if len(fields) < 2 || fields[0] != "" {
+	body, ok := strings.CutPrefix(encoded, "$")
+	if !ok {
 		return params{}, fmt.Errorf("%w: not a PHC string", ErrMalformedHash)
 	}
-
-	var p params
-	var rest []string
-	switch p.algorithm = fields[1]; p.algorithm {
+	p := params{}
+	if p.algorithm, body, ok = strings.Cut(body, "$"); !ok {
+		return params{}, fmt.Errorf("%w: not a PHC string", ErrMalformedHash)
+	}
+	switch p.algorithm {
 	case Argon2id:
-		if len(fields) != 6 {
-			return params{}, fmt.Errorf("%w: argon2id needs 5 fields", ErrMalformedHash)
+		version, rest, ok := strings.Cut(body, "$")
+		if !ok {
+			return params{}, fmt.Errorf("%w: argon2id needs a version", ErrMalformedHash)
 		}
-		if fields[2] != "v="+strconv.Itoa(argon2.Version) {
-			return params{}, fmt.Errorf("%w: argon2id version %q", ErrUnsupportedHash, fields[2])
+		if version != "v="+strconv.Itoa(argon2.Version) {
+			return params{}, fmt.Errorf("%w: argon2id version %q", ErrUnsupportedHash, version)
 		}
-		values, err := parseValues(fields[3], "m", "t", "p")
+		list, rest, ok := strings.Cut(rest, "$")
+		if !ok {
+			return params{}, fmt.Errorf("%w: argon2id needs parameters", ErrMalformedHash)
+		}
+		values, err := parseValues(list, "m", "t", "p")
 		if err != nil {
 			return params{}, err
 		}
@@ -89,28 +95,33 @@ func parse(encoded string) (params, error) {
 		default:
 			p.lanes = uint8(lanes)
 		}
-		rest = fields[4:]
+		body = rest
 	case PBKDF2SHA256:
-		if len(fields) != 5 {
-			return params{}, fmt.Errorf("%w: pbkdf2-sha256 needs 4 fields", ErrMalformedHash)
+		list, rest, ok := strings.Cut(body, "$")
+		if !ok {
+			return params{}, fmt.Errorf("%w: pbkdf2-sha256 needs parameters", ErrMalformedHash)
 		}
-		values, err := parseValues(fields[2], "i")
+		values, err := parseValues(list, "i")
 		if err != nil {
 			return params{}, err
 		}
 		if p.iterations = values[0]; p.iterations < 1 || p.iterations > maxPBKDF2Iterations {
 			return params{}, fmt.Errorf("%w: pbkdf2 iterations %d", ErrMalformedHash, p.iterations)
 		}
-		rest = fields[3:]
+		body = rest
 	default:
 		return params{}, fmt.Errorf("%w: algorithm %q", ErrUnsupportedHash, p.algorithm)
 	}
 
+	salt, key, ok := strings.Cut(body, "$")
+	if !ok || strings.Contains(key, "$") {
+		return params{}, fmt.Errorf("%w: needs exactly a salt and a key", ErrMalformedHash)
+	}
 	var err error
-	if p.salt, err = b64.DecodeString(rest[0]); err != nil || len(p.salt) < minSaltLength || len(p.salt) > maxSaltLength {
+	if p.salt, err = b64.DecodeString(salt); err != nil || len(p.salt) < minSaltLength || len(p.salt) > maxSaltLength {
 		return params{}, fmt.Errorf("%w: invalid salt", ErrMalformedHash)
 	}
-	if p.key, err = b64.DecodeString(rest[1]); err != nil || len(p.key) < minKeyLength || len(p.key) > maxKeyLength {
+	if p.key, err = b64.DecodeString(key); err != nil || len(p.key) < minKeyLength || len(p.key) > maxKeyLength {
 		return params{}, fmt.Errorf("%w: invalid key", ErrMalformedHash)
 	}
 	return p, nil

@@ -294,7 +294,13 @@ func (h *Hasher) derive(ctx context.Context, p params, password string, length i
 	defer func() { <-h.sem }()
 
 	if p.algorithm == PBKDF2SHA256 {
-		key, err := pbkdf2.Key(sha256.New, password, p.salt, int(p.iterations), length)
+		// parse and Validate bound the count; checking it here keeps the
+		// conversion safe where int has 32 bits.
+		iterations := p.iterations
+		if iterations < 1 || iterations > maxPBKDF2Iterations {
+			return nil, fmt.Errorf("password: %d PBKDF2 iterations is outside [1, %d]", iterations, maxPBKDF2Iterations)
+		}
+		key, err := pbkdf2.Key(sha256.New, password, p.salt, int(iterations), length)
 		if err != nil {
 			return nil, fmt.Errorf("password: %w", err)
 		}
