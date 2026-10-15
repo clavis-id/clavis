@@ -4,6 +4,27 @@
 
 package db
 
+type Client struct {
+	ID                                  string
+	TenantID                            string
+	ClientID                            string
+	Name                                string
+	Type                                string
+	SecretHash                          []byte
+	RedirectUris                        string
+	PostLogoutRedirectUris              string
+	GrantTypes                          string
+	Scopes                              string
+	AccessTokenLifetimeSeconds          int64
+	IDTokenLifetimeSeconds              int64
+	RefreshTokenIdleLifetimeSeconds     int64
+	RefreshTokenAbsoluteLifetimeSeconds int64
+	SkipConsent                         int64
+	PkceExempt                          int64
+	CreatedAt                           int64
+	UpdatedAt                           int64
+}
+
 type SigningKey struct {
 	ID              string
 	TenantID        string

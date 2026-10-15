@@ -44,6 +44,7 @@ type Store struct {
 	ownsPool    bool
 	tenants     tenants
 	signingKeys signingKeys
+	clients     clients
 }
 
 var _ store.Store = (*Store)(nil)
@@ -88,7 +89,7 @@ func New(ctx context.Context, pool *pgxpool.Pool, opts ...Option) (*Store, error
 		opt(&o)
 	}
 	q := db.New(pool)
-	s := &Store{pool: pool, tenants: tenants{q: q}, signingKeys: signingKeys{q: q}}
+	s := &Store{pool: pool, tenants: tenants{q: q}, signingKeys: signingKeys{q: q}, clients: clients{q: q}}
 	if err := s.Ping(ctx); err != nil {
 		return nil, err
 	}
@@ -143,6 +144,9 @@ func (s *Store) Tenants() store.Tenants { return s.tenants }
 
 // SigningKeys returns the signing key repository.
 func (s *Store) SigningKeys() store.SigningKeys { return s.signingKeys }
+
+// Clients returns the client repository.
+func (s *Store) Clients() store.Clients { return s.clients }
 
 type tenants struct {
 	q *db.Queries
@@ -266,6 +270,123 @@ func (r signingKeys) DeleteExpired(ctx context.Context, now time.Time) (int64, e
 	}
 	return n, nil
 }
+
+type clients struct {
+	q *db.Queries
+}
+
+func (r clients) Create(ctx context.Context, c store.Client) error {
+	err := r.q.CreateClient(ctx, db.CreateClientParams{
+		ID:                                  c.ID,
+		TenantID:                            c.TenantID,
+		ClientID:                            c.ClientID,
+		Name:                                c.Name,
+		Type:                                string(c.Type),
+		SecretHash:                          c.SecretHash,
+		RedirectUris:                        orEmpty(c.RedirectURIs),
+		PostLogoutRedirectUris:              orEmpty(c.PostLogoutRedirectURIs),
+		GrantTypes:                          orEmpty(c.GrantTypes),
+		Scopes:                              orEmpty(c.Scopes),
+		AccessTokenLifetimeSeconds:          seconds(c.Lifetimes.AccessToken),
+		IDTokenLifetimeSeconds:              seconds(c.Lifetimes.IDToken),
+		RefreshTokenIdleLifetimeSeconds:     seconds(c.Lifetimes.RefreshTokenIdle),
+		RefreshTokenAbsoluteLifetimeSeconds: seconds(c.Lifetimes.RefreshTokenAbsolute),
+		SkipConsent:                         c.SkipConsent,
+		PkceExempt:                          c.PKCEExempt,
+		CreatedAt:                           c.CreatedAt,
+		UpdatedAt:                           c.UpdatedAt,
+	})
+	return mapError("creating client", err)
+}
+
+func (r clients) GetByClientID(ctx context.Context, tenantID uuid.UUID, clientID string) (store.Client, error) {
+	row, err := r.q.GetClientByClientID(ctx, db.GetClientByClientIDParams{TenantID: tenantID, ClientID: clientID})
+	if err != nil {
+		return store.Client{}, mapError("getting client", err)
+	}
+	return clientFromRow(row), nil
+}
+
+func (r clients) List(ctx context.Context, tenantID, after uuid.UUID, limit int) ([]store.Client, error) {
+	if limit < 1 || limit > store.MaxPageSize {
+		return nil, fmt.Errorf("postgres: listing clients: %w: limit %d is outside [1, %d]",
+			store.ErrInvalidArgument, limit, store.MaxPageSize)
+	}
+	rows, err := r.q.ListClients(ctx, db.ListClientsParams{TenantID: tenantID, After: after, PageSize: int32(limit)})
+	if err != nil {
+		return nil, mapError("listing clients", err)
+	}
+	out := make([]store.Client, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, clientFromRow(row))
+	}
+	return out, nil
+}
+
+func (r clients) UpdateSecret(ctx context.Context, tenantID, id uuid.UUID, secretHash []byte, updatedAt time.Time) error {
+	n, err := r.q.UpdateClientSecret(ctx, db.UpdateClientSecretParams{
+		SecretHash: secretHash,
+		UpdatedAt:  updatedAt,
+		TenantID:   tenantID,
+		ID:         id,
+	})
+	if err != nil {
+		return mapError("updating client secret", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("postgres: updating client secret: %w", store.ErrNotFound)
+	}
+	return nil
+}
+
+func (r clients) Delete(ctx context.Context, tenantID, id uuid.UUID) error {
+	n, err := r.q.DeleteClient(ctx, db.DeleteClientParams{TenantID: tenantID, ID: id})
+	if err != nil {
+		return mapError("deleting client", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("postgres: deleting client: %w", store.ErrNotFound)
+	}
+	return nil
+}
+
+func clientFromRow(row db.Client) store.Client {
+	return store.Client{
+		ID:                     row.ID,
+		TenantID:               row.TenantID,
+		ClientID:               row.ClientID,
+		Name:                   row.Name,
+		Type:                   store.ClientType(row.Type),
+		SecretHash:             row.SecretHash,
+		RedirectURIs:           row.RedirectUris,
+		PostLogoutRedirectURIs: row.PostLogoutRedirectUris,
+		GrantTypes:             row.GrantTypes,
+		Scopes:                 row.Scopes,
+		Lifetimes: store.TokenLifetimes{
+			AccessToken:          time.Duration(row.AccessTokenLifetimeSeconds) * time.Second,
+			IDToken:              time.Duration(row.IDTokenLifetimeSeconds) * time.Second,
+			RefreshTokenIdle:     time.Duration(row.RefreshTokenIdleLifetimeSeconds) * time.Second,
+			RefreshTokenAbsolute: time.Duration(row.RefreshTokenAbsoluteLifetimeSeconds) * time.Second,
+		},
+		SkipConsent: row.SkipConsent,
+		PKCEExempt:  row.PkceExempt,
+		CreatedAt:   row.CreatedAt.UTC(),
+		UpdatedAt:   row.UpdatedAt.UTC(),
+	}
+}
+
+// orEmpty returns an empty slice for nil, which pgx would otherwise send as
+// NULL to a NOT NULL array column.
+func orEmpty(list []string) []string {
+	if list == nil {
+		return []string{}
+	}
+	return list
+}
+
+// seconds converts a duration to whole seconds, the precision of stored
+// durations.
+func seconds(d time.Duration) int64 { return int64(d / time.Second) }
 
 // mapError translates driver errors into the store sentinel errors.
 func mapError(op string, err error) error {

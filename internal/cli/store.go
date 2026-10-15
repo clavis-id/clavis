@@ -3,6 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 
 	"clavisid.org/clavis/internal/config"
 	"clavisid.org/clavis/store"
@@ -49,4 +51,19 @@ func openStore(ctx context.Context, cfg config.Database, migrate bool) (openedSt
 	default:
 		return openedStore{}, fmt.Errorf("unsupported database driver %q", cfg.Driver)
 	}
+}
+
+// openDatabase loads the database and log configuration and opens the store,
+// for commands that need no other configuration.
+func openDatabase(ctx context.Context, configPath string, environ []string, logOutput io.Writer,
+) (*slog.Logger, openedStore, error) {
+	cfg, logger, err := setup(ctx, config.LoadDatabase, configPath, environ, logOutput)
+	if err != nil {
+		return nil, openedStore{}, err
+	}
+	st, err := openStore(ctx, cfg.Database, cfg.Database.AutoMigrate)
+	if err != nil {
+		return nil, openedStore{}, err
+	}
+	return logger, st, nil
 }

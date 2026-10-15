@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"clavisid.org/clavis/internal/oauth"
 	"clavisid.org/clavis/kek"
 	"clavisid.org/clavis/store/sqlite"
 )
@@ -341,5 +342,149 @@ func TestTenantsCreateNeedsEncryptionKey(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "encryption_key") {
 		t.Errorf("stderr %q does not mention the missing encryption key", stderr.String())
+	}
+}
+
+func TestClientsCommands(t *testing.T) {
+	t.Parallel()
+
+	dsn := filepath.Join(t.TempDir(), "clavis.db")
+	environ := []string{"CLAVIS_ISSUER=https://auth.example.com", "CLAVIS_DATABASE_DSN=" + dsn, testKey}
+	run := func(args ...string) (stdout, stderr string, code int) {
+		var out, errOut bytes.Buffer
+		code = Execute(t.Context(), args, &out, &errOut, environ)
+		return out.String(), errOut.String(), code
+	}
+	if _, errOut, code := run("tenants", "create", "acme"); code != 0 {
+		t.Fatalf("tenants create: exit code %d, stderr %q", code, errOut)
+	}
+	secretOf := func(out string) string {
+		_, rest, ok := strings.Cut(out, "secret: ")
+		if !ok {
+			t.Fatalf("output %q has no client secret", out)
+		}
+		secret, _, _ := strings.Cut(rest, "\n")
+		return secret
+	}
+	storedHash := func() []byte {
+		st, err := sqlite.Open(t.Context(), dsn)
+		if err != nil {
+			t.Fatalf("opening store: %v", err)
+		}
+		defer st.Close()
+		acme, err := st.Tenants().GetBySlug(t.Context(), "acme")
+		if err != nil {
+			t.Fatalf("tenant not stored: %v", err)
+		}
+		c, err := st.Clients().GetByClientID(t.Context(), acme.ID, "web-app")
+		if err != nil {
+			t.Fatalf("client not stored: %v", err)
+		}
+		return c.SecretHash
+	}
+
+	out, errOut, code := run("clients", "create", "--tenant", "acme", "--client-id", "web-app",
+		"--name", "Web app", "--redirect-uri", "https://app.example.com/callback",
+		"--redirect-uri", "http://127.0.0.1/callback", "--access-token-lifetime", "15m")
+	if code != 0 {
+		t.Fatalf("clients create: exit code %d, stderr %q", code, errOut)
+	}
+	if !strings.Contains(out, "Created client web-app in tenant acme") || !strings.Contains(out, "cannot be shown again") {
+		t.Errorf("clients create output %q lacks the confirmation or the warning to store the secret", out)
+	}
+	secret := secretOf(out)
+	if !oauth.ClientSecretMatches(storedHash(), secret) {
+		t.Errorf("printed secret %q does not match the stored hash", secret)
+	}
+
+	out, errOut, code = run("clients", "show", "web-app", "--tenant", "acme")
+	if code != 0 {
+		t.Fatalf("clients show: exit code %d, stderr %q", code, errOut)
+	}
+	for _, want := range []string{"Web app", "confidential", "https://app.example.com/callback",
+		"http://127.0.0.1/callback", "offline_access", "PKCE:", "required", "15m0s", "default"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("clients show output lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, secret) {
+		t.Error("clients show printed the client secret")
+	}
+
+	// PKCE is required unless an operator turns it off, which warns.
+	_, errOut, code = run("clients", "create", "--tenant", "acme", "--client-id", "conformance",
+		"--redirect-uri", "https://app.example.com/callback", "--pkce-exempt")
+	if code != 0 || !strings.Contains(errOut, "Warning: client conformance may send authorization requests without PKCE") {
+		t.Errorf("clients create --pkce-exempt: exit code %d, stderr %q", code, errOut)
+	}
+	out, errOut, code = run("clients", "create", "--tenant", "acme", "--client-id", "spa", "--type", "public",
+		"--redirect-uri", "https://spa.example.com/callback")
+	if code != 0 || strings.Contains(out, "secret") {
+		t.Errorf("public clients create: exit code %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	if _, errOut, code = run("clients", "create", "--tenant", "acme", "--client-id", "native", "--type", "public",
+		"--redirect-uri", "http://127.0.0.1/callback", "--pkce-exempt"); code != 1 || !strings.Contains(errOut, "always require PKCE") {
+		t.Errorf("public client with --pkce-exempt: exit code %d, stderr %q", code, errOut)
+	}
+	if _, errOut, code = run("clients", "create", "--tenant", "acme", "--client-id", "bad",
+		"--redirect-uri", "https://*.example.com/callback"); code != 1 || !strings.Contains(errOut, "wildcard") {
+		t.Errorf("wildcard redirect URI: exit code %d, stderr %q", code, errOut)
+	}
+
+	out, errOut, code = run("clients", "list", "--tenant", "acme")
+	if code != 0 {
+		t.Fatalf("clients list: exit code %d, stderr %q", code, errOut)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 4 || !strings.Contains(lines[2], "conformance") || !strings.Contains(lines[2], "exempt") ||
+		!strings.Contains(lines[1], "required") {
+		t.Errorf("clients list output does not show each client and its PKCE setting:\n%s", out)
+	}
+	if out, _, _ = run("clients", "list"); strings.Contains(out, "web-app") {
+		t.Errorf("clients list for the default tenant shows a client of acme:\n%s", out)
+	}
+
+	if _, errOut, code = run("clients", "rotate-secret", "web-app", "--tenant", "acme"); code != 1 || !strings.Contains(errOut, "--yes") {
+		t.Errorf("rotate-secret without --yes: exit code %d, stderr %q", code, errOut)
+	}
+	out, errOut, code = run("clients", "rotate-secret", "web-app", "--tenant", "acme", "--yes")
+	if code != 0 {
+		t.Fatalf("rotate-secret: exit code %d, stderr %q", code, errOut)
+	}
+	rotated := secretOf(out)
+	if hash := storedHash(); !oauth.ClientSecretMatches(hash, rotated) || oauth.ClientSecretMatches(hash, secret) {
+		t.Error("after rotation the stored hash must match the new secret only")
+	}
+	if _, errOut, code = run("clients", "rotate-secret", "spa", "--tenant", "acme", "--yes"); code != 1 || !strings.Contains(errOut, "no secret") {
+		t.Errorf("rotate-secret of a public client: exit code %d, stderr %q", code, errOut)
+	}
+
+	if _, errOut, code = run("clients", "delete", "web-app", "--tenant", "acme"); code != 1 || !strings.Contains(errOut, "--yes") {
+		t.Errorf("delete without --yes: exit code %d, stderr %q", code, errOut)
+	}
+	if out, errOut, code = run("clients", "delete", "web-app", "--tenant", "acme", "--yes"); code != 0 || !strings.Contains(out, "Deleted client web-app") {
+		t.Errorf("delete: exit code %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	if _, errOut, code = run("clients", "show", "web-app", "--tenant", "acme"); code != 1 || !strings.Contains(errOut, "client not found") {
+		t.Errorf("show after delete: exit code %d, stderr %q", code, errOut)
+	}
+	if _, errOut, code = run("clients", "list", "--tenant", "missing"); code != 1 || !strings.Contains(errOut, "tenant not found") {
+		t.Errorf("unknown tenant: exit code %d, stderr %q", code, errOut)
+	}
+}
+
+func TestClientsCreateInDefaultTenantOfNewDatabase(t *testing.T) {
+	t.Parallel()
+
+	// The server creates the default tenant when it first starts; registering
+	// a client must not need a server start first.
+	var stdout, stderr bytes.Buffer
+	environ := []string{"CLAVIS_DATABASE_DSN=" + filepath.Join(t.TempDir(), "clavis.db")}
+	args := []string{"clients", "create", "--client-id", "web-app", "--redirect-uri", "https://app.example.com/callback"}
+	if code := Execute(t.Context(), args, &stdout, &stderr, environ); code != 0 {
+		t.Fatalf("exit code = %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Created client web-app in tenant default") {
+		t.Errorf("stdout %q does not confirm the client in the default tenant", stdout.String())
 	}
 }

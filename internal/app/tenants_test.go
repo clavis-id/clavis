@@ -125,7 +125,7 @@ func TestCreateTenantRejections(t *testing.T) {
 		{name: "admin slug", slug: AdminTenantSlug, want: ErrReservedSlug},
 		{name: "duplicate slug", slug: "acme", want: ErrTenantExists},
 		{name: "control character in name", slug: "beta", tenantName: "Beta\nCorp", want: ErrInvalidTenant},
-		{name: "name too long", slug: "beta", tenantName: strings.Repeat("x", MaxTenantNameLength+1), want: ErrInvalidTenant},
+		{name: "name too long", slug: "beta", tenantName: strings.Repeat("x", MaxNameLength+1), want: ErrInvalidTenant},
 		{name: "invalid UTF-8 name", slug: "beta", tenantName: "\xff", want: ErrInvalidTenant},
 		{name: "right-to-left override in name", slug: "beta", tenantName: "Acme\u202Etset", want: ErrInvalidTenant},
 		{name: "right-to-left mark in name", slug: "beta", tenantName: "Acme\u200F", want: ErrInvalidTenant},

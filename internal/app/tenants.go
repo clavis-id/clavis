@@ -16,8 +16,9 @@ import (
 // (ADR 0016).
 const AdminTenantSlug = "admin"
 
-// MaxTenantNameLength is the longest tenant display name, in characters.
-const MaxTenantNameLength = 200
+// MaxNameLength is the longest display name of a tenant or a client, in
+// characters.
+const MaxNameLength = 200
 
 // maxSlugLength keeps slugs within one DNS label, so a slug can later name a
 // subdomain as well as a path segment.
@@ -54,21 +55,21 @@ func ValidateTenantSlug(slug string) error {
 	return nil
 }
 
-// validateTenantName reports whether name can be displayed safely: control
+// validateDisplayName reports whether name can be displayed safely: control
 // characters, bidirectional formatting characters (which can make text
 // display differently from how it is stored) and line or paragraph
 // separators are rejected.
-func validateTenantName(name string) error {
+func validateDisplayName(name string) error {
 	if !utf8.ValidString(name) {
-		return fmt.Errorf("%w: name is not valid UTF-8", ErrInvalidTenant)
+		return errors.New("name is not valid UTF-8")
 	}
-	if n := utf8.RuneCountInString(name); n == 0 || n > MaxTenantNameLength {
-		return fmt.Errorf("%w: name must have 1 to %d characters", ErrInvalidTenant, MaxTenantNameLength)
+	if n := utf8.RuneCountInString(name); n == 0 || n > MaxNameLength {
+		return fmt.Errorf("name must have 1 to %d characters", MaxNameLength)
 	}
 	for _, r := range name {
 		if unicode.In(r, unicode.Cc, unicode.Bidi_Control, unicode.Zl, unicode.Zp) {
-			return fmt.Errorf("%w: name must not contain control, bidirectional formatting or "+
-				"line separator characters", ErrInvalidTenant)
+			return errors.New("name must not contain control, bidirectional formatting or " +
+				"line separator characters")
 		}
 	}
 	return nil
@@ -96,8 +97,8 @@ func CreateTenant(ctx context.Context, d Deps, createKeys func(context.Context, 
 	if name == "" {
 		name = slug
 	}
-	if err := validateTenantName(name); err != nil {
-		return store.Tenant{}, err
+	if err := validateDisplayName(name); err != nil {
+		return store.Tenant{}, fmt.Errorf("%w: %w", ErrInvalidTenant, err)
 	}
 
 	now := d.Now()
@@ -153,18 +154,29 @@ func ListTenants(ctx context.Context, d Deps) ([]store.Tenant, error) {
 	}
 }
 
+// FindTenant returns the tenant with the given slug, including the tenants
+// Clavis manages itself. It serves administration; requests are routed with
+// TenantBySlug.
+func FindTenant(ctx context.Context, d Deps, slug string) (store.Tenant, error) {
+	t, err := d.Store.Tenants().GetBySlug(ctx, slug)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return store.Tenant{}, fmt.Errorf("%w: %q", ErrTenantNotFound, slug)
+	case err != nil:
+		return store.Tenant{}, fmt.Errorf("looking up tenant %q: %w", slug, err)
+	}
+	return t, nil
+}
+
 // DeleteTenant deletes the tenant with the given slug together with
 // everything it owns. The tenants Clavis manages itself cannot be deleted.
 func DeleteTenant(ctx context.Context, d Deps, slug string) error {
 	if isReservedSlug(slug) {
 		return fmt.Errorf("%w: %q", ErrProtectedTenant, slug)
 	}
-	t, err := d.Store.Tenants().GetBySlug(ctx, slug)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		return fmt.Errorf("%w: %q", ErrTenantNotFound, slug)
-	case err != nil:
-		return fmt.Errorf("looking up tenant %q: %w", slug, err)
+	t, err := FindTenant(ctx, d, slug)
+	if err != nil {
+		return err
 	}
 	switch err := d.Store.Tenants().Delete(ctx, t.ID); {
 	case errors.Is(err, store.ErrNotFound):
