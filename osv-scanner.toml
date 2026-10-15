@@ -1,0 +1,8 @@
+# Vulnerabilities reported for the main module that cannot affect Clavis. OSV-Scanner and the
+# OpenSSF Scorecard Vulnerabilities check read this file. Review every entry before its
+# ignoreUntil date and remove it as soon as a fixed version exists.
+
+[[IgnoredVulns]]
+id = "GO-2026-5932"
+ignoreUntil = 2027-01-14
+reason = "golang.org/x/crypto/openpgp is deprecated and will never be fixed. Clavis imports only golang.org/x/crypto/argon2 and its dependency blake2b: go mod why reports that the main module does not need openpgp, and govulncheck finds no call to it."
