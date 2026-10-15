@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -271,6 +272,31 @@ func TestCreateClientRejections(t *testing.T) {
 				t.Errorf("CreateClient() = %v, want %v", err, tt.want)
 			}
 		})
+	}
+}
+
+// TestCreateClientRejectsHugeListsQuickly guards against work that grows
+// faster than the input: the lists are deduplicated before their size limits
+// apply, and the admin API will pass them from request bodies.
+func TestCreateClientRejectsHugeListsQuickly(t *testing.T) {
+	t.Parallel()
+	d := newDeps(t, openStore(t))
+	tn := newTenantForClients(t, d)
+
+	const n = 200_000 // A quadratic deduplication takes minutes.
+	spec := webAppSpec()
+	spec.RedirectURIs = make([]string, n)
+	spec.Scopes = make([]string, n)
+	for i := range n {
+		spec.RedirectURIs[i] = "https://app.example.com/" + strconv.Itoa(i)
+		spec.Scopes[i] = "scope" + strconv.Itoa(i)
+	}
+	if _, _, err := CreateClient(t.Context(), d, tn.ID, spec); !errors.Is(err, ErrInvalidRedirectURI) {
+		t.Errorf("CreateClient() = %v, want ErrInvalidRedirectURI", err)
+	}
+	spec.RedirectURIs = []string{"https://app.example.com/callback"}
+	if _, _, err := CreateClient(t.Context(), d, tn.ID, spec); !errors.Is(err, ErrInvalidClientMetadata) {
+		t.Errorf("CreateClient() = %v, want ErrInvalidClientMetadata", err)
 	}
 }
 
