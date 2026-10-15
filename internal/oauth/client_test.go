@@ -68,8 +68,12 @@ func TestClientSecretMatches(t *testing.T) {
 	if !ClientSecretMatches(hash, secret) {
 		t.Error("the secret does not match its own hash")
 	}
+	other, _ := NewClientSecret()
+	// Change the first character to a different one, whatever it is.
+	changed := string(secret[0]^1) + secret[1:]
 	for name, candidate := range map[string]string{
-		"other secret":   "x" + secret[1:],
+		"other secret":   other,
+		"one character":  changed,
 		"prefix":         secret[:len(secret)-1],
 		"empty":          "",
 		"hash as secret": string(hash),
