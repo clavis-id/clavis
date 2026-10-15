@@ -2,17 +2,16 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
 	"text/tabwriter"
 	"time"
-	"uuid"
 
 	"github.com/spf13/cobra"
 
 	"clavisid.org/clavis/internal/app"
+	"clavisid.org/clavis/internal/config"
 	"clavisid.org/clavis/store"
 )
 
@@ -26,38 +25,13 @@ func newClientsCommand(environ []string) *cobra.Command {
 	}
 	cmd.PersistentFlags().StringVar(&configPath, "config", "", "path to the YAML configuration file")
 	cmd.PersistentFlags().StringVar(&tenant, "tenant", app.DefaultTenantSlug, "slug of the tenant that owns the clients")
-	// run opens the database, resolves the tenant and calls fn. Only create
-	// passes createDefault: the server creates the default tenant when it
-	// first starts, and its signing keys on every start, so clients can be
-	// registered before that. The other commands report a missing default
-	// tenant, which also reveals a mistyped database location.
 	run := func(cmd *cobra.Command, createDefault bool,
 		fn func(context.Context, app.Deps, store.Tenant, io.Writer) error,
 	) error {
-		ctx := cmd.Context()
-		logger, st, err := openDatabase(ctx, configPathOrEnv(configPath, environ), environ, cmd.ErrOrStderr())
-		if err != nil {
-			return err
-		}
-		defer st.close()
-		d := app.Deps{Store: st, Logger: logger, Now: time.Now, NewID: uuid.NewV7}
-		var t store.Tenant
-		switch {
-		case tenant == app.DefaultTenantSlug && createDefault:
-			t, err = app.EnsureDefaultTenant(ctx, d)
-		case tenant == app.DefaultTenantSlug:
-			t, err = app.FindTenant(ctx, d, tenant)
-			if errors.Is(err, app.ErrTenantNotFound) {
-				err = fmt.Errorf("%w; it is created when the server first starts or when the first "+
-					"client is created", err)
-			}
-		default:
-			t, err = app.FindTenant(ctx, d, tenant)
-		}
-		if err != nil {
-			return err
-		}
-		return fn(ctx, d, t, cmd.OutOrStdout())
+		return withTenant(cmd, config.LoadDatabase, configPathOrEnv(configPath, environ), environ, tenant, createDefault,
+			func(ctx context.Context, _ config.Config, d app.Deps, t store.Tenant) error {
+				return fn(ctx, d, t, cmd.OutOrStdout())
+			})
 	}
 
 	var (

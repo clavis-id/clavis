@@ -5,14 +5,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
+	"time"
 	"uuid"
 
+	"clavisid.org/clavis/internal/app"
+	"clavisid.org/clavis/internal/authn/password"
 	"clavisid.org/clavis/internal/oauth"
 	"clavisid.org/clavis/kek"
 	"clavisid.org/clavis/store/sqlite"
@@ -25,7 +31,7 @@ func TestVersion(t *testing.T) {
 	t.Parallel()
 
 	var stdout, stderr bytes.Buffer
-	code := Execute(t.Context(), []string{"version"}, &stdout, &stderr, nil)
+	code := Execute(t.Context(), []string{"version"}, nil, &stdout, &stderr, nil)
 	if code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
 	}
@@ -38,7 +44,7 @@ func TestUnknownCommand(t *testing.T) {
 	t.Parallel()
 
 	var stdout, stderr bytes.Buffer
-	if code := Execute(t.Context(), []string{"launch"}, &stdout, &stderr, nil); code != 1 {
+	if code := Execute(t.Context(), []string{"launch"}, nil, &stdout, &stderr, nil); code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
 	if !strings.Contains(stderr.String(), "unknown command") {
@@ -51,7 +57,7 @@ func TestServeRejectsInvalidConfiguration(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	environ := []string{"CLAVIS_ISSUER=http://auth.example.com", testKey}
-	if code := Execute(t.Context(), []string{"serve"}, &stdout, &stderr, environ); code != 1 {
+	if code := Execute(t.Context(), []string{"serve"}, nil, &stdout, &stderr, environ); code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
 	if !strings.Contains(stderr.String(), "issuer") {
@@ -68,7 +74,7 @@ func TestServeReadsConfigFileFromEnvironment(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	environ := []string{"CLAVIS_CONFIG=" + path}
-	if code := Execute(t.Context(), []string{"serve"}, &stdout, &stderr, environ); code != 1 {
+	if code := Execute(t.Context(), []string{"serve"}, nil, &stdout, &stderr, environ); code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
 	if !strings.Contains(stderr.String(), "log.level") {
@@ -94,7 +100,7 @@ func TestServeLifecycle(t *testing.T) {
 
 	exit := make(chan int, 1)
 	go func() {
-		exit <- Execute(ctx, []string{"serve"}, io.Discard, pw, environ)
+		exit <- Execute(ctx, []string{"serve"}, nil, io.Discard, pw, environ)
 		_ = pw.Close()
 	}()
 
@@ -151,7 +157,7 @@ func TestMigrate(t *testing.T) {
 	environ := []string{"CLAVIS_DATABASE_DSN=" + path, "CLAVIS_DATABASE_AUTO_MIGRATE=false"}
 
 	var stdout, stderr bytes.Buffer
-	if code := Execute(t.Context(), []string{"migrate"}, &stdout, &stderr, environ); code != 0 {
+	if code := Execute(t.Context(), []string{"migrate"}, nil, &stdout, &stderr, environ); code != 0 {
 		t.Fatalf("migrate exit code = %d, stderr = %q", code, stderr.String())
 	}
 	if !strings.Contains(stderr.String(), "database migrations applied") {
@@ -178,7 +184,7 @@ func TestServeWithoutAutoMigrateNeedsMigratedDatabase(t *testing.T) {
 		testKey,
 	}
 	var stdout, stderr bytes.Buffer
-	if code := Execute(t.Context(), []string{"serve"}, &stdout, &stderr, environ); code != 1 {
+	if code := Execute(t.Context(), []string{"serve"}, nil, &stdout, &stderr, environ); code != 1 {
 		t.Errorf("exit code = %d, want 1 on an unmigrated database", code)
 	}
 	if !strings.Contains(stderr.String(), "default tenant") {
@@ -192,7 +198,7 @@ func TestNewEncryptionKey(t *testing.T) {
 	seen := make(map[string]bool)
 	for range 2 {
 		var stdout, stderr bytes.Buffer
-		if code := Execute(t.Context(), []string{"keys", "new-encryption-key"}, &stdout, &stderr, nil); code != 0 {
+		if code := Execute(t.Context(), []string{"keys", "new-encryption-key"}, nil, &stdout, &stderr, nil); code != 0 {
 			t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
 		}
 		encoded := strings.TrimSpace(stdout.String())
@@ -223,7 +229,7 @@ func TestServeExposesMetrics(t *testing.T) {
 	}
 	exit := make(chan int, 1)
 	go func() {
-		exit <- Execute(ctx, []string{"serve"}, io.Discard, pw, environ)
+		exit <- Execute(ctx, []string{"serve"}, nil, io.Discard, pw, environ)
 		_ = pw.Close()
 	}()
 
@@ -286,7 +292,7 @@ func TestTenantsCommands(t *testing.T) {
 	environ := []string{"CLAVIS_ISSUER=https://auth.example.com", "CLAVIS_DATABASE_DSN=" + dsn, testKey}
 	run := func(args ...string) (stdout, stderr string, code int) {
 		var out, errOut bytes.Buffer
-		code = Execute(t.Context(), args, &out, &errOut, environ)
+		code = Execute(t.Context(), args, nil, &out, &errOut, environ)
 		return out.String(), errOut.String(), code
 	}
 
@@ -338,7 +344,7 @@ func TestTenantsCreateNeedsEncryptionKey(t *testing.T) {
 		"CLAVIS_ISSUER=https://auth.example.com",
 		"CLAVIS_DATABASE_DSN=" + filepath.Join(t.TempDir(), "clavis.db"),
 	}
-	if code := Execute(t.Context(), []string{"tenants", "create", "acme"}, &stdout, &stderr, environ); code != 1 {
+	if code := Execute(t.Context(), []string{"tenants", "create", "acme"}, nil, &stdout, &stderr, environ); code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
 	if !strings.Contains(stderr.String(), "encryption_key") {
@@ -353,7 +359,7 @@ func TestClientsCommands(t *testing.T) {
 	environ := []string{"CLAVIS_ISSUER=https://auth.example.com", "CLAVIS_DATABASE_DSN=" + dsn, testKey}
 	run := func(args ...string) (stdout, stderr string, code int) {
 		var out, errOut bytes.Buffer
-		code = Execute(t.Context(), args, &out, &errOut, environ)
+		code = Execute(t.Context(), args, nil, &out, &errOut, environ)
 		return out.String(), errOut.String(), code
 	}
 	if _, errOut, code := run("tenants", "create", "acme"); code != 0 {
@@ -482,7 +488,7 @@ func TestClientsCreateInDefaultTenantOfNewDatabase(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	environ := []string{"CLAVIS_DATABASE_DSN=" + filepath.Join(t.TempDir(), "clavis.db")}
 	args := []string{"clients", "create", "--client-id", "web-app", "--redirect-uri", "https://app.example.com/callback"}
-	if code := Execute(t.Context(), args, &stdout, &stderr, environ); code != 0 {
+	if code := Execute(t.Context(), args, nil, &stdout, &stderr, environ); code != 0 {
 		t.Fatalf("exit code = %d, stderr %q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "Created client web-app in tenant default") {
@@ -502,10 +508,10 @@ func TestClientsReadCommandsDoNotCreateTheDefaultTenant(t *testing.T) {
 		{"clients", "delete", "web-app", "--yes"},
 	} {
 		var stdout, stderr bytes.Buffer
-		if code := Execute(t.Context(), args, &stdout, &stderr, environ); code != 1 {
+		if code := Execute(t.Context(), args, nil, &stdout, &stderr, environ); code != 1 {
 			t.Errorf("%v: exit code = %d, want 1", args, code)
 		}
-		if !strings.Contains(stderr.String(), `tenant not found: "default"; it is created when the server first starts`) {
+		if !strings.Contains(stderr.String(), `tenant not found: "default"; it is created when the server first starts or when the first record is created`) {
 			t.Errorf("%v: stderr %q does not explain the missing default tenant", args, stderr.String())
 		}
 	}
@@ -516,5 +522,142 @@ func TestClientsReadCommandsDoNotCreateTheDefaultTenant(t *testing.T) {
 	defer st.Close()
 	if tenants, err := st.Tenants().List(t.Context(), uuid.Nil(), 10); err != nil || len(tenants) != 0 {
 		t.Errorf("tenants after read commands = %d, %v; want none", len(tenants), err)
+	}
+}
+
+func TestUsersCommands(t *testing.T) {
+	t.Parallel()
+
+	dsn := filepath.Join(t.TempDir(), "clavis.db")
+	environ := []string{"CLAVIS_DATABASE_DSN=" + dsn, "CLAVIS_PASSWORDS_MIN_LENGTH=12"}
+	run := func(stdin string, args ...string) (stdout, stderr string, code int) {
+		var out, errOut bytes.Buffer
+		code = Execute(t.Context(), args, strings.NewReader(stdin), &out, &errOut, environ)
+		return out.String(), errOut.String(), code
+	}
+	login := func(email, pw string) error {
+		st, err := sqlite.Open(t.Context(), dsn)
+		if err != nil {
+			t.Fatalf("opening store: %v", err)
+		}
+		defer st.Close()
+		d := app.Deps{Store: st, Logger: slog.New(slog.DiscardHandler), Now: time.Now, NewID: uuid.NewV7}
+		tn, err := app.FindTenant(t.Context(), d, app.DefaultTenantSlug)
+		if err != nil {
+			t.Fatalf("default tenant: %v", err)
+		}
+		h, err := password.New(password.DefaultConfig())
+		if err != nil {
+			t.Fatalf("password.New() unexpected error: %v", err)
+		}
+		_, err = app.AuthenticatePassword(t.Context(), d, h, tn.ID, email, pw)
+		return err
+	}
+
+	// A password that fails the policy leaves no user behind.
+	if _, errOut, code := run("too short\n", "users", "create", "ada@example.com", "--with-password"); code != 1 ||
+		!strings.Contains(errOut, "12 to 256 characters") {
+		t.Errorf("create with a short password: exit code %d, stderr %q", code, errOut)
+	}
+	out, errOut, code := run("correct horse battery\n", "users", "create", "Ada@Example.com", "--with-password",
+		"--name", "Ada Lovelace", "--email-verified")
+	if code != 0 || !strings.Contains(out, "Created user ada@example.com in tenant default") || !strings.Contains(out, "Password set") {
+		t.Fatalf("users create: exit code %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	if strings.Contains(out+errOut, "correct horse battery") {
+		t.Error("users create printed the password")
+	}
+	if err := login("ada@example.com", "correct horse battery"); err != nil {
+		t.Errorf("login with the new password: %v", err)
+	}
+	if _, errOut, code = run("", "users", "create", "ada@example.com"); code != 1 || !strings.Contains(errOut, "already exists") {
+		t.Errorf("duplicate create: exit code %d, stderr %q", code, errOut)
+	}
+	if out, errOut, code = run("", "users", "create", "grace@example.com"); code != 0 || strings.Contains(out, "Password set") {
+		t.Errorf("create without a password: exit code %d, stdout %q, stderr %q", code, out, errOut)
+	}
+
+	if out, errOut, code = run("battery staple horse\r\n", "users", "set-password", "ADA@example.com"); code != 0 ||
+		!strings.Contains(out, "Set the password of ada@example.com") {
+		t.Errorf("set-password: exit code %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	if err := login("ada@example.com", "battery staple horse"); err != nil {
+		t.Errorf("login with the changed password: %v", err)
+	}
+	if err := login("ada@example.com", "correct horse battery"); !errors.Is(err, app.ErrInvalidCredentials) {
+		t.Errorf("login with the old password = %v, want ErrInvalidCredentials", err)
+	}
+	if _, errOut, code = run("", "users", "set-password", "ada@example.com"); code != 1 || !strings.Contains(errOut, "no password on standard input") {
+		t.Errorf("set-password without input: exit code %d, stderr %q", code, errOut)
+	}
+	if _, errOut, code = run("battery staple horse\n", "users", "set-password", "nobody@example.com"); code != 1 ||
+		!strings.Contains(errOut, "user not found") {
+		t.Errorf("set-password of an unknown user: exit code %d, stderr %q", code, errOut)
+	}
+
+	out, errOut, code = run("", "users", "list")
+	if code != 0 {
+		t.Fatalf("users list: exit code %d, stderr %q", code, errOut)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 3 || !strings.Contains(lines[1], "ada@example.com") || !strings.Contains(lines[1], "Ada Lovelace") ||
+		!strings.Contains(lines[1], "true") || !strings.Contains(lines[2], "grace@example.com") {
+		t.Errorf("users list output:\n%s", out)
+	}
+
+	if _, errOut, code = run("", "users", "delete", "ada@example.com"); code != 1 || !strings.Contains(errOut, "--yes") {
+		t.Errorf("delete without --yes: exit code %d, stderr %q", code, errOut)
+	}
+	if out, errOut, code = run("", "users", "delete", "ada@example.com", "--yes"); code != 0 || !strings.Contains(out, "Deleted user") {
+		t.Errorf("delete: exit code %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	if err := login("ada@example.com", "battery staple horse"); !errors.Is(err, app.ErrInvalidCredentials) {
+		t.Errorf("login after delete = %v, want ErrInvalidCredentials", err)
+	}
+	if _, errOut, code = run("", "users", "list", "--tenant", "missing"); code != 1 || !strings.Contains(errOut, "tenant not found") {
+		t.Errorf("unknown tenant: exit code %d, stderr %q", code, errOut)
+	}
+}
+
+func TestUsersReadCommandsDoNotCreateTheDefaultTenant(t *testing.T) {
+	t.Parallel()
+
+	environ := []string{"CLAVIS_DATABASE_DSN=" + filepath.Join(t.TempDir(), "clavis.db")}
+	for _, args := range [][]string{
+		{"users", "list"},
+		{"users", "set-password", "ada@example.com"},
+		{"users", "delete", "ada@example.com", "--yes"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := Execute(t.Context(), args, strings.NewReader("correct horse battery\n"), &stdout, &stderr, environ); code != 1 ||
+			!strings.Contains(stderr.String(), `tenant not found: "default"`) {
+			t.Errorf("%v: exit code %d, stderr %q", args, code, stderr.String())
+		}
+	}
+}
+
+func TestReadPasswordFromAPipe(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct{ in, want string }{
+		{"secret\n", "secret"},
+		{"secret\r\n", "secret"},
+		{"secret", "secret"},
+		{"first\nsecond\n", "first"},
+		{" spaced secret \n", " spaced secret "},
+	} {
+		got, err := readPassword(strings.NewReader(tt.in), io.Discard)
+		if err != nil || got != tt.want {
+			t.Errorf("readPassword(%q) = %q, %v; want %q", tt.in, got, err, tt.want)
+		}
+	}
+	for _, in := range []string{"", "\n", "\r\n"} {
+		if _, err := readPassword(strings.NewReader(in), io.Discard); err == nil {
+			t.Errorf("readPassword(%q) succeeded, want an error", in)
+		}
+	}
+	if _, err := readPassword(iotest.ErrReader(errors.New("broken pipe")), io.Discard); err == nil ||
+		!strings.Contains(err.Error(), "broken pipe") {
+		t.Errorf("readPassword() of a failing reader = %v", err)
 	}
 }
