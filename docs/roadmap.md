@@ -4,7 +4,8 @@ Each phase ends with explicit exit criteria. A phase is not complete until every
 met in CI. Versions before v1.0 make no compatibility promises.
 
 Current phase: **Phase 1.** Phase 0 was completed on 2026-10-13 with the `v0.1.0-alpha.1`
-pre-release.
+pre-release. Milestone 1 of the [Phase 1 plan](plans/phase-1.md), the protocol core, was
+completed on 2026-10-16 and ships as `v0.1.0-alpha.3`.
 
 ## Phase 0: Foundations (complete)
 

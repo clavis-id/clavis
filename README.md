@@ -6,10 +6,13 @@ single static binary in front of any stack.
 
 Clavis is Latin for "key".
 
-> Status: pre-alpha. Phase 0 (foundations) is complete: the embeddable server, SQLite and
-> PostgreSQL storage, signing key rotation with a published JWK set, telemetry and the release
-> pipeline. The OpenID Connect and OAuth flows arrive in Phase 1. Interfaces may change in any
-> release before v1.0; see the [roadmap](docs/roadmap.md).
+> Status: pre-alpha. Phase 1 is in progress, and its first milestone, the protocol core, is
+> complete: tenants with their own issuer, OAuth clients and API resources, users with password
+> sign-in on a hosted login page, the authorization code flow with PKCE, client credentials,
+> ID tokens, JWT access tokens (RFC 9068) and userinfo. The OpenID conformance suite runs the
+> Config OP and Basic OP plans in CI. Single sign-on, consent, refresh tokens, revocation,
+> introspection and logout arrive in the next milestone. Interfaces may change in any release
+> before v1.0; see the [roadmap](docs/roadmap.md).
 
 ## Why Clavis
 
