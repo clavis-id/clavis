@@ -42,14 +42,17 @@ func (m *Manager) Sign(ctx context.Context, tenantID uuid.UUID, alg, typ string,
 // Verify checks that token is a compact JWS signed with one of the tenant's
 // published keys, using an algorithm of the policy, and that its typ header
 // names the media type typ, with or without the "application/" prefix (RFC
-// 7515, section 4.1.9). It returns the payload. Every failure other than a
-// store error wraps ErrInvalidToken.
+// 7515, section 4.1.9). It returns the payload. Only the compact
+// serialization is accepted: Clavis issues no other, and in the JSON
+// serialization headers such as kid and typ may be left unsigned (RFC 8725,
+// section 3.11). Every failure other than a store error wraps
+// ErrInvalidToken.
 func (m *Manager) Verify(ctx context.Context, tenantID uuid.UUID, token, typ string) ([]byte, error) {
 	algorithms := make([]jose.SignatureAlgorithm, len(m.policy.Algorithms))
 	for i, alg := range m.policy.Algorithms {
 		algorithms[i] = jose.SignatureAlgorithm(alg)
 	}
-	obj, err := jose.ParseSigned(token, algorithms)
+	obj, err := jose.ParseSignedCompact(token, algorithms)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidToken, err)
 	}

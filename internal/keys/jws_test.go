@@ -123,3 +123,22 @@ func TestSignWithoutActiveKey(t *testing.T) {
 		t.Errorf("Sign() before any rotation = %v, want ErrNoActiveKey", err)
 	}
 }
+
+func TestVerifyAcceptsOnlyTheCompactSerialization(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	m := f.manager(t, newEncrypter(t, kek.GenerateSecret()), DefaultPolicy())
+	mustRotate(t, m, f.tenant.ID)
+	token, err := m.Sign(t.Context(), f.tenant.ID, RS256, "at+jwt", []byte(`{"sub":"ada"}`))
+	if err != nil {
+		t.Fatalf("Sign() unexpected error: %v", err)
+	}
+	// The same signature in the flattened JSON serialization (RFC 7515,
+	// section 7.2.2), which can carry unsigned headers.
+	parts := strings.Split(token, ".")
+	flattened := `{"protected":"` + parts[0] + `","payload":"` + parts[1] + `","signature":"` + parts[2] +
+		`","header":{"kid":"other"}}`
+	if _, err := m.Verify(t.Context(), f.tenant.ID, flattened, "at+jwt"); !errors.Is(err, ErrInvalidToken) {
+		t.Errorf("Verify() of the JSON serialization = %v, want ErrInvalidToken", err)
+	}
+}
