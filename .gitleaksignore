@@ -1,0 +1,3 @@
+# Findings that are not secrets, by fingerprint. Each line states why.
+# The access token of OpenID Connect Core 1.0, appendix A, used as the at_hash test vector.
+d9deb8d1f7f183bb4241a4c476e480935acd9aec:internal/oidc/tokens_test.go:generic-api-key:12

@@ -42,12 +42,17 @@ of the product. No change merges without the tests described here.
 
 ### Protocol conformance
 
-- The OpenID Foundation conformance suite runs in Docker against a Clavis instance.
-- Triggered on every change under `internal/oauth`, `internal/oidc` or `internal/keys`, and
-  nightly on `develop`.
-- Profiles grow with the roadmap: Basic OP, Config OP, Form Post, RP-Initiated Logout
-  (Phase 1); Dynamic OP and PAR (Phase 2); FAPI 2.0 Security Profile (later).
-- A failing conformance module blocks the merge.
+- The OpenID Foundation conformance suite runs in Docker against the current commit of Clavis
+  (`make conformance`; see [`conformance/README.md`](../conformance/README.md) and ADR 0017).
+- The Conformance workflow runs nightly on `develop`, on pull requests that change protocol
+  code or `conformance/`, and on demand.
+- `conformance/expected-failures.json` and `expected-skips.json` list the known gaps, each with
+  its reason. Any other failure, and any listed entry that no longer happens, fails the run.
+- Profiles grow with the roadmap: Config OP (from work item 1.2), Basic OP (from work item
+  1.6), Form Post and RP-Initiated Logout (Phase 1); Dynamic OP and PAR (Phase 2); FAPI 2.0 Security Profile
+  (later).
+- A failing conformance run is fixed before merging. It is not a required status check, because
+  it only runs for the pull requests that change protocol code.
 
 ### Security tests
 
@@ -55,10 +60,17 @@ of the product. No change merges without the tests described here.
   tests: open redirectors, authorization code injection and replay, PKCE downgrade, mix-up,
   refresh token replay, token leakage through referrers, clickjacking headers, CSRF.
 - Native Go fuzzing. Current targets: issuer parsing (`internal/issuer`), configuration parsing
-  (`internal/config`) and ciphertext decryption (`kek`). Planned: redirect URI matching, scope
-  parsing, JWS and JWT parsing, client metadata documents, authorization request parsing (Phase
-  1 and 2) and SCIM filters (Phase 3). Short runs on every pull request; long nightly runs are
-  planned.
+  (`internal/config`), ciphertext decryption (`kek`), tenant slugs and email addresses
+  (`internal/app`), redirect URI validation and matching and authorization request parsing
+  (`internal/oauth`), client credentials at the token endpoint (`internal/oauth`), stored
+  password hashes (`internal/authn/password`), and the authorization endpoint as a whole,
+  which must answer any query with the login page, an error page or a redirect to a
+  registered redirect URI (root package). Planned: client metadata documents (Phase 2) and
+  SCIM filters (Phase 3). JWS parsing is left to go-jose, which has its own fuzz targets.
+  Short runs on every pull request; long nightly runs are planned.
+- Interoperability: `golang.org/x/oauth2` and `github.com/coreos/go-oidc/v3` drive the
+  authorization code flow (confidential and public clients), userinfo and the client
+  credentials grant against a TLS server (`interop_test.go`).
 - Static and supply chain analysis: `govulncheck`, `gosec` through golangci-lint, CodeQL,
   gitleaks, OSSF Scorecard, dependency review on pull requests.
 
@@ -94,8 +106,8 @@ of the product. No change merges without the tests described here.
   (`go.uber.org/goleak`, test-only), so a goroutine that outlives the tests fails the run.
 - Security-critical packages keep at least 80 percent statement coverage, enforced in CI by
   `make cover-check`. The list in the Makefile (`COVER_FLOOR_PKGS`) currently holds
-  `internal/issuer`, `internal/keys` and `kek`; `internal/oauth`, `internal/oidc` and
-  `internal/authn` join it when they are created.
+  `internal/authn/password`, `internal/issuer`, `internal/keys`, `internal/oauth`,
+  `internal/oidc` and `kek`; every new package under `internal/authn` joins it.
 - Every fuzz target runs for 15 seconds in CI on each pull request (`make fuzz`).
 - No test depends on the network outside servers or containers it starts itself.
 - No test depends on test execution order. Time-dependent behavior uses an injected clock or

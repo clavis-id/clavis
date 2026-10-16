@@ -10,6 +10,106 @@ import (
 	"uuid"
 )
 
+type AccessToken struct {
+	ID        string
+	TenantID  uuid.UUID
+	ClientID  uuid.UUID
+	UserID    *uuid.UUID
+	CodeHash  []byte
+	Scopes    []string
+	IssuedAt  time.Time
+	ExpiresAt time.Time
+	RevokedAt *time.Time
+}
+
+type ApiResource struct {
+	ID         uuid.UUID
+	TenantID   uuid.UUID
+	Identifier string
+	Name       string
+	Scopes     []string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+type AuthorizationCode struct {
+	Hash                []byte
+	TenantID            uuid.UUID
+	ClientID            uuid.UUID
+	UserID              uuid.UUID
+	SessionID           uuid.UUID
+	RedirectUri         string
+	RedirectUriProvided bool
+	Scopes              []string
+	Nonce               string
+	CodeChallenge       string
+	CodeChallengeMethod string
+	AuthTime            time.Time
+	Amr                 []string
+	Acr                 string
+	CreatedAt           time.Time
+	ExpiresAt           time.Time
+	RedeemedAt          *time.Time
+}
+
+type AuthorizationRequest struct {
+	ID                  string
+	TenantID            uuid.UUID
+	ClientID            uuid.UUID
+	BindingHash         []byte
+	RedirectUri         string
+	RedirectUriProvided bool
+	Scopes              []string
+	State               string
+	Nonce               string
+	CodeChallenge       string
+	CodeChallengeMethod string
+	CreatedAt           time.Time
+	ExpiresAt           time.Time
+}
+
+type Client struct {
+	ID                                  uuid.UUID
+	TenantID                            uuid.UUID
+	ClientID                            string
+	Name                                string
+	Type                                string
+	SecretHash                          []byte
+	RedirectUris                        []string
+	PostLogoutRedirectUris              []string
+	GrantTypes                          []string
+	Scopes                              []string
+	AccessTokenLifetimeSeconds          int64
+	IDTokenLifetimeSeconds              int64
+	RefreshTokenIdleLifetimeSeconds     int64
+	RefreshTokenAbsoluteLifetimeSeconds int64
+	SkipConsent                         bool
+	PkceExempt                          bool
+	CreatedAt                           time.Time
+	UpdatedAt                           time.Time
+}
+
+type Password struct {
+	UserID   uuid.UUID
+	TenantID uuid.UUID
+	Hash     string
+	SetAt    time.Time
+}
+
+type Session struct {
+	ID            uuid.UUID
+	TenantID      uuid.UUID
+	TokenHash     []byte
+	UserID        uuid.UUID
+	AuthTime      time.Time
+	Amr           []string
+	Acr           string
+	CreatedAt     time.Time
+	LastSeenAt    time.Time
+	IdleExpiresAt time.Time
+	ExpiresAt     time.Time
+}
+
 type SigningKey struct {
 	ID              uuid.UUID
 	TenantID        uuid.UUID
@@ -31,4 +131,15 @@ type Tenant struct {
 	Name      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type User struct {
+	ID            uuid.UUID
+	TenantID      uuid.UUID
+	Email         string
+	EmailVerified bool
+	Status        string
+	Profile       []byte
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }

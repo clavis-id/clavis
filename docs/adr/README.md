@@ -21,3 +21,9 @@ request. Status values: Proposed, Accepted, Superseded by NNNN, Deprecated.
 | [0010](0010-module-path.md) | Module path github.com/clavis-id/clavis | Superseded by 0012 |
 | [0011](0011-signing-key-lifecycle.md) | Signing key lifecycle and encryption at rest | Accepted |
 | [0012](0012-vanity-import-path.md) | Vanity import path clavisid.org/clavis | Accepted |
+| [0013](0013-authorization-requests-and-browser-sessions.md) | Authorization requests and browser sessions | Accepted |
+| [0014](0014-tokens-api-resources-and-client-credentials.md) | Tokens, API resources and client credentials | Accepted; PKCE policy superseded by 0018 |
+| [0015](0015-password-hashing-and-fips-mode.md) | Password hashing and FIPS mode | Accepted |
+| [0016](0016-administration-and-the-admin-tenant.md) | Administration and the admin tenant | Accepted |
+| [0017](0017-openid-conformance-suite-in-ci.md) | OpenID conformance suite in CI | Accepted |
+| [0018](0018-pkce-exemption-is-a-client-setting.md) | PKCE exemption is a client setting | Accepted |

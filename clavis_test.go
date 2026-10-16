@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -25,7 +26,7 @@ import (
 	"clavisid.org/clavis/store/sqlite"
 )
 
-func openStore(t *testing.T) *sqlite.Store {
+func openStore(t testing.TB) *sqlite.Store {
 	t.Helper()
 	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "clavis.db"))
 	if err != nil {
@@ -35,7 +36,7 @@ func openStore(t *testing.T) *sqlite.Store {
 	return s
 }
 
-func testConfig(t *testing.T, st store.Store) Config {
+func testConfig(t testing.TB, st store.Store) Config {
 	t.Helper()
 	enc, err := kek.NewLocal(kek.GenerateSecret())
 	if err != nil {
@@ -44,13 +45,13 @@ func testConfig(t *testing.T, st store.Store) Config {
 	return Config{Issuer: "http://localhost:8080", Store: st, KeyEncrypter: enc}
 }
 
-func newTestServer(t *testing.T, st store.Store) *Server {
+func newTestServer(t testing.TB, st store.Store) *Server {
 	t.Helper()
 	return mustNew(t, testConfig(t, st))
 }
 
 // mustNew creates a Server that is closed when the test ends.
-func mustNew(t *testing.T, cfg Config) *Server {
+func mustNew(t testing.TB, cfg Config) *Server {
 	t.Helper()
 	s, err := New(t.Context(), cfg)
 	if err != nil {
@@ -334,19 +335,19 @@ func TestProtocolRoutesAreTraced(t *testing.T) {
 	cfg.TracerProvider = sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	h := mustNew(t, cfg).Handler()
 
-	for _, path := range []string{"/healthz", "/readyz", "/oauth2/jwks"} {
+	for _, path := range []string{"/healthz", "/readyz", "/oauth2/jwks", "/.well-known/oauth-authorization-server"} {
 		serve(t, h, http.MethodGet, path)
 	}
-	spans := recorder.Ended()
-	if len(spans) != 1 {
-		names := make([]string, 0, len(spans))
-		for _, sp := range spans {
-			names = append(names, sp.Name())
-		}
-		t.Fatalf("recorded spans %v, want only the JWKS request", names)
+	// Rejected methods are not traced, as for route patterns.
+	serve(t, h, http.MethodPost, "/.well-known/oauth-authorization-server")
+
+	var names []string
+	for _, sp := range recorder.Ended() {
+		names = append(names, sp.Name())
 	}
-	if got := spans[0].Name(); got != "GET /oauth2/jwks" {
-		t.Errorf("span name = %q, want the route pattern", got)
+	want := []string{"GET /oauth2/jwks", "GET /.well-known/oauth-authorization-server"}
+	if !slices.Equal(names, want) {
+		t.Errorf("recorded spans %v, want %v: protocol routes only, named after their pattern", names, want)
 	}
 }
 

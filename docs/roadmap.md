@@ -4,7 +4,8 @@ Each phase ends with explicit exit criteria. A phase is not complete until every
 met in CI. Versions before v1.0 make no compatibility promises.
 
 Current phase: **Phase 1.** Phase 0 was completed on 2026-10-13 with the `v0.1.0-alpha.1`
-pre-release.
+pre-release. Milestone 1 of the [Phase 1 plan](plans/phase-1.md), the protocol core, was
+completed on 2026-10-16 and ships as `v0.1.0-alpha.3`.
 
 ## Phase 0: Foundations (complete)
 
@@ -33,15 +34,21 @@ Exit criteria:
 
 ## Phase 1: MVP v0.1 (Cognito user pool parity core)
 
+The [Phase 1 implementation plan](plans/phase-1.md) orders this scope into five milestones. Each
+milestone ends with a pre-release (`v0.1.0-alpha.3` to `v0.1.0-alpha.6`), and `v0.1.0` ships
+when every exit criterion below is met.
+
 Scope:
 - Tenants with per-tenant issuer; `default` tenant.
-- Users: email and password signup (argon2id), email verification, password reset, profile.
+- Users: email and password signup (argon2id, or PBKDF2 in FIPS mode), email verification,
+  password reset, profile.
 - Browser sessions and the hosted login UI (templ + htmx), English and Spanish.
 - OpenID Connect provider: authorization code with PKCE, refresh token rotation with reuse
   detection, client credentials, discovery, JWKS, userinfo, revocation, introspection,
   RP-initiated logout.
 - MFA with TOTP and recovery codes; passkeys (registration, login, conditional UI).
-- Admin REST API (OpenAPI 3.1) and CLI for tenants, clients and users.
+- Admin REST API (OpenAPI 3.1), authenticated with OAuth tokens from a reserved `admin` tenant,
+  and CLI for tenants, clients and users.
 - Audit log, rate limiting, account lockout policy.
 - Webhooks for user and session events (Standard Webhooks signatures).
 - Embedded mode: `clavis.New`, `Server.Handler`, `middleware.Require`.

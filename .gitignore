@@ -36,6 +36,7 @@ e2e/blob-report/
 
 # Conformance suite runs
 conformance/results/
+conformance/.cache/
 
 # Editors and OS
 .idea/

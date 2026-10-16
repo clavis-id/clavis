@@ -6,10 +6,13 @@ single static binary in front of any stack.
 
 Clavis is Latin for "key".
 
-> Status: pre-alpha. Phase 0 (foundations) is complete: the embeddable server, SQLite and
-> PostgreSQL storage, signing key rotation with a published JWK set, telemetry and the release
-> pipeline. The OpenID Connect and OAuth flows arrive in Phase 1. Interfaces may change in any
-> release before v1.0; see the [roadmap](docs/roadmap.md).
+> Status: pre-alpha. Phase 1 is in progress, and its first milestone, the protocol core, is
+> complete: tenants with their own issuer, OAuth clients and API resources, users with password
+> sign-in on a hosted login page, the authorization code flow with PKCE, client credentials,
+> ID tokens, JWT access tokens (RFC 9068) and userinfo. The OpenID conformance suite runs the
+> Config OP and Basic OP plans in CI. Single sign-on, consent, refresh tokens, revocation,
+> introspection and logout arrive in the next milestone. Interfaces may change in any release
+> before v1.0; see the [roadmap](docs/roadmap.md).
 
 ## Why Clavis
 
@@ -63,6 +66,8 @@ if err != nil {
 }
 
 mux.Handle("/auth/", http.StripPrefix("/auth", auth.Handler()))
+// RFC 8414 metadata lives at the host root when the issuer has a path.
+mux.Handle("/.well-known/oauth-authorization-server/", auth.WellKnownHandler())
 mux.Handle("/api/", middleware.Require(auth.Verifier(), middleware.Scopes("orders:read"))(api))
 ```
 
@@ -79,7 +84,7 @@ clavis serve --config clavis.yaml
 - [Vision and market analysis](docs/vision.md)
 - [Architecture](docs/architecture.md)
 - [Testing strategy](docs/testing.md)
-- [Roadmap](docs/roadmap.md)
+- [Roadmap](docs/roadmap.md) and the [Phase 1 plan](docs/plans/phase-1.md)
 - [Releasing](docs/releasing.md)
 - [Architecture decision records](docs/adr/)
 

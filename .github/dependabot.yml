@@ -15,6 +15,33 @@ updates:
       go-modules:
         patterns: ["*"]
 
+  # Images and runner dependencies of the conformance suite harness.
+  - package-ecosystem: docker-compose
+    directory: "/conformance"
+    schedule:
+      interval: weekly
+      day: monday
+    target-branch: develop
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      conformance-images:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: "/conformance"
+    schedule:
+      interval: weekly
+      day: monday
+    target-branch: develop
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      conformance-runner:
+        patterns: ["*"]
+
   - package-ecosystem: github-actions
     directory: "/"
     schedule:

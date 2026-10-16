@@ -4,6 +4,110 @@
 
 package db
 
+import (
+	"database/sql"
+)
+
+type AccessToken struct {
+	ID        string
+	TenantID  string
+	ClientID  string
+	UserID    sql.NullString
+	CodeHash  []byte
+	Scopes    string
+	IssuedAt  int64
+	ExpiresAt int64
+	RevokedAt sql.NullInt64
+}
+
+type ApiResource struct {
+	ID         string
+	TenantID   string
+	Identifier string
+	Name       string
+	Scopes     string
+	CreatedAt  int64
+	UpdatedAt  int64
+}
+
+type AuthorizationCode struct {
+	Hash                []byte
+	TenantID            string
+	ClientID            string
+	UserID              string
+	SessionID           string
+	RedirectUri         string
+	RedirectUriProvided int64
+	Scopes              string
+	Nonce               string
+	CodeChallenge       string
+	CodeChallengeMethod string
+	AuthTime            int64
+	Amr                 string
+	Acr                 string
+	CreatedAt           int64
+	ExpiresAt           int64
+	RedeemedAt          sql.NullInt64
+}
+
+type AuthorizationRequest struct {
+	ID                  string
+	TenantID            string
+	ClientID            string
+	BindingHash         []byte
+	RedirectUri         string
+	RedirectUriProvided int64
+	Scopes              string
+	State               string
+	Nonce               string
+	CodeChallenge       string
+	CodeChallengeMethod string
+	CreatedAt           int64
+	ExpiresAt           int64
+}
+
+type Client struct {
+	ID                                  string
+	TenantID                            string
+	ClientID                            string
+	Name                                string
+	Type                                string
+	SecretHash                          []byte
+	RedirectUris                        string
+	PostLogoutRedirectUris              string
+	GrantTypes                          string
+	Scopes                              string
+	AccessTokenLifetimeSeconds          int64
+	IDTokenLifetimeSeconds              int64
+	RefreshTokenIdleLifetimeSeconds     int64
+	RefreshTokenAbsoluteLifetimeSeconds int64
+	SkipConsent                         int64
+	PkceExempt                          int64
+	CreatedAt                           int64
+	UpdatedAt                           int64
+}
+
+type Password struct {
+	UserID   string
+	TenantID string
+	Hash     string
+	SetAt    int64
+}
+
+type Session struct {
+	ID            string
+	TenantID      string
+	TokenHash     []byte
+	UserID        string
+	AuthTime      int64
+	Amr           string
+	Acr           string
+	CreatedAt     int64
+	LastSeenAt    int64
+	IdleExpiresAt int64
+	ExpiresAt     int64
+}
+
 type SigningKey struct {
 	ID              string
 	TenantID        string
@@ -25,4 +129,15 @@ type Tenant struct {
 	Name      string
 	CreatedAt int64
 	UpdatedAt int64
+}
+
+type User struct {
+	ID            string
+	TenantID      string
+	Email         string
+	EmailVerified int64
+	Status        string
+	Profile       string
+	CreatedAt     int64
+	UpdatedAt     int64
 }

@@ -15,7 +15,7 @@ TOOL_MODULES = $(wildcard tools/*/go.mod)
 COVER_PROFILE ?= coverage.out
 # Security-critical packages must keep at least COVER_FLOOR percent coverage.
 COVER_FLOOR ?= 80
-COVER_FLOOR_PKGS = ./internal/issuer ./internal/keys ./kek
+COVER_FLOOR_PKGS = ./internal/authn/password ./internal/issuer ./internal/keys ./internal/oauth ./internal/oidc ./kek
 FUZZTIME ?= 30s
 
 # Container images, pinned by digest. sqlc runs in Docker because its
@@ -65,6 +65,10 @@ test-postgres: ## Run the store tests against a throwaway PostgreSQL container
 	CLAVIS_TEST_POSTGRES_DSN="postgres://postgres:clavis@127.0.0.1:$(POSTGRES_PORT)/postgres?sslmode=disable" \
 		$(MAKE) --no-print-directory test-store
 
+.PHONY: conformance
+conformance: ## Run the OpenID conformance suite against Clavis (needs Docker; see conformance/README.md)
+	./conformance/run.sh
+
 .PHONY: test-go-import
 test-go-import: ## Test the Cloudflare Worker that serves the clavisid.org/clavis import path (needs Node.js)
 	node --test deploy/cloudflare/go-import/index.test.mjs
@@ -75,13 +79,19 @@ cover: ## Run tests and write a coverage profile
 	$(GO) tool cover -func=$(COVER_PROFILE) | tail -n 1
 
 .PHONY: generate
-generate: ## Regenerate code (sqlc runs in Docker)
+generate: ## Regenerate code: sqlc queries (in Docker) and templ pages
 	docker run --rm --user "$$(id -u):$$(id -g)" -v "$(CURDIR)":/src -w /src $(SQLC_IMAGE) generate
+	$(call TOOL,templ) generate -path internal/ui
 
+# The templ runtime in go.mod must match the generator in tools/templ: the
+# generated files record the generator version, so a mismatch shows here.
 .PHONY: generate-check
 generate-check: generate ## Fail if generated code is out of date
-	@test -z "$$(git status --porcelain -- store)" || \
-		{ git status --porcelain -- store; echo "generated code is out of date: run make generate"; exit 1; }
+	@test -z "$$(git status --porcelain -- store internal/ui)" || \
+		{ git status --porcelain -- store internal/ui; echo "generated code is out of date: run make generate"; exit 1; }
+	@test "$$($(GO) list -m -f '{{.Version}}' github.com/a-h/templ)" = \
+		"$$($(GO) list -modfile=tools/templ/go.mod -m -f '{{.Version}}' github.com/a-h/templ)" || \
+		{ echo "github.com/a-h/templ differs between go.mod and tools/templ/go.mod"; exit 1; }
 
 .PHONY: cover-check
 cover-check: ## Fail if a security-critical package is below the coverage floor

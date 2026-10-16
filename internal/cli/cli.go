@@ -24,9 +24,15 @@ import (
 )
 
 // Execute runs the command described by args and returns the process exit
-// code. environ holds the environment in os.Environ format.
-func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, environ []string) int {
+// code. Commands that read input, such as passwords, read stdin, which may be
+// nil when there is none. environ holds the environment in os.Environ
+// format.
+func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, environ []string) int {
 	root := newRootCommand(environ) //nolint:contextcheck // Commands receive ctx through ExecuteContext and cmd.Context().
+	if stdin == nil {
+		stdin = strings.NewReader("")
+	}
+	root.SetIn(stdin)
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
@@ -44,7 +50,9 @@ func newRootCommand(environ []string) *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
-	root.AddCommand(newServeCommand(environ), newMigrateCommand(environ), newKeysCommand(), newVersionCommand())
+	root.AddCommand(newServeCommand(environ), newMigrateCommand(environ), newTenantsCommand(environ),
+		newClientsCommand(environ), newResourcesCommand(environ), newUsersCommand(environ), newKeysCommand(),
+		newVersionCommand())
 	return root
 }
 
@@ -152,6 +160,15 @@ func serve(ctx context.Context, configPath string, environ []string, logOutput i
 		Logger:         logger,
 		TracerProvider: tel.Tracer,
 		MeterProvider:  tel.Meter,
+		Passwords: clavis.PasswordPolicy{
+			MinLength:                cfg.Passwords.MinLength,
+			Argon2idMemoryKiB:        cfg.Passwords.Argon2id.MemoryKiB,
+			Argon2idIterations:       cfg.Passwords.Argon2id.Iterations,
+			Argon2idParallelism:      cfg.Passwords.Argon2id.Parallelism,
+			PBKDF2Iterations:         cfg.Passwords.PBKDF2Iterations,
+			MaxConcurrentHashes:      cfg.Passwords.MaxConcurrentHashes,
+			RefuseArgon2idInFIPSMode: !cfg.Passwords.FIPSMigrateArgon2id,
+		},
 	})
 	if err != nil {
 		return err
