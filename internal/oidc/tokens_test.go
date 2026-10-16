@@ -9,7 +9,7 @@ import (
 func TestAccessTokenHash(t *testing.T) {
 	t.Parallel()
 	// The example of OpenID Connect Core 1.0, appendix A.3 and A.4.
-	const token = "jHkWEdUXMU1BwAsC4vtUsZwnNvTIxEl0z9K3vx5KF0Y"
+	const token = "jHkWEdUXMU1BwAsC4vtUsZwnNvTIxEl0z9K3vx5KF0Y" // gitleaks:allow
 	for alg, want := range map[string]string{
 		"RS256": "77QmUPtjPfzWtF2AnpK9RQ",
 		"ES256": "77QmUPtjPfzWtF2AnpK9RQ",
