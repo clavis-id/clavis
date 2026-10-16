@@ -45,6 +45,13 @@ const tokenLength = 43
 // to the client with an error or, when the client or redirect URI cannot be
 // trusted, ends on an error page.
 func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request, t tenant) {
+	// The mux sends HEAD to GET routes, but a HEAD request has no use for a
+	// stored authorization request.
+	if r.Method == http.MethodHead {
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	params, err := authorizationParams(w, r)
 	if err != nil {
 		s.errorPage(w, r, http.StatusBadRequest, "Invalid sign-in request",
