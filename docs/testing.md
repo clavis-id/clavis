@@ -61,10 +61,12 @@ of the product. No change merges without the tests described here.
   refresh token replay, token leakage through referrers, clickjacking headers, CSRF.
 - Native Go fuzzing. Current targets: issuer parsing (`internal/issuer`), configuration parsing
   (`internal/config`), ciphertext decryption (`kek`), tenant slugs and email addresses
-  (`internal/app`), redirect URI validation and matching (`internal/oauth`), and stored
-  password hashes (`internal/authn/password`). Planned: scope parsing, JWS and JWT
-  parsing, client metadata documents, authorization request parsing (Phase 1 and 2) and SCIM
-  filters (Phase 3). Short runs on every pull request; long nightly runs are planned.
+  (`internal/app`), redirect URI validation and matching and authorization request parsing
+  (`internal/oauth`), stored password hashes (`internal/authn/password`), and the
+  authorization endpoint as a whole, which must answer any query with the login page, an
+  error page or a redirect to a registered redirect URI (root package). Planned: JWS and JWT
+  parsing, token requests, client metadata documents (Phase 1 and 2) and SCIM filters
+  (Phase 3). Short runs on every pull request; long nightly runs are planned.
 - Static and supply chain analysis: `govulncheck`, `gosec` through golangci-lint, CodeQL,
   gitleaks, OSSF Scorecard, dependency review on pull requests.
 

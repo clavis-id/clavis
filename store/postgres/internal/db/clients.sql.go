@@ -85,6 +85,46 @@ func (q *Queries) DeleteClient(ctx context.Context, arg DeleteClientParams) (int
 	return result.RowsAffected(), nil
 }
 
+const getClient = `-- name: GetClient :one
+SELECT id, tenant_id, client_id, name, type, secret_hash, redirect_uris,
+    post_logout_redirect_uris, grant_types, scopes, access_token_lifetime_seconds,
+    id_token_lifetime_seconds, refresh_token_idle_lifetime_seconds,
+    refresh_token_absolute_lifetime_seconds, skip_consent, pkce_exempt, created_at, updated_at
+FROM clients
+WHERE tenant_id = $1 AND id = $2
+`
+
+type GetClientParams struct {
+	TenantID uuid.UUID
+	ID       uuid.UUID
+}
+
+func (q *Queries) GetClient(ctx context.Context, arg GetClientParams) (Client, error) {
+	row := q.db.QueryRow(ctx, getClient, arg.TenantID, arg.ID)
+	var i Client
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.ClientID,
+		&i.Name,
+		&i.Type,
+		&i.SecretHash,
+		&i.RedirectUris,
+		&i.PostLogoutRedirectUris,
+		&i.GrantTypes,
+		&i.Scopes,
+		&i.AccessTokenLifetimeSeconds,
+		&i.IDTokenLifetimeSeconds,
+		&i.RefreshTokenIdleLifetimeSeconds,
+		&i.RefreshTokenAbsoluteLifetimeSeconds,
+		&i.SkipConsent,
+		&i.PkceExempt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getClientByClientID = `-- name: GetClientByClientID :one
 SELECT id, tenant_id, client_id, name, type, secret_hash, redirect_uris,
     post_logout_redirect_uris, grant_types, scopes, access_token_lifetime_seconds,

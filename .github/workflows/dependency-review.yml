@@ -32,7 +32,13 @@ jobs:
           allow-licenses: >-
             0BSD, Apache-2.0, BSD-2-Clause, BSD-3-Clause, CC0-1.0, ISC, MIT,
             MPL-2.0, PSF-2.0, Unlicense, LicenseRef-scancode-google-patent-license-golang
-          # typing-extensions (a dependency of the conformance runner) declares
-          # PSF-2.0 on PyPI, but GitHub reports a compound expression built
-          # from the historical Python license text, including GPL-1.0-or-later.
-          allow-dependencies-licenses: pkg:pypi/typing-extensions
+          # Packages whose license GitHub misreads:
+          # - typing-extensions (a dependency of the conformance runner)
+          #   declares PSF-2.0 on PyPI, but GitHub reports a compound
+          #   expression built from the historical Python license text,
+          #   including GPL-1.0-or-later.
+          # - github.com/a-h/templ is MIT, and its lsp directory, which only
+          #   the templ command uses, is BSD-3-Clause; GitHub reports the pair
+          #   as LicenseRef-bad-mit-bsd-3-clause instead of both licenses.
+          allow-dependencies-licenses: >-
+            pkg:pypi/typing-extensions, pkg:golang/github.com/a-h/templ

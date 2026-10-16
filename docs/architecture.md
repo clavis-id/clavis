@@ -2,8 +2,9 @@
 
 This document describes the target architecture of Clavis. Phase 0 (foundations) is
 implemented: the public embed API, storage ports with SQLite and PostgreSQL adapters, signing
-key management, telemetry and the release pipeline. Everything else is design and will be
-built phase by phase (see the [roadmap](roadmap.md)). Decisions with lasting consequences are
+key management, telemetry and the release pipeline. Phase 1 is in progress: tenants, clients,
+users with passwords, and the authorization endpoint with the hosted login page work today.
+Everything else is design and will be built phase by phase (see the [roadmap](roadmap.md)). Decisions with lasting consequences are
 recorded as ADRs in [`adr/`](adr/).
 
 ## Principles
@@ -159,7 +160,7 @@ tenant is not reachable under `/t/default`.
 |---|---|---|
 | `/.well-known/openid-configuration` | OpenID Connect Discovery 1.0 | 1 (implemented) |
 | `/.well-known/oauth-authorization-server` | RFC 8414 | 1 (implemented) |
-| `/oauth2/authorize` | RFC 6749, OAuth 2.1, PKCE (RFC 7636) | 1 |
+| `/oauth2/authorize` | RFC 6749, OAuth 2.1, PKCE (RFC 7636), RFC 9207 | 1 (authorization code flow implemented) |
 | `/oauth2/token` | RFC 6749, OAuth 2.1 | 1 |
 | `/oauth2/jwks` | RFC 7517 | 0 (implemented) |
 | `/oauth2/userinfo` | OpenID Connect Core 1.0 | 1 |
@@ -170,6 +171,11 @@ tenant is not reachable under `/t/default`.
 | `/oauth2/device_authorization` | RFC 8628 | 2 |
 | `/oauth2/register` | RFC 7591 (fallback to CIMD) | 3 |
 | `/oauth2/bc-authorize` | OpenID CIBA Core 1.0 | 3 |
+
+The hosted UI adds `/login` per tenant, the sign-in page of a stored authorization request,
+and `/assets/` at the issuer of the default tenant, the stylesheet and other static files
+shared by every tenant. Asset names include a hash of their content, so they are cached for a
+year.
 
 ## Security architecture
 
@@ -202,11 +208,32 @@ tenant is not reachable under `/t/default`.
   127.0.0.1 or [::1] may differ (RFC 8252, section 7.3). Post-logout redirect URIs match
   exactly, with no port exception (OpenID Connect RP-Initiated Logout 1.0, section 3). PKCE is
   required unless an operator exempts a confidential client (ADR 0018).
-- **Authorization requests:** stored server side and bound to the browser that started them,
-  so the hosted UI and future custom interfaces share one flow. See ADR 0013.
-- **Browser sessions:** `__Host-` prefixed, `Secure`, `HttpOnly`, `SameSite=Lax` cookies;
-  cross-origin protection via `http.CrossOriginProtection`; strict Content Security Policy on
-  the hosted UI.
+- **Authorization requests:** validated in full before any user interaction (OAuth 2.1 and
+  OpenID Connect Core 1.0, section 3.1.2), then stored server side for 10 minutes under a
+  random 128-bit identifier, so the hosted UI and future custom interfaces share one flow. See
+  ADR 0013.
+  - An unknown client or an unregistered redirect URI ends on an error page; every other
+    error goes back to the redirect URI with `iss` (RFC 9207). OpenID Connect requests must
+    name their redirect URI; OAuth requests may omit it when the client has only one.
+  - A request is bound to the browser that sent it through the `__Host-clavis-binding`
+    cookie, whose SHA-256 hash it stores, so a sign-in started in one browser cannot be
+    finished in another. A request is single use.
+  - Requests that use the request object, `request_uri`, dynamic registration or a response
+    type other than `code` are rejected with the matching error.
+- **Authorization codes:** 256 random bits, stored as a SHA-256 hash, valid for 60 seconds,
+  bound to the client, the redirect URI, the PKCE challenge, the nonce, the scopes and the
+  session (ADR 0014).
+- **Browser sessions:** one server-side session per sign-in, stored as the SHA-256 hash of a
+  256-bit cookie named `__Host-clavis-session-<tenant ID>`, so tenants on one host never share
+  a session. Sessions end after 24 hours without use or 14 days in all, and a new sign-in
+  replaces the browser's previous session. Every Clavis cookie is `Secure`, `HttpOnly` and
+  `SameSite=Lax`, with `Path=/`.
+- **Hosted pages:** rendered on the server with templ, without scripts. They send a Content
+  Security Policy that allows only same-origin stylesheets and images, forbids framing, and
+  lets forms submit only to Clavis and, on the login page, to the origin of the client's
+  redirect URI, because browsers apply `form-action` to the redirect after a sign-in. The
+  sign-in form is protected by `http.CrossOriginProtection`, and pages are never cached and
+  send no referrer.
 - **Comparisons:** every secret comparison is constant time.
 - **Logging:** secrets, tokens, passwords, codes and full authorization requests are never
   logged. Audit events record who, what, when and from where, without credential material.

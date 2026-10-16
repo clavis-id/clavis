@@ -51,6 +51,12 @@ type Store interface {
 	Users() Users
 	// Passwords returns the password repository.
 	Passwords() Passwords
+	// AuthorizationRequests returns the authorization request repository.
+	AuthorizationRequests() AuthorizationRequests
+	// Sessions returns the browser session repository.
+	Sessions() Sessions
+	// AuthorizationCodes returns the authorization code repository.
+	AuthorizationCodes() AuthorizationCodes
 	// Ping reports whether the underlying database is reachable.
 	Ping(ctx context.Context) error
 }
@@ -188,6 +194,8 @@ type Clients interface {
 	// within the tenant, is already in use, and ErrNotFound when the tenant
 	// does not exist.
 	Create(ctx context.Context, c Client) error
+	// Get returns the client of a tenant with the given ID, or ErrNotFound.
+	Get(ctx context.Context, tenantID, id uuid.UUID) (Client, error)
 	// GetByClientID returns the client of a tenant with the given client ID,
 	// or ErrNotFound.
 	GetByClientID(ctx context.Context, tenantID uuid.UUID, clientID string) (Client, error)
@@ -307,4 +315,121 @@ type Passwords interface {
 	// in the meantime. It returns ErrConflict when the hash has changed and
 	// ErrNotFound when the user has no password.
 	Rehash(ctx context.Context, tenantID, userID uuid.UUID, oldHash, newHash string) error
+}
+
+// AuthorizationRequest is a validated authorization request that waits for
+// the user to sign in (ADR 0013).
+type AuthorizationRequest struct {
+	// ID is a random 128-bit value in unpadded base64url. The browser
+	// carries it through the hosted pages.
+	ID       string
+	TenantID uuid.UUID
+	// ClientID is the ID of the client record, not the OAuth client
+	// identifier.
+	ClientID uuid.UUID
+	// BindingHash is the SHA-256 hash of the binding cookie of the browser
+	// that sent the request.
+	BindingHash []byte
+	// RedirectURI is where the response goes. RedirectURIProvided says
+	// whether the request named it or Clavis chose the only registered one.
+	RedirectURI         string
+	RedirectURIProvided bool
+	Scopes              []string
+	State               string
+	Nonce               string
+	// CodeChallenge and CodeChallengeMethod are empty when the request has
+	// no PKCE challenge.
+	CodeChallenge       string
+	CodeChallengeMethod string
+	CreatedAt           time.Time
+	ExpiresAt           time.Time
+}
+
+// AuthorizationRequests stores authorization requests. Every method works
+// within one tenant.
+type AuthorizationRequests interface {
+	// Create inserts r. It returns ErrConflict when the ID is in use, and
+	// ErrNotFound when the client does not exist in the tenant.
+	Create(ctx context.Context, r AuthorizationRequest) error
+	// Get returns the request of a tenant with the given ID, or ErrNotFound.
+	// It returns expired requests too; callers check ExpiresAt.
+	Get(ctx context.Context, tenantID uuid.UUID, id string) (AuthorizationRequest, error)
+	// Delete removes the request of a tenant with the given ID, or returns
+	// ErrNotFound. When several callers delete the same request at once,
+	// exactly one succeeds, which makes a request single use.
+	Delete(ctx context.Context, tenantID uuid.UUID, id string) error
+}
+
+// Session is a browser session: a user who signed in to a tenant (ADR 0013).
+type Session struct {
+	// ID is a version 7 UUID assigned on creation.
+	ID       uuid.UUID
+	TenantID uuid.UUID
+	// TokenHash is the SHA-256 hash of the session cookie value. It is
+	// unique.
+	TokenHash []byte
+	UserID    uuid.UUID
+	// AuthTime is when the user authenticated.
+	AuthTime time.Time
+	// AMR lists the authentication methods used, such as "pwd" (RFC 8176).
+	AMR []string
+	// ACR is the authentication context class reference, or empty.
+	ACR        string
+	CreatedAt  time.Time
+	LastSeenAt time.Time
+	// IdleExpiresAt is when the session ends unless it is used again, and
+	// ExpiresAt is when it ends regardless.
+	IdleExpiresAt time.Time
+	ExpiresAt     time.Time
+}
+
+// Sessions stores browser sessions. Every method works within one tenant.
+type Sessions interface {
+	// Create inserts s. It returns ErrConflict when the ID or the token hash
+	// is in use, and ErrNotFound when the user does not exist in the tenant.
+	Create(ctx context.Context, s Session) error
+	// GetByTokenHash returns the session of a tenant with the given token
+	// hash, or ErrNotFound. It returns expired sessions too; callers check
+	// the expiry times.
+	GetByTokenHash(ctx context.Context, tenantID uuid.UUID, tokenHash []byte) (Session, error)
+	// Delete removes the session of a tenant with the given ID, or returns
+	// ErrNotFound.
+	Delete(ctx context.Context, tenantID, id uuid.UUID) error
+}
+
+// AuthorizationCode is an authorization code issued to a client, bound to
+// the request it answers (ADR 0014).
+type AuthorizationCode struct {
+	// Hash is the SHA-256 hash of the code, which identifies it. The code
+	// itself is never stored.
+	Hash     []byte
+	TenantID uuid.UUID
+	// ClientID is the ID of the client record.
+	ClientID  uuid.UUID
+	UserID    uuid.UUID
+	SessionID uuid.UUID
+	// RedirectURI and RedirectURIProvided are those of the authorization
+	// request, which the token request must match.
+	RedirectURI         string
+	RedirectURIProvided bool
+	Scopes              []string
+	Nonce               string
+	CodeChallenge       string
+	CodeChallengeMethod string
+	AuthTime            time.Time
+	AMR                 []string
+	ACR                 string
+	CreatedAt           time.Time
+	ExpiresAt           time.Time
+}
+
+// AuthorizationCodes stores authorization codes. Every method works within
+// one tenant.
+type AuthorizationCodes interface {
+	// Create inserts c. It returns ErrConflict when the hash is in use, and
+	// ErrNotFound when the client or the user does not exist in the tenant.
+	Create(ctx context.Context, c AuthorizationCode) error
+	// Get returns the code of a tenant with the given hash, or ErrNotFound.
+	// It returns expired codes too; callers check ExpiresAt.
+	Get(ctx context.Context, tenantID uuid.UUID, hash []byte) (AuthorizationCode, error)
 }

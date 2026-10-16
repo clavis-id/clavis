@@ -4,6 +4,41 @@
 
 package db
 
+type AuthorizationCode struct {
+	Hash                []byte
+	TenantID            string
+	ClientID            string
+	UserID              string
+	SessionID           string
+	RedirectUri         string
+	RedirectUriProvided int64
+	Scopes              string
+	Nonce               string
+	CodeChallenge       string
+	CodeChallengeMethod string
+	AuthTime            int64
+	Amr                 string
+	Acr                 string
+	CreatedAt           int64
+	ExpiresAt           int64
+}
+
+type AuthorizationRequest struct {
+	ID                  string
+	TenantID            string
+	ClientID            string
+	BindingHash         []byte
+	RedirectUri         string
+	RedirectUriProvided int64
+	Scopes              string
+	State               string
+	Nonce               string
+	CodeChallenge       string
+	CodeChallengeMethod string
+	CreatedAt           int64
+	ExpiresAt           int64
+}
+
 type Client struct {
 	ID                                  string
 	TenantID                            string
@@ -30,6 +65,20 @@ type Password struct {
 	TenantID string
 	Hash     string
 	SetAt    int64
+}
+
+type Session struct {
+	ID            string
+	TenantID      string
+	TokenHash     []byte
+	UserID        string
+	AuthTime      int64
+	Amr           string
+	Acr           string
+	CreatedAt     int64
+	LastSeenAt    int64
+	IdleExpiresAt int64
+	ExpiresAt     int64
 }
 
 type SigningKey struct {

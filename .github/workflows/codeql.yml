@@ -40,3 +40,20 @@ jobs:
       - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           category: /language:go
+          output: sarif-results
+          upload: failure-only
+      # templ generates "ctx = ..." assignments that some components never
+      # read, and its files are rewritten on every make generate, so the
+      # quality rule about useless assignments cannot be fixed in them. Only
+      # that rule is removed, only in generated *_templ.go files; every other
+      # rule, including the security queries, still applies there.
+      - uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
+        with:
+          patterns: |
+            -**/*_templ.go:go/useless-assignment-to-local
+          input: sarif-results/go.sarif
+          output: sarif-results/go.sarif
+      - uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: sarif-results/go.sarif
+          category: /language:go
