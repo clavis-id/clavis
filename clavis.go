@@ -20,9 +20,11 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"clavisid.org/clavis/internal/app"
+	"clavisid.org/clavis/internal/authn/password"
 	"clavisid.org/clavis/internal/issuer"
 	"clavisid.org/clavis/internal/keys"
 	"clavisid.org/clavis/internal/oidc"
+	"clavisid.org/clavis/internal/ui"
 	"clavisid.org/clavis/kek"
 	"clavisid.org/clavis/store"
 )
@@ -74,6 +76,59 @@ type Config struct {
 	// MeterProvider creates the metrics Clavis records. When nil, the global
 	// provider of go.opentelemetry.io/otel is used.
 	MeterProvider metric.MeterProvider
+
+	// Passwords configures password hashing. Zero fields take their
+	// defaults.
+	Passwords PasswordPolicy
+}
+
+// PasswordPolicy configures password hashing (ADR 0015). Zero fields take
+// their defaults, which follow the OWASP Password Storage Cheat Sheet.
+type PasswordPolicy struct {
+	// MinLength is the shortest password users may choose, in characters,
+	// from 8 to 256. Default: 8.
+	MinLength int
+	// Argon2idMemoryKiB, Argon2idIterations and Argon2idParallelism set the
+	// cost of new argon2id hashes. Defaults: 19456 KiB, 2 and 1, the
+	// minimum.
+	Argon2idMemoryKiB   uint32
+	Argon2idIterations  uint32
+	Argon2idParallelism uint8
+	// PBKDF2Iterations sets the cost of new PBKDF2-HMAC-SHA-256 hashes, which
+	// replace argon2id in FIPS 140-3 mode. Default: 600,000, the minimum.
+	PBKDF2Iterations int
+	// MaxConcurrentHashes bounds how many hashes are computed at once, and
+	// so the memory they use. Default: the number of CPUs available.
+	MaxConcurrentHashes int
+	// RefuseArgon2idInFIPSMode stops FIPS 140-3 mode from verifying argon2id
+	// hashes created before it was enabled; those users must reset their
+	// passwords. By default, FIPS mode verifies each such hash once and
+	// replaces it with a PBKDF2 hash.
+	RefuseArgon2idInFIPSMode bool
+}
+
+// config returns the policy with password.DefaultConfig applied to zero
+// fields.
+func (p PasswordPolicy) config() password.Config {
+	cfg := password.DefaultConfig()
+	if p.MinLength != 0 {
+		cfg.MinLength = p.MinLength
+	}
+	if p.Argon2idMemoryKiB != 0 {
+		cfg.Argon2id.MemoryKiB = p.Argon2idMemoryKiB
+	}
+	if p.Argon2idIterations != 0 {
+		cfg.Argon2id.Iterations = p.Argon2idIterations
+	}
+	if p.Argon2idParallelism != 0 {
+		cfg.Argon2id.Parallelism = p.Argon2idParallelism
+	}
+	if p.PBKDF2Iterations != 0 {
+		cfg.PBKDF2Iterations = p.PBKDF2Iterations
+	}
+	cfg.MaxConcurrent = p.MaxConcurrentHashes
+	cfg.FIPSMigrateArgon2id = !p.RefuseArgon2idInFIPSMode
+	return cfg
 }
 
 // SigningKeyPolicy configures token signing keys. Zero fields take their
@@ -109,6 +164,9 @@ type Server struct {
 	issuer        *url.URL
 	store         store.Store
 	keys          *keys.Manager
+	passwords     *password.Hasher
+	assets        *ui.Assets
+	crossOrigin   *http.CrossOriginProtection
 	deps          app.Deps
 	defaultTenant store.Tenant
 	algorithms    []string
@@ -147,6 +205,14 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	policy := cfg.SigningKeys.withDefaults()
 	if err := policy.Validate(); err != nil {
 		return nil, fmt.Errorf("clavis: invalid SigningKeys: %w", err)
+	}
+	passwords, err := password.New(cfg.Passwords.config())
+	if err != nil {
+		return nil, fmt.Errorf("clavis: invalid Passwords: %w", err)
+	}
+	assets, err := ui.NewAssets()
+	if err != nil {
+		return nil, fmt.Errorf("clavis: %w", err)
 	}
 	logger := cfg.Logger
 	if logger == nil {
@@ -187,6 +253,9 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		issuer:        iss,
 		store:         cfg.Store,
 		keys:          manager,
+		passwords:     passwords,
+		assets:        assets,
+		crossOrigin:   http.NewCrossOriginProtection(),
 		deps:          deps,
 		defaultTenant: tenant,
 		algorithms:    policy.Algorithms,
@@ -251,6 +320,13 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /readyz", s.handleReady)
 	s.handleTenant(mux, http.MethodGet, oidc.DiscoveryPath, s.handleMetadata)
 	s.handleTenant(mux, http.MethodGet, oidc.JWKSPath, s.handleJWKS)
+	s.handleTenant(mux, http.MethodGet, oidc.AuthorizationPath, s.handleAuthorize)
+	s.handleTenant(mux, http.MethodPost, oidc.AuthorizationPath, s.handleAuthorize)
+	s.handleTenant(mux, http.MethodGet, loginPath, s.handleLoginPage)
+	s.handleTenant(mux, http.MethodPost, loginPath, s.handleLogin)
+	// Assets are the same for every tenant and are not instrumented, like
+	// the probes.
+	mux.HandleFunc(http.MethodGet+" "+assetsPath+"{name}", s.handleAsset)
 	if s.issuer.Path == "" {
 		mux.Handle(oidc.AuthorizationServerMetadataPath, s.wellKnown)
 		mux.Handle(oidc.AuthorizationServerMetadataPath+"/", s.wellKnown)
@@ -258,10 +334,18 @@ func (s *Server) routes() http.Handler {
 	return mux
 }
 
-// tenant is the tenant a request addresses, with its issuer identifier.
+// tenant is the tenant a request addresses, with its issuer identifier and
+// the path of that issuer on this host.
 type tenant struct {
 	store.Tenant
 	issuer string
+	path   string
+}
+
+// authorizationTenant returns what the authorization use cases need to know
+// about t.
+func (t tenant) authorizationTenant() app.AuthorizationTenant {
+	return app.AuthorizationTenant{ID: t.ID, Issuer: t.issuer}
 }
 
 // tenantHandler serves a request addressed to one tenant.
@@ -285,7 +369,7 @@ func (s *Server) handleTenant(mux *http.ServeMux, method, path string, h tenantH
 // response.
 func (s *Server) serveTenant(w http.ResponseWriter, r *http.Request, slug string, h tenantHandler) {
 	if slug == "" {
-		h(w, r, tenant{Tenant: s.defaultTenant, issuer: s.issuer.String()})
+		h(w, r, tenant{Tenant: s.defaultTenant, issuer: s.issuer.String(), path: s.issuer.Path})
 		return
 	}
 	t, err := app.TenantBySlug(r.Context(), s.deps, slug)
@@ -297,7 +381,11 @@ func (s *Server) serveTenant(w http.ResponseWriter, r *http.Request, slug string
 		s.internalError(w, r, "resolving the tenant", err)
 		return
 	}
-	h(w, r, tenant{Tenant: t, issuer: s.issuer.String() + tenantPathPrefix + t.Slug})
+	h(w, r, tenant{
+		Tenant: t,
+		issuer: s.issuer.String() + tenantPathPrefix + t.Slug,
+		path:   s.issuer.Path + tenantPathPrefix + t.Slug,
+	})
 }
 
 // instrument wraps h so that it records a span and HTTP metrics named after

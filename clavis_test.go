@@ -26,7 +26,7 @@ import (
 	"clavisid.org/clavis/store/sqlite"
 )
 
-func openStore(t *testing.T) *sqlite.Store {
+func openStore(t testing.TB) *sqlite.Store {
 	t.Helper()
 	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "clavis.db"))
 	if err != nil {
@@ -36,7 +36,7 @@ func openStore(t *testing.T) *sqlite.Store {
 	return s
 }
 
-func testConfig(t *testing.T, st store.Store) Config {
+func testConfig(t testing.TB, st store.Store) Config {
 	t.Helper()
 	enc, err := kek.NewLocal(kek.GenerateSecret())
 	if err != nil {
@@ -45,13 +45,13 @@ func testConfig(t *testing.T, st store.Store) Config {
 	return Config{Issuer: "http://localhost:8080", Store: st, KeyEncrypter: enc}
 }
 
-func newTestServer(t *testing.T, st store.Store) *Server {
+func newTestServer(t testing.TB, st store.Store) *Server {
 	t.Helper()
 	return mustNew(t, testConfig(t, st))
 }
 
 // mustNew creates a Server that is closed when the test ends.
-func mustNew(t *testing.T, cfg Config) *Server {
+func mustNew(t testing.TB, cfg Config) *Server {
 	t.Helper()
 	s, err := New(t.Context(), cfg)
 	if err != nil {

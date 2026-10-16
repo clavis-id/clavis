@@ -159,6 +159,15 @@ func serve(ctx context.Context, configPath string, environ []string, logOutput i
 		Logger:         logger,
 		TracerProvider: tel.Tracer,
 		MeterProvider:  tel.Meter,
+		Passwords: clavis.PasswordPolicy{
+			MinLength:                cfg.Passwords.MinLength,
+			Argon2idMemoryKiB:        cfg.Passwords.Argon2id.MemoryKiB,
+			Argon2idIterations:       cfg.Passwords.Argon2id.Iterations,
+			Argon2idParallelism:      cfg.Passwords.Argon2id.Parallelism,
+			PBKDF2Iterations:         cfg.Passwords.PBKDF2Iterations,
+			MaxConcurrentHashes:      cfg.Passwords.MaxConcurrentHashes,
+			RefuseArgon2idInFIPSMode: !cfg.Passwords.FIPSMigrateArgon2id,
+		},
 	})
 	if err != nil {
 		return err

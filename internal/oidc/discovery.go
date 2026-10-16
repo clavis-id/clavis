@@ -33,9 +33,13 @@ type Metadata struct {
 	GrantTypesSupported              []string `json:"grant_types_supported"`
 	SubjectTypesSupported            []string `json:"subject_types_supported"`
 	IDTokenSigningAlgValuesSupported []string `json:"id_token_signing_alg_values_supported"`
-	ClaimsParameterSupported         bool     `json:"claims_parameter_supported"`
-	RequestParameterSupported        bool     `json:"request_parameter_supported"`
-	RequestURIParameterSupported     bool     `json:"request_uri_parameter_supported"`
+	CodeChallengeMethodsSupported    []string `json:"code_challenge_methods_supported"`
+	// AuthorizationResponseIssParameterSupported announces the iss parameter
+	// in authorization responses (RFC 9207, section 3).
+	AuthorizationResponseIssParameterSupported bool `json:"authorization_response_iss_parameter_supported"`
+	ClaimsParameterSupported                   bool `json:"claims_parameter_supported"`
+	RequestParameterSupported                  bool `json:"request_parameter_supported"`
+	RequestURIParameterSupported               bool `json:"request_uri_parameter_supported"`
 }
 
 // NewMetadata returns the metadata of the tenant whose issuer is issuer,
@@ -55,5 +59,9 @@ func NewMetadata(issuer string, signingAlgorithms []string) Metadata {
 		GrantTypesSupported:              []string{"authorization_code"},
 		SubjectTypesSupported:            []string{"public"},
 		IDTokenSigningAlgValuesSupported: append([]string(nil), signingAlgorithms...),
+		// RFC 8414, section 2: without this field, clients cannot tell that
+		// PKCE is supported. Only S256 is (ADR 0018).
+		CodeChallengeMethodsSupported:              []string{"S256"},
+		AuthorizationResponseIssParameterSupported: true,
 	}
 }
