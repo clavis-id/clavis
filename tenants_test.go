@@ -91,7 +91,11 @@ func TestProviderMetadata(t *testing.T) {
 	}
 }
 
-func TestMetadataListsConfiguredAlgorithms(t *testing.T) {
+// TestMetadataAnnouncesOnlyTheIDTokenAlgorithm checks that keys of other
+// algorithms are published but not announced for ID tokens: clients cannot
+// choose them yet, and the first key of a newly enabled algorithm is
+// published a day before it can sign.
+func TestMetadataAnnouncesOnlyTheIDTokenAlgorithm(t *testing.T) {
 	t.Parallel()
 
 	cfg := testConfig(t, openStore(t))
@@ -103,8 +107,8 @@ func TestMetadataListsConfiguredAlgorithms(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
 		t.Fatalf("decoding metadata: %v", err)
 	}
-	if len(doc.Algs) != 2 || doc.Algs[0] != "RS256" || doc.Algs[1] != "EdDSA" {
-		t.Errorf("id_token_signing_alg_values_supported = %v, want [RS256 EdDSA]", doc.Algs)
+	if !slices.Equal(doc.Algs, []string{"RS256"}) {
+		t.Errorf("id_token_signing_alg_values_supported = %v, want [RS256]", doc.Algs)
 	}
 }
 
@@ -200,18 +204,27 @@ func TestNewCopiesSigningAlgorithms(t *testing.T) {
 
 	cfg := testConfig(t, openStore(t))
 	cfg.SigningKeys.Algorithms = []string{"RS256", "ES256"}
-	h := mustNew(t, cfg).Handler()
+	s := mustNew(t, cfg)
 	cfg.SigningKeys.Algorithms[1] = "EdDSA"
 
-	rec := serve(t, h, http.MethodGet, "/.well-known/openid-configuration")
+	// A tenant created afterwards gets keys for the algorithms passed to New.
+	createTenant(t, s, "acme")
+	rec := serve(t, s.Handler(), http.MethodGet, "/t/acme/oauth2/jwks")
 	var doc struct {
-		Algs []string `json:"id_token_signing_alg_values_supported"`
+		Keys []struct {
+			Alg string `json:"alg"`
+		} `json:"keys"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
-		t.Fatalf("decoding metadata: %v", err)
+		t.Fatalf("decoding the JWK set: %v", err)
 	}
-	if !slices.Equal(doc.Algs, []string{"RS256", "ES256"}) {
-		t.Errorf("algorithms = %v, want the values passed to New", doc.Algs)
+	var algs []string
+	for _, k := range doc.Keys {
+		algs = append(algs, k.Alg)
+	}
+	slices.Sort(algs)
+	if !slices.Equal(algs, []string{"ES256", "RS256"}) {
+		t.Errorf("algorithms = %v, want the values passed to New", algs)
 	}
 }
 
