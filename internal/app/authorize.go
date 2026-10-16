@@ -96,6 +96,14 @@ func StartAuthorization(ctx context.Context, d Deps, t AuthorizationTenant, para
 				Description: "the client may not request every scope in the request"}, r.State)
 		}
 	}
+	owners, err := scopeOwners(ctx, d, t.ID)
+	if err != nil {
+		return "", err
+	}
+	if undefinedScope(r.Scopes, owners) != "" {
+		return "", fail(&oauth.Error{Code: oauth.ErrorInvalidScope,
+			Description: "the request includes a scope that no API resource defines"}, r.State)
+	}
 	// ADR 0018: PKCE is required unless an operator exempted this
 	// confidential client.
 	if r.CodeChallenge == "" && (client.Type != store.ClientConfidential || !client.PKCEExempt) {
@@ -331,8 +339,8 @@ func endSession(ctx context.Context, d Deps, tenantID uuid.UUID, tokenHash []byt
 	return nil
 }
 
-// PurgeExpired deletes the expired authorization requests and sessions of
-// every tenant, and the codes that expired more than
+// PurgeExpired deletes the expired authorization requests, sessions and
+// access token records of every tenant, and the codes that expired more than
 // AuthorizationCodeRetention ago. It goes on after a failure and returns
 // every error.
 func PurgeExpired(ctx context.Context, d Deps) error {
@@ -349,11 +357,13 @@ func PurgeExpired(ctx context.Context, d Deps) error {
 	sessions := purge("sessions", d.Store.Sessions().DeleteExpired, now)
 	codes := purge("authorization codes", d.Store.AuthorizationCodes().DeleteExpired,
 		now.Add(-AuthorizationCodeRetention))
-	if requests+sessions+codes > 0 {
+	tokens := purge("access tokens", d.Store.AccessTokens().DeleteExpired, now)
+	if requests+sessions+codes+tokens > 0 {
 		d.Logger.LogAttrs(ctx, slog.LevelInfo, "deleted expired records",
 			slog.Int64("authorization_requests", requests),
 			slog.Int64("sessions", sessions),
-			slog.Int64("authorization_codes", codes))
+			slog.Int64("authorization_codes", codes),
+			slog.Int64("access_tokens", tokens))
 	}
 	return errors.Join(errs...)
 }
