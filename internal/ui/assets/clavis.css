@@ -1,0 +1,112 @@
+/* Hosted pages of Clavis. Tenants will theme them through these properties. */
+:root {
+  color-scheme: light dark;
+  --clavis-background: #f4f5f7;
+  --clavis-surface: #ffffff;
+  --clavis-text: #1b1f24;
+  --clavis-muted: #57606a;
+  --clavis-border: #d0d7de;
+  --clavis-accent: #0b5cad;
+  --clavis-accent-text: #ffffff;
+  --clavis-error: #b42318;
+  --clavis-radius: 8px;
+  --clavis-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --clavis-background: #0d1117;
+    --clavis-surface: #161b22;
+    --clavis-text: #e6edf3;
+    --clavis-muted: #9198a1;
+    --clavis-border: #30363d;
+    --clavis-accent: #4493f8;
+    --clavis-accent-text: #0d1117;
+    --clavis-error: #f85149;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: var(--clavis-background);
+  color: var(--clavis-text);
+  font-family: var(--clavis-font);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.card {
+  width: 100%;
+  max-width: 24rem;
+  padding: 2rem;
+  background: var(--clavis-surface);
+  border: 1px solid var(--clavis-border);
+  border-radius: var(--clavis-radius);
+}
+
+h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.lead {
+  margin: 0 0 1.5rem;
+  color: var(--clavis-muted);
+}
+
+.error {
+  margin: 0 0 1rem;
+  color: var(--clavis-error);
+  font-weight: 500;
+}
+
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+label {
+  font-weight: 500;
+}
+
+input {
+  width: 100%;
+  margin-bottom: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--clavis-border);
+  border-radius: var(--clavis-radius);
+}
+
+input:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--clavis-accent);
+  outline-offset: 2px;
+}
+
+button {
+  margin-top: 0.5rem;
+  padding: 0.625rem 1rem;
+  font: inherit;
+  font-weight: 600;
+  color: var(--clavis-accent-text);
+  background: var(--clavis-accent);
+  border: 0;
+  border-radius: var(--clavis-radius);
+  cursor: pointer;
+}

@@ -1,0 +1,46 @@
+package ui
+
+// layout is the frame of every hosted page.
+templ layout(l Layout, title string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta name="referrer" content="no-referrer"/>
+			<title>{ title }</title>
+			<link rel="stylesheet" href={ templ.SafeURL(l.Stylesheet) }/>
+		</head>
+		<body>
+			<main class="card">
+				<h1>{ title }</h1>
+				{ children... }
+			</main>
+		</body>
+	</html>
+}
+
+// Login renders the password sign-in form.
+templ Login(p LoginPage) {
+	@layout(p.Layout, "Sign in") {
+		<p class="lead">to continue to <strong>{ p.ClientName }</strong></p>
+		if p.Error != "" {
+			<p class="error" role="alert">{ p.Error }</p>
+		}
+		<form method="post" action={ templ.SafeURL(p.Action) }>
+			<input type="hidden" name="request" value={ p.RequestID }/>
+			<label for="email">Email</label>
+			<input id="email" name="email" type="email" autocomplete="username" required autofocus value={ p.Email }/>
+			<label for="password">Password</label>
+			<input id="password" name="password" type="password" autocomplete="current-password" required/>
+			<button id="submit" type="submit">Sign in</button>
+		</form>
+	}
+}
+
+// Error renders a page that explains why a request cannot continue.
+templ Error(p ErrorPage) {
+	@layout(p.Layout, p.Title) {
+		<p>{ p.Message }</p>
+	}
+}

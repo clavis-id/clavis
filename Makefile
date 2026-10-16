@@ -79,13 +79,19 @@ cover: ## Run tests and write a coverage profile
 	$(GO) tool cover -func=$(COVER_PROFILE) | tail -n 1
 
 .PHONY: generate
-generate: ## Regenerate code (sqlc runs in Docker)
+generate: ## Regenerate code: sqlc queries (in Docker) and templ pages
 	docker run --rm --user "$$(id -u):$$(id -g)" -v "$(CURDIR)":/src -w /src $(SQLC_IMAGE) generate
+	$(call TOOL,templ) generate -path internal/ui
 
+# The templ runtime in go.mod must match the generator in tools/templ: the
+# generated files record the generator version, so a mismatch shows here.
 .PHONY: generate-check
 generate-check: generate ## Fail if generated code is out of date
-	@test -z "$$(git status --porcelain -- store)" || \
-		{ git status --porcelain -- store; echo "generated code is out of date: run make generate"; exit 1; }
+	@test -z "$$(git status --porcelain -- store internal/ui)" || \
+		{ git status --porcelain -- store internal/ui; echo "generated code is out of date: run make generate"; exit 1; }
+	@test "$$($(GO) list -m -f '{{.Version}}' github.com/a-h/templ)" = \
+		"$$($(GO) list -modfile=tools/templ/go.mod -m -f '{{.Version}}' github.com/a-h/templ)" || \
+		{ echo "github.com/a-h/templ differs between go.mod and tools/templ/go.mod"; exit 1; }
 
 .PHONY: cover-check
 cover-check: ## Fail if a security-critical package is below the coverage floor
