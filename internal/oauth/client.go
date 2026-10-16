@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"uuid"
 )
 
 // MaxClientIDLength is the longest client identifier, in bytes.
@@ -48,6 +49,12 @@ func ValidateClientID(id string) error {
 			return fmt.Errorf("%w: %q must start with a letter or digit and contain only letters, "+
 				"digits, hyphens, periods, underscores and tildes", ErrInvalidClientID, id)
 		}
+	}
+	// A token a client obtains for itself carries its client ID as sub, and
+	// user tokens carry the user's ID, a UUID. A client ID that is a UUID
+	// could take a user's sub (RFC 9068, section 5).
+	if _, err := uuid.Parse(id); err == nil {
+		return fmt.Errorf("%w: %q must not be a UUID, which could match a user identifier", ErrInvalidClientID, id)
 	}
 	return nil
 }
