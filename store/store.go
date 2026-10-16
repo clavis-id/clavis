@@ -358,6 +358,9 @@ type AuthorizationRequests interface {
 	// ErrNotFound. When several callers delete the same request at once,
 	// exactly one succeeds, which makes a request single use.
 	Delete(ctx context.Context, tenantID uuid.UUID, id string) error
+	// DeleteExpired removes the requests of every tenant whose ExpiresAt is
+	// not after now, and returns how many were removed.
+	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
 }
 
 // Session is a browser session: a user who signed in to a tenant (ADR 0013).
@@ -395,6 +398,9 @@ type Sessions interface {
 	// Delete removes the session of a tenant with the given ID, or returns
 	// ErrNotFound.
 	Delete(ctx context.Context, tenantID, id uuid.UUID) error
+	// DeleteExpired removes the sessions of every tenant whose ExpiresAt or
+	// IdleExpiresAt is not after now, and returns how many were removed.
+	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
 }
 
 // AuthorizationCode is an authorization code issued to a client, bound to
@@ -432,4 +438,8 @@ type AuthorizationCodes interface {
 	// Get returns the code of a tenant with the given hash, or ErrNotFound.
 	// It returns expired codes too; callers check ExpiresAt.
 	Get(ctx context.Context, tenantID uuid.UUID, hash []byte) (AuthorizationCode, error)
+	// DeleteExpired removes the codes of every tenant whose ExpiresAt is not
+	// after before, and returns how many were removed. Callers keep expired
+	// codes for a while by passing a time in the past.
+	DeleteExpired(ctx context.Context, before time.Time) (int64, error)
 }

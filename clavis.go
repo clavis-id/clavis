@@ -37,6 +37,10 @@ const readinessTimeout = 2 * time.Second
 // successor key before it starts signing.
 const jwksMaxAge = 5 * time.Minute
 
+// cleanupInterval is how often expired authorization requests, sessions and
+// codes are deleted. It matches the lifetime of an authorization request.
+const cleanupInterval = 10 * time.Minute
+
 // metadataMaxAge is how long clients may cache the provider metadata.
 const metadataMaxAge = 5 * time.Minute
 
@@ -177,15 +181,16 @@ type Server struct {
 	wellKnown     http.Handler
 
 	stop      context.CancelFunc
-	done      chan struct{}
+	work      sync.WaitGroup
 	closeOnce sync.Once
 }
 
 // New validates cfg, prepares the store (creating the default tenant and its
 // signing keys on first use) and returns a ready-to-use Server.
 //
-// New starts signing key rotation in the background. Call Close to stop it
-// when the Server is no longer needed; canceling ctx stops it too.
+// New starts signing key rotation and the cleanup of expired records in the
+// background. Call Close to stop them when the Server is no longer needed;
+// canceling ctx stops them too.
 // Background work never outlives ctx, so ctx must live as long as the Server
 // is in use.
 func New(ctx context.Context, cfg Config) (*Server, error) {
@@ -263,16 +268,32 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		tracer:        tracer,
 		meter:         meter,
 		stop:          stop,
-		done:          make(chan struct{}),
 	}
 	s.wellKnown = allowGet(s.instrument(http.MethodGet+" "+oidc.AuthorizationServerMetadataPath,
 		http.HandlerFunc(s.handleWellKnown)))
 	s.handler = s.routes()
-	go func() {
-		defer close(s.done)
-		manager.Run(bgCtx)
-	}()
+	s.work.Go(func() { manager.Run(bgCtx) })
+	s.work.Go(func() { s.runCleanup(bgCtx) })
 	return s, nil
+}
+
+// runCleanup deletes expired authorization requests, sessions and codes
+// every cleanupInterval until ctx is canceled. Instances that share a store
+// may all run it; deleting an expired record twice is harmless.
+func (s *Server) runCleanup(ctx context.Context) {
+	ticker := time.NewTicker(cleanupInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := app.PurgeExpired(ctx, s.deps); err != nil && ctx.Err() == nil {
+				s.logger.LogAttrs(ctx, slog.LevelError, "deleting expired records failed",
+					slog.String("error", err.Error()))
+			}
+		}
+	}
 }
 
 // Close stops the background work started by New and waits for it to
@@ -281,7 +302,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 // are no longer rotated.
 func (s *Server) Close() error {
 	s.closeOnce.Do(s.stop)
-	<-s.done
+	s.work.Wait()
 	return nil
 }
 

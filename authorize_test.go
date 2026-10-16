@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"clavisid.org/clavis/internal/app"
@@ -225,7 +226,7 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 
 	// The request is single use.
 	res, page = b.post(issuer+"/login", loginForm(id, testPassword), "same-origin")
-	if res.StatusCode != http.StatusBadRequest || !strings.Contains(page, "Sign-in expired") {
+	if res.StatusCode != http.StatusBadRequest || !strings.Contains(page, "Sign-in request no longer valid") {
 		t.Errorf("a second login = %d:\n%s", res.StatusCode, page)
 	}
 }
@@ -303,7 +304,7 @@ func TestLoginRequiresTheBrowserThatStarted(t *testing.T) {
 	victim.jar[bindingCookie] = oauth.NewToken()
 	for name, b := range map[string]*browser{"another browser": victim, "no cookie": newBrowser(t, s.Handler())} {
 		if res, page := b.get(issuer + "/login?request=" + id); res.StatusCode != http.StatusBadRequest ||
-			!strings.Contains(page, "Sign-in expired") {
+			!strings.Contains(page, "Sign-in request no longer valid") {
 			t.Errorf("%s: login page = %d", name, res.StatusCode)
 		}
 		if res, _ := b.post(issuer+"/login", loginForm(id, testPassword), "same-origin"); res.StatusCode != http.StatusBadRequest {
@@ -452,4 +453,46 @@ func FuzzAuthorizationEndpoint(f *testing.F) {
 			t.Errorf("query %q: status %d", query, rec.Code)
 		}
 	})
+}
+
+func TestServerDeletesExpiredRequests(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const issuer = "https://auth.example.com"
+		s, tn := newLoginServer(t, issuer, "")
+		id := newBrowser(t, s.Handler()).startLogin(issuer, authorizeQuery())
+		stored := func() bool {
+			_, err := s.store.AuthorizationRequests().Get(t.Context(), tn.ID, id)
+			return err == nil
+		}
+
+		time.Sleep(cleanupInterval - time.Second)
+		synctest.Wait()
+		if !stored() {
+			t.Fatal("the request was deleted before it expired")
+		}
+		// The request expires when the first cleanup runs.
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if stored() {
+			t.Error("the expired request is still stored after the cleanup")
+		}
+	})
+}
+
+func TestAuthorizeRejectsHEAD(t *testing.T) {
+	t.Parallel()
+	const issuer = "https://auth.example.com"
+	s, _ := newLoginServer(t, issuer, "")
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodHead, "/oauth2/authorize?"+authorizeQuery().Encode(), http.NoBody)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed || rec.Header().Get("Allow") != "GET, POST" ||
+		rec.Header().Get("Set-Cookie") != "" || rec.Header().Get("Location") != "" {
+		t.Errorf("HEAD authorize = %d, %v; want 405 without a cookie or a redirect", rec.Code, rec.Header())
+	}
+	// Nothing was stored: the first request a browser starts afterwards is
+	// the only one.
+	if n, err := s.store.AuthorizationRequests().DeleteExpired(t.Context(), time.Now().Add(time.Hour)); err != nil || n != 0 {
+		t.Errorf("stored requests after HEAD = %d, %v; want none", n, err)
+	}
 }

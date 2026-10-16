@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/url"
 	"slices"
 	"strings"
@@ -432,5 +433,84 @@ func TestAuthorizationReportsStoreFailures(t *testing.T) {
 	}
 	if _, err := CompletePasswordLogin(t.Context(), f.d, f.h, f.tenant, p, "ada@example.com", "correct horse", nil); !errors.Is(err, errUnavailable) {
 		t.Errorf("CompletePasswordLogin() = %v, want the store error", err)
+	}
+}
+
+func TestPurgeExpired(t *testing.T) {
+	t.Parallel()
+	f := newAuthzFixture(t)
+	var logs bytes.Buffer
+	f.d.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	start := *f.now
+	pending := f.start(t, webRequest())
+	login, err := CompletePasswordLogin(t.Context(), f.d, f.h, f.tenant, f.start(t, webRequest()),
+		"ada@example.com", "correct horse", nil)
+	if err != nil {
+		t.Fatalf("CompletePasswordLogin() unexpected error: %v", err)
+	}
+	u, _ := url.Parse(login.RedirectURI)
+	codeHash := oauth.HashToken(u.Query().Get("code"))
+	sessionHash := oauth.HashToken(login.SessionToken)
+	exists := func() (request, code, session bool) {
+		_, errR := f.d.Store.AuthorizationRequests().Get(t.Context(), f.tenant.ID, pending.Request.ID)
+		_, errC := f.d.Store.AuthorizationCodes().Get(t.Context(), f.tenant.ID, codeHash)
+		_, errS := f.d.Store.Sessions().GetByTokenHash(t.Context(), f.tenant.ID, sessionHash)
+		return errR == nil, errC == nil, errS == nil
+	}
+
+	for _, step := range []struct {
+		after                  time.Duration
+		request, code, session bool
+	}{
+		{0, true, true, true},
+		// The request has expired; the code has too, but it is retained.
+		{AuthorizationRequestLifetime, false, true, true},
+		{AuthorizationCodeLifetime + AuthorizationCodeRetention - time.Second, false, true, true},
+		{AuthorizationCodeLifetime + AuthorizationCodeRetention, false, false, true},
+		// The session ends after a day without use.
+		{SessionIdleTimeout, false, false, false},
+	} {
+		*f.now = start.Add(step.after)
+		if err := PurgeExpired(t.Context(), f.d); err != nil {
+			t.Fatalf("PurgeExpired() after %v unexpected error: %v", step.after, err)
+		}
+		if r, c, s := exists(); r != step.request || c != step.code || s != step.session {
+			t.Errorf("after %v: request, code and session exist = %v, %v, %v; want %v, %v, %v",
+				step.after, r, c, s, step.request, step.code, step.session)
+		}
+	}
+	if !strings.Contains(logs.String(), "deleted expired records") || !strings.Contains(logs.String(), "sessions=1") {
+		t.Errorf("logs do not report the deletions:\n%s", logs.String())
+	}
+}
+
+// failingPurgeStore fails to delete expired authorization requests.
+type failingPurgeStore struct{ store.Store }
+
+func (f failingPurgeStore) AuthorizationRequests() store.AuthorizationRequests {
+	return failingPurgeRequests{f.Store.AuthorizationRequests()}
+}
+
+type failingPurgeRequests struct{ store.AuthorizationRequests }
+
+func (failingPurgeRequests) DeleteExpired(context.Context, time.Time) (int64, error) {
+	return 0, errUnavailable
+}
+
+func TestPurgeExpiredGoesOnAfterAFailure(t *testing.T) {
+	t.Parallel()
+	f := newAuthzFixture(t)
+	login, err := CompletePasswordLogin(t.Context(), f.d, f.h, f.tenant, f.start(t, webRequest()),
+		"ada@example.com", "correct horse", nil)
+	if err != nil {
+		t.Fatalf("CompletePasswordLogin() unexpected error: %v", err)
+	}
+	f.d.Store = failingPurgeStore{f.d.Store}
+	*f.now = f.now.Add(SessionLifetime)
+	if err := PurgeExpired(t.Context(), f.d); !errors.Is(err, errUnavailable) {
+		t.Errorf("PurgeExpired() = %v, want the store error", err)
+	}
+	if _, err := f.d.Store.Sessions().GetByTokenHash(t.Context(), f.tenant.ID, oauth.HashToken(login.SessionToken)); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("the expired session = %v, want it deleted despite the failure", err)
 	}
 }

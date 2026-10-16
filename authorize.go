@@ -45,6 +45,13 @@ const tokenLength = 43
 // to the client with an error or, when the client or redirect URI cannot be
 // trusted, ends on an error page.
 func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request, t tenant) {
+	// The mux sends HEAD to GET routes, but a HEAD request has no use for a
+	// stored authorization request.
+	if r.Method == http.MethodHead {
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	params, err := authorizationParams(w, r)
 	if err != nil {
 		s.errorPage(w, r, http.StatusBadRequest, "Invalid sign-in request",
@@ -170,8 +177,8 @@ func (s *Server) authorizationRequestError(w http.ResponseWriter, r *http.Reques
 		s.internalError(w, r, "signing in", err)
 		return
 	}
-	s.errorPage(w, r, http.StatusBadRequest, "Sign-in expired",
-		"This sign-in request has expired or was started in another browser. "+
+	s.errorPage(w, r, http.StatusBadRequest, "Sign-in request no longer valid",
+		"This sign-in request has expired, was already completed, or was started in another browser. "+
 			"Return to the application and sign in again.")
 }
 

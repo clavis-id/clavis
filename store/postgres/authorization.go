@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 	"uuid"
 
 	"clavisid.org/clavis/store"
@@ -65,6 +66,14 @@ func (r authorizationRequests) Delete(ctx context.Context, tenantID uuid.UUID, i
 	return nil
 }
 
+func (r authorizationRequests) DeleteExpired(ctx context.Context, now time.Time) (int64, error) {
+	n, err := r.q.DeleteExpiredAuthorizationRequests(ctx, now)
+	if err != nil {
+		return 0, mapError("deleting expired authorization requests", err)
+	}
+	return n, nil
+}
+
 type sessions struct {
 	q *db.Queries
 }
@@ -117,6 +126,14 @@ func (r sessions) Delete(ctx context.Context, tenantID, id uuid.UUID) error {
 	return nil
 }
 
+func (r sessions) DeleteExpired(ctx context.Context, now time.Time) (int64, error) {
+	n, err := r.q.DeleteExpiredSessions(ctx, now)
+	if err != nil {
+		return 0, mapError("deleting expired sessions", err)
+	}
+	return n, nil
+}
+
 type authorizationCodes struct {
 	q *db.Queries
 }
@@ -166,4 +183,12 @@ func (r authorizationCodes) Get(ctx context.Context, tenantID uuid.UUID, hash []
 		CreatedAt:           row.CreatedAt.UTC(),
 		ExpiresAt:           row.ExpiresAt.UTC(),
 	}, nil
+}
+
+func (r authorizationCodes) DeleteExpired(ctx context.Context, before time.Time) (int64, error) {
+	n, err := r.q.DeleteExpiredAuthorizationCodes(ctx, before)
+	if err != nil {
+		return 0, mapError("deleting expired authorization codes", err)
+	}
+	return n, nil
 }

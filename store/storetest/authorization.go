@@ -147,6 +147,33 @@ func runAuthorizationRequests(t *testing.T, open OpenFunc) {
 			t.Errorf("Get() after deleting the client error = %v, want ErrNotFound", err)
 		}
 	})
+
+	t.Run("DeleteExpired", func(t *testing.T) {
+		t.Parallel()
+		f := newAuthorizationFixture(t, open)
+		now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+		expired, expiresNow, alive, otherTenant := newAuthorizationRequest(f.client),
+			newAuthorizationRequest(f.client), newAuthorizationRequest(f.client), newAuthorizationRequest(f.clientB)
+		expired.ExpiresAt = now.Add(-time.Minute)
+		expiresNow.ExpiresAt = now
+		alive.ExpiresAt = now.Add(time.Microsecond)
+		otherTenant.ExpiresAt = now.Add(-time.Minute)
+		for _, r := range []store.AuthorizationRequest{expired, expiresNow, alive, otherTenant} {
+			mustCreateAuthorizationRequest(t, f.s, r)
+		}
+		n, err := f.s.AuthorizationRequests().DeleteExpired(t.Context(), now)
+		if err != nil || n != 3 {
+			t.Fatalf("DeleteExpired() = %d, %v; want 3 removed", n, err)
+		}
+		if _, err := get(t, f, alive.ID); err != nil {
+			t.Errorf("Get() of the request that has not expired = %v, want nil", err)
+		}
+		for _, r := range []store.AuthorizationRequest{expired, expiresNow} {
+			if _, err := get(t, f, r.ID); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("Get() of an expired request = %v, want ErrNotFound", err)
+			}
+		}
+	})
 }
 
 func runSessions(t *testing.T, open OpenFunc) {
@@ -254,6 +281,41 @@ func runSessions(t *testing.T, open OpenFunc) {
 		}
 		if _, err := get(t, f, s.TokenHash); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("GetByTokenHash() after deleting the user error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("DeleteExpired", func(t *testing.T) {
+		t.Parallel()
+		f := newAuthorizationFixture(t, open)
+		now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+		session := func(idle, absolute time.Duration) store.Session {
+			s := newSession(f.user)
+			s.IdleExpiresAt, s.ExpiresAt = now.Add(idle), now.Add(absolute)
+			return s
+		}
+		alive := session(time.Microsecond, time.Hour)
+		expired := []store.Session{
+			session(time.Hour, -time.Minute), // past its lifetime
+			session(-time.Minute, time.Hour), // idle for too long
+			session(0, time.Hour),            // idle expiry exactly now
+			session(time.Hour, 0),            // lifetime exactly now
+		}
+		foreign := newSession(f.userB)
+		foreign.ExpiresAt = now.Add(-time.Minute)
+		for _, s := range append([]store.Session{alive, foreign}, expired...) {
+			mustCreateSession(t, f.s, s)
+		}
+		n, err := f.s.Sessions().DeleteExpired(t.Context(), now)
+		if err != nil || n != 5 {
+			t.Fatalf("DeleteExpired() = %d, %v; want 5 removed", n, err)
+		}
+		if _, err := get(t, f, alive.TokenHash); err != nil {
+			t.Errorf("GetByTokenHash() of the session that has not expired = %v, want nil", err)
+		}
+		for _, s := range expired {
+			if _, err := get(t, f, s.TokenHash); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("GetByTokenHash() of an expired session = %v, want ErrNotFound", err)
+			}
 		}
 	})
 }
@@ -366,6 +428,33 @@ func runAuthorizationCodes(t *testing.T, open OpenFunc) {
 		}
 		if _, err := get(t, f, byUser.Hash); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("Get() after deleting the user error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("DeleteExpired", func(t *testing.T) {
+		t.Parallel()
+		f := newAuthorizationFixture(t, open)
+		before := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+		old, atLimit, recent, foreign := newAuthorizationCode(f.client, f.user), newAuthorizationCode(f.client, f.user),
+			newAuthorizationCode(f.client, f.user), newAuthorizationCode(f.clientB, f.userB)
+		old.ExpiresAt = before.Add(-time.Minute)
+		atLimit.ExpiresAt = before
+		recent.ExpiresAt = before.Add(time.Microsecond)
+		foreign.ExpiresAt = before.Add(-time.Minute)
+		for _, c := range []store.AuthorizationCode{old, atLimit, recent, foreign} {
+			mustCreateAuthorizationCode(t, f.s, c)
+		}
+		n, err := f.s.AuthorizationCodes().DeleteExpired(t.Context(), before)
+		if err != nil || n != 3 {
+			t.Fatalf("DeleteExpired() = %d, %v; want 3 removed", n, err)
+		}
+		if _, err := get(t, f, recent.Hash); err != nil {
+			t.Errorf("Get() of the code expiring after the limit = %v, want nil", err)
+		}
+		for _, c := range []store.AuthorizationCode{old, atLimit} {
+			if _, err := get(t, f, c.Hash); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("Get() of a code expired before the limit = %v, want ErrNotFound", err)
+			}
 		}
 	})
 }

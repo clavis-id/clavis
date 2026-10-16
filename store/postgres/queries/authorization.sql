@@ -18,6 +18,10 @@ WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id);
 DELETE FROM authorization_requests
 WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id);
 
+-- name: DeleteExpiredAuthorizationRequests :execrows
+DELETE FROM authorization_requests
+WHERE expires_at <= $1;
+
 -- name: CreateSession :exec
 INSERT INTO sessions (
     id, tenant_id, token_hash, user_id, auth_time, amr, acr, created_at, last_seen_at, idle_expires_at, expires_at
@@ -35,6 +39,10 @@ WHERE tenant_id = sqlc.arg(tenant_id) AND token_hash = sqlc.arg(token_hash);
 DELETE FROM sessions
 WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id);
 
+-- name: DeleteExpiredSessions :execrows
+DELETE FROM sessions
+WHERE expires_at <= sqlc.arg(now) OR idle_expires_at <= sqlc.arg(now);
+
 -- name: CreateAuthorizationCode :exec
 INSERT INTO authorization_codes (
     hash, tenant_id, client_id, user_id, session_id, redirect_uri, redirect_uri_provided, scopes, nonce,
@@ -51,3 +59,7 @@ SELECT hash, tenant_id, client_id, user_id, session_id, redirect_uri, redirect_u
     code_challenge, code_challenge_method, auth_time, amr, acr, created_at, expires_at
 FROM authorization_codes
 WHERE tenant_id = sqlc.arg(tenant_id) AND hash = sqlc.arg(hash);
+
+-- name: DeleteExpiredAuthorizationCodes :execrows
+DELETE FROM authorization_codes
+WHERE expires_at <= $1;
