@@ -32,7 +32,11 @@ func TestNewClientIDIsRandomAndValid(t *testing.T) {
 
 func TestValidateClientID(t *testing.T) {
 	t.Parallel()
-	for _, id := range []string{"a", "web-app", "Web.App_2~x", "0abc", strings.Repeat("x", MaxClientIDLength)} {
+	for _, id := range []string{
+		"a", "web-app", "Web.App_2~x", "0abc", strings.Repeat("x", MaxClientIDLength),
+		// Almost a UUID: one character short.
+		"01a14513-4517-7b51-a639-98170edf443",
+	} {
 		if err := ValidateClientID(id); err != nil {
 			t.Errorf("ValidateClientID(%q) = %v, want nil", id, err)
 		}
@@ -40,6 +44,9 @@ func TestValidateClientID(t *testing.T) {
 	for _, id := range []string{
 		"", strings.Repeat("x", MaxClientIDLength+1), "-app", ".app", "_app", "~app",
 		"web app", "web:app", "web/app", "web%20app", "app\n", "apé", "a\x00",
+		// UUIDs, the form of user identifiers (RFC 9068, section 5).
+		"01a14513-4517-7b51-a639-98170edf4430", "01A14513-4517-7B51-A639-98170EDF4430",
+		"01a1451345177b51a63998170edf4430",
 	} {
 		if err := ValidateClientID(id); !errors.Is(err, ErrInvalidClientID) {
 			t.Errorf("ValidateClientID(%q) = %v, want ErrInvalidClientID", id, err)
