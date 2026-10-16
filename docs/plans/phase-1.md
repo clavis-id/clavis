@@ -116,7 +116,8 @@ Basic OP, Config OP, Form Post and RP-Initiated Logout plans passing.
    - Add the `refresh_token` grant, available with `offline_access` or by client policy.
    - Refresh tokens are opaque, hashed and rotated on every use. They belong to token
      families, and reusing a rotated token revokes its whole family.
-   - A background job deletes expired codes, authorization requests, sessions and tokens.
+   - The background job that deletes expired codes, authorization requests and sessions,
+     added with work item 1.5, also deletes expired refresh tokens.
 4. **Revocation and introspection.**
    - Implement RFC 7009 and RFC 7662, authenticated with client credentials.
    - Introspection reveals nothing about tokens of other clients unless policy allows it.

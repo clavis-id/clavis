@@ -169,6 +169,45 @@ func (q *Queries) DeleteAuthorizationRequest(ctx context.Context, arg DeleteAuth
 	return result.RowsAffected(), nil
 }
 
+const deleteExpiredAuthorizationCodes = `-- name: DeleteExpiredAuthorizationCodes :execrows
+DELETE FROM authorization_codes
+WHERE expires_at <= $1
+`
+
+func (q *Queries) DeleteExpiredAuthorizationCodes(ctx context.Context, expiresAt time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredAuthorizationCodes, expiresAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteExpiredAuthorizationRequests = `-- name: DeleteExpiredAuthorizationRequests :execrows
+DELETE FROM authorization_requests
+WHERE expires_at <= $1
+`
+
+func (q *Queries) DeleteExpiredAuthorizationRequests(ctx context.Context, expiresAt time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredAuthorizationRequests, expiresAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteExpiredSessions = `-- name: DeleteExpiredSessions :execrows
+DELETE FROM sessions
+WHERE expires_at <= $1 OR idle_expires_at <= $1
+`
+
+func (q *Queries) DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredSessions, now)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteSession = `-- name: DeleteSession :execrows
 DELETE FROM sessions
 WHERE tenant_id = $1 AND id = $2

@@ -79,6 +79,14 @@ func (r authorizationRequests) Delete(ctx context.Context, tenantID uuid.UUID, i
 	return nil
 }
 
+func (r authorizationRequests) DeleteExpired(ctx context.Context, now time.Time) (int64, error) {
+	n, err := r.q.DeleteExpiredAuthorizationRequests(ctx, now.UnixMicro())
+	if err != nil {
+		return 0, mapError("deleting expired authorization requests", err)
+	}
+	return n, nil
+}
+
 type sessions struct {
 	q *db.Queries
 }
@@ -144,6 +152,14 @@ func (r sessions) Delete(ctx context.Context, tenantID, id uuid.UUID) error {
 		return fmt.Errorf("sqlite: deleting session: %w", store.ErrNotFound)
 	}
 	return nil
+}
+
+func (r sessions) DeleteExpired(ctx context.Context, now time.Time) (int64, error) {
+	n, err := r.q.DeleteExpiredSessions(ctx, now.UnixMicro())
+	if err != nil {
+		return 0, mapError("deleting expired sessions", err)
+	}
+	return n, nil
 }
 
 type authorizationCodes struct {
@@ -244,4 +260,12 @@ func parseIDs(kind string, columns ...string) ([]uuid.UUID, error) {
 		ids[i] = id
 	}
 	return ids, nil
+}
+
+func (r authorizationCodes) DeleteExpired(ctx context.Context, before time.Time) (int64, error) {
+	n, err := r.q.DeleteExpiredAuthorizationCodes(ctx, before.UnixMicro())
+	if err != nil {
+		return 0, mapError("deleting expired authorization codes", err)
+	}
+	return n, nil
 }

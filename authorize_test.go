@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"clavisid.org/clavis/internal/app"
@@ -450,6 +451,30 @@ func FuzzAuthorizationEndpoint(f *testing.F) {
 			}
 		default:
 			t.Errorf("query %q: status %d", query, rec.Code)
+		}
+	})
+}
+
+func TestServerDeletesExpiredRequests(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const issuer = "https://auth.example.com"
+		s, tn := newLoginServer(t, issuer, "")
+		id := newBrowser(t, s.Handler()).startLogin(issuer, authorizeQuery())
+		stored := func() bool {
+			_, err := s.store.AuthorizationRequests().Get(t.Context(), tn.ID, id)
+			return err == nil
+		}
+
+		time.Sleep(cleanupInterval - time.Second)
+		synctest.Wait()
+		if !stored() {
+			t.Fatal("the request was deleted before it expired")
+		}
+		// The request expires when the first cleanup runs.
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if stored() {
+			t.Error("the expired request is still stored after the cleanup")
 		}
 	})
 }

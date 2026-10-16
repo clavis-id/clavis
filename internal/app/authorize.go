@@ -20,6 +20,10 @@ import (
 const (
 	AuthorizationRequestLifetime = 10 * time.Minute
 	AuthorizationCodeLifetime    = 60 * time.Second
+	// AuthorizationCodeRetention keeps an expired code in the store this
+	// long, so a replay soon after expiry is still recognized (RFC 6749,
+	// section 4.1.2).
+	AuthorizationCodeRetention = time.Hour
 	// SessionIdleTimeout ends a session that is not used for this long, and
 	// SessionLifetime ends it regardless. Both become tenant settings later.
 	SessionIdleTimeout = 24 * time.Hour
@@ -324,4 +328,31 @@ func endSession(ctx context.Context, d Deps, tenantID uuid.UUID, tokenHash []byt
 		return fmt.Errorf("ending the previous session: %w", err)
 	}
 	return nil
+}
+
+// PurgeExpired deletes the expired authorization requests and sessions of
+// every tenant, and the codes that expired more than
+// AuthorizationCodeRetention ago. It goes on after a failure and returns
+// every error.
+func PurgeExpired(ctx context.Context, d Deps) error {
+	now := d.Now()
+	var errs []error
+	purge := func(what string, deleteExpired func(context.Context, time.Time) (int64, error), before time.Time) int64 {
+		n, err := deleteExpired(ctx, before)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("deleting expired %s: %w", what, err))
+		}
+		return n
+	}
+	requests := purge("authorization requests", d.Store.AuthorizationRequests().DeleteExpired, now)
+	sessions := purge("sessions", d.Store.Sessions().DeleteExpired, now)
+	codes := purge("authorization codes", d.Store.AuthorizationCodes().DeleteExpired,
+		now.Add(-AuthorizationCodeRetention))
+	if requests+sessions+codes > 0 {
+		d.Logger.LogAttrs(ctx, slog.LevelInfo, "deleted expired records",
+			slog.Int64("authorization_requests", requests),
+			slog.Int64("sessions", sessions),
+			slog.Int64("authorization_codes", codes))
+	}
+	return errors.Join(errs...)
 }

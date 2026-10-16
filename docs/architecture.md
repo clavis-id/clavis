@@ -223,6 +223,10 @@ year.
 - **Authorization codes:** 256 random bits, stored as a SHA-256 hash, valid for 60 seconds,
   bound to the client, the redirect URI, the PKCE challenge, the nonce, the scopes and the
   session (ADR 0014).
+- **Cleanup:** every 10 minutes, each instance deletes expired authorization requests and
+  sessions, and codes that expired more than an hour ago, so a replayed code is still
+  recognized for a while. An authorization request, which needs no authentication, is gone
+  within 20 minutes of its creation.
 - **Browser sessions:** one server-side session per sign-in, stored as the SHA-256 hash of a
   256-bit cookie named `__Host-clavis-session-<tenant ID>`, so tenants on one host never share
   a session. Sessions end after 24 hours without use or 14 days in all, and a new sign-in
