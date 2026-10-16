@@ -56,10 +56,15 @@ INSERT INTO authorization_codes (
 
 -- name: GetAuthorizationCode :one
 SELECT hash, tenant_id, client_id, user_id, session_id, redirect_uri, redirect_uri_provided, scopes, nonce,
-    code_challenge, code_challenge_method, auth_time, amr, acr, created_at, expires_at
+    code_challenge, code_challenge_method, auth_time, amr, acr, created_at, expires_at, redeemed_at
 FROM authorization_codes
 WHERE tenant_id = sqlc.arg(tenant_id) AND hash = sqlc.arg(hash);
 
 -- name: DeleteExpiredAuthorizationCodes :execrows
 DELETE FROM authorization_codes
 WHERE expires_at <= $1;
+
+-- name: RedeemAuthorizationCode :execrows
+UPDATE authorization_codes
+SET redeemed_at = sqlc.arg(redeemed_at)
+WHERE tenant_id = sqlc.arg(tenant_id) AND hash = sqlc.arg(hash) AND redeemed_at IS NULL;

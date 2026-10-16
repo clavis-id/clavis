@@ -10,6 +10,28 @@ import (
 	"uuid"
 )
 
+type AccessToken struct {
+	ID        string
+	TenantID  uuid.UUID
+	ClientID  uuid.UUID
+	UserID    *uuid.UUID
+	CodeHash  []byte
+	Scopes    []string
+	IssuedAt  time.Time
+	ExpiresAt time.Time
+	RevokedAt *time.Time
+}
+
+type ApiResource struct {
+	ID         uuid.UUID
+	TenantID   uuid.UUID
+	Identifier string
+	Name       string
+	Scopes     []string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
 type AuthorizationCode struct {
 	Hash                []byte
 	TenantID            uuid.UUID
@@ -27,6 +49,7 @@ type AuthorizationCode struct {
 	Acr                 string
 	CreatedAt           time.Time
 	ExpiresAt           time.Time
+	RedeemedAt          *time.Time
 }
 
 type AuthorizationRequest struct {
