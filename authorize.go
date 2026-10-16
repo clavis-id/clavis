@@ -177,8 +177,8 @@ func (s *Server) authorizationRequestError(w http.ResponseWriter, r *http.Reques
 		s.internalError(w, r, "signing in", err)
 		return
 	}
-	s.errorPage(w, r, http.StatusBadRequest, "Sign-in expired",
-		"This sign-in request has expired or was started in another browser. "+
+	s.errorPage(w, r, http.StatusBadRequest, "Sign-in request no longer valid",
+		"This sign-in request has expired, was already completed, or was started in another browser. "+
 			"Return to the application and sign in again.")
 }
 

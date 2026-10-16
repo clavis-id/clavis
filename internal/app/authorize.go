@@ -38,7 +38,8 @@ const amrPassword = "pwd"
 // that does not exist, has expired, was completed already, or belongs to
 // another browser. The cases are not told apart, so a page reveals nothing
 // about requests started elsewhere.
-var ErrAuthorizationRequestNotFound = errors.New("the sign-in request has expired or was started in another browser")
+var ErrAuthorizationRequestNotFound = errors.New("the sign-in request has expired, was completed already, " +
+	"or was started in another browser")
 
 // RedirectError is an authorization error that goes back to the client
 // through its redirect URI (RFC 6749, section 4.1.2.1).

@@ -226,7 +226,7 @@ func TestAuthorizationCodeFlow(t *testing.T) {
 
 	// The request is single use.
 	res, page = b.post(issuer+"/login", loginForm(id, testPassword), "same-origin")
-	if res.StatusCode != http.StatusBadRequest || !strings.Contains(page, "Sign-in expired") {
+	if res.StatusCode != http.StatusBadRequest || !strings.Contains(page, "Sign-in request no longer valid") {
 		t.Errorf("a second login = %d:\n%s", res.StatusCode, page)
 	}
 }
@@ -304,7 +304,7 @@ func TestLoginRequiresTheBrowserThatStarted(t *testing.T) {
 	victim.jar[bindingCookie] = oauth.NewToken()
 	for name, b := range map[string]*browser{"another browser": victim, "no cookie": newBrowser(t, s.Handler())} {
 		if res, page := b.get(issuer + "/login?request=" + id); res.StatusCode != http.StatusBadRequest ||
-			!strings.Contains(page, "Sign-in expired") {
+			!strings.Contains(page, "Sign-in request no longer valid") {
 			t.Errorf("%s: login page = %d", name, res.StatusCode)
 		}
 		if res, _ := b.post(issuer+"/login", loginForm(id, testPassword), "same-origin"); res.StatusCode != http.StatusBadRequest {
