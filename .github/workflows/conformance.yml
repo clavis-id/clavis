@@ -7,7 +7,8 @@ on:
   pull_request:
     branches: [develop, master]
     paths:
-      - clavis.go
+      # Root package files: the public API and the protocol handlers.
+      - "*.go"
       - cmd/**
       - internal/app/**
       - internal/authn/**
@@ -15,6 +16,7 @@ on:
       - internal/oauth/**
       - internal/oidc/**
       - internal/ui/**
+      - store/**
       - conformance/**
       - .github/workflows/conformance.yml
   schedule:
