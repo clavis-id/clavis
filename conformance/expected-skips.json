@@ -1,1 +1,26 @@
-[]
+[
+    {
+        "test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
+        "variant": {
+            "client_auth_type": "client_secret_basic",
+            "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "default",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": ".cache/clavis-oidcc.json",
+        "comment": "Clavis does not support request objects (request_parameter_supported is false); JAR may come with PAR in Phase 2"
+    },
+    {
+        "test-name": "oidcc-refresh-token",
+        "variant": {
+            "client_auth_type": "client_secret_basic",
+            "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "default",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": ".cache/clavis-oidcc.json",
+        "comment": "Refresh tokens arrive in work item 2.3 (#26)"
+    }
+]

@@ -37,7 +37,10 @@ https://localhost.emobix.co.uk:8443; the name resolves to 127.0.0.1. Stop the co
    - the suite and its MongoDB and nginx;
    - Clavis with a fresh SQLite database and key encryption key;
    - Caddy, which terminates TLS for the issuer `https://clavis.test`.
-4. Runs the plans in a Python container. That container installs the hash-pinned
+4. Prepares Clavis with its own CLI, run inside the Clavis container: two confidential clients,
+   exempt from PKCE as ADR 0018 allows for the suite, and a user with a random password. It
+   writes `.cache/clavis-oidcc.json` from `config/clavis-oidcc.json` with their secrets.
+5. Runs the plans in a Python container. That container installs the hash-pinned
    `requirements.txt`, waits for Clavis to be ready, and calls `run-test-plan.py`.
 
 Every image is pinned by digest. The suite images and `SUITE_COMMIT` in `run.sh` must come from
@@ -60,10 +63,18 @@ a ready-made entry for it; investigate before copying it into the list.
 
 ## Plans and configuration
 
-`PLANS` in `run.sh` lists the plans that run by default. Each plan uses a configuration file in
-`config/` that names the discovery URL, the clients and the browser steps that fill the login
-form. Plans are added as the plan for Phase 1 lands their features
-(see [`docs/plans/phase-1.md`](../docs/plans/phase-1.md#conformance-progression)).
+`PLANS` in `run.sh` lists the plans that run by default: Config OP and Basic OP. Both use the
+configuration generated from `config/clavis-oidcc.json`, which names the discovery URL, the
+clients and the browser steps that fill the login form, and the per-test steps that expect an
+error page or a second login.
+
+Basic OP runs its modules by name from `BASIC_MODULES`, without `oidcc-max-age-10000`: that
+test needs single sign-on, and until work item 2.1 adds it, the test passes or fails depending
+on whether its two sign-ins fall in the same second. Tests that end in REVIEW need a person to
+check a screenshot for certification; automated runs accept them.
+
+Plans are added as the plan for Phase 1 lands their features (see
+[`docs/plans/phase-1.md`](../docs/plans/phase-1.md#conformance-progression)).
 
 ## Updating
 
