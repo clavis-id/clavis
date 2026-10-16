@@ -228,6 +228,7 @@ func (r authorizationCodes) Get(ctx context.Context, tenantID uuid.UUID, hash []
 		ACR:                 row.Acr,
 		CreatedAt:           time.UnixMicro(row.CreatedAt).UTC(),
 		ExpiresAt:           time.UnixMicro(row.ExpiresAt).UTC(),
+		RedeemedAt:          timeOrZero(row.RedeemedAt),
 	}, nil
 }
 

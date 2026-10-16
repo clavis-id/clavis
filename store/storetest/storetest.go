@@ -66,6 +66,15 @@ func Run(t *testing.T, open OpenFunc) {
 	t.Run("AuthorizationCodes", func(t *testing.T) {
 		t.Parallel()
 		runAuthorizationCodes(t, open)
+		runCodeRedemption(t, open)
+	})
+	t.Run("AccessTokens", func(t *testing.T) {
+		t.Parallel()
+		runAccessTokens(t, open)
+	})
+	t.Run("APIResources", func(t *testing.T) {
+		t.Parallel()
+		runAPIResources(t, open)
 	})
 }
 

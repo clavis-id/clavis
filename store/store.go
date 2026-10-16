@@ -57,6 +57,10 @@ type Store interface {
 	Sessions() Sessions
 	// AuthorizationCodes returns the authorization code repository.
 	AuthorizationCodes() AuthorizationCodes
+	// AccessTokens returns the access token repository.
+	AccessTokens() AccessTokens
+	// APIResources returns the API resource repository.
+	APIResources() APIResources
 	// Ping reports whether the underlying database is reachable.
 	Ping(ctx context.Context) error
 }
@@ -427,6 +431,9 @@ type AuthorizationCode struct {
 	ACR                 string
 	CreatedAt           time.Time
 	ExpiresAt           time.Time
+	// RedeemedAt is when the code was exchanged for tokens, or zero. Create
+	// ignores it; Redeem sets it.
+	RedeemedAt time.Time
 }
 
 // AuthorizationCodes stores authorization codes. Every method works within
@@ -436,10 +443,90 @@ type AuthorizationCodes interface {
 	// ErrNotFound when the client or the user does not exist in the tenant.
 	Create(ctx context.Context, c AuthorizationCode) error
 	// Get returns the code of a tenant with the given hash, or ErrNotFound.
-	// It returns expired codes too; callers check ExpiresAt.
+	// It returns expired and redeemed codes too; callers check ExpiresAt and
+	// RedeemedAt.
 	Get(ctx context.Context, tenantID uuid.UUID, hash []byte) (AuthorizationCode, error)
+	// Redeem marks the code of a tenant with the given hash as redeemed at
+	// the given time. It returns ErrConflict when the code was redeemed
+	// already, so of several concurrent callers exactly one succeeds, and
+	// ErrNotFound when there is no such code.
+	Redeem(ctx context.Context, tenantID uuid.UUID, hash []byte, at time.Time) error
 	// DeleteExpired removes the codes of every tenant whose ExpiresAt is not
 	// after before, and returns how many were removed. Callers keep expired
 	// codes for a while by passing a time in the past.
 	DeleteExpired(ctx context.Context, before time.Time) (int64, error)
+}
+
+// AccessToken is the record of an issued JWT access token. The token itself
+// is not stored; the record lets Clavis revoke it before it expires.
+type AccessToken struct {
+	// ID is the token's jti claim.
+	ID       string
+	TenantID uuid.UUID
+	// ClientID is the ID of the client record.
+	ClientID uuid.UUID
+	// UserID is the zero UUID for a token that a client obtained for itself.
+	UserID uuid.UUID
+	// CodeHash is the hash of the authorization code the token was issued
+	// for, or nil.
+	CodeHash  []byte
+	Scopes    []string
+	IssuedAt  time.Time
+	ExpiresAt time.Time
+	// RevokedAt is when the token was revoked, or zero.
+	RevokedAt time.Time
+}
+
+// AccessTokens stores the records of issued access tokens. Every method
+// works within one tenant, except DeleteExpired.
+type AccessTokens interface {
+	// Create inserts t. It returns ErrConflict when the ID is in use, and
+	// ErrNotFound when the client, or a user that is set, does not exist in
+	// the tenant.
+	Create(ctx context.Context, t AccessToken) error
+	// Get returns the token of a tenant with the given ID, or ErrNotFound.
+	// It returns expired and revoked tokens too.
+	Get(ctx context.Context, tenantID uuid.UUID, id string) (AccessToken, error)
+	// RevokeByCode revokes, at the given time, the tokens of a tenant that
+	// were issued for the code with the given hash and are not revoked yet,
+	// and returns how many it revoked.
+	RevokeByCode(ctx context.Context, tenantID uuid.UUID, codeHash []byte, at time.Time) (int64, error)
+	// DeleteExpired removes the tokens of every tenant whose ExpiresAt is not
+	// after now, and returns how many were removed.
+	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
+}
+
+// APIResource is an API that accepts access tokens issued by a tenant. Its
+// identifier becomes the aud claim of tokens that grant its scopes
+// (ADR 0014).
+type APIResource struct {
+	// ID is a version 7 UUID assigned on creation.
+	ID       uuid.UUID
+	TenantID uuid.UUID
+	// Identifier is an absolute URI, unique within the tenant.
+	Identifier string
+	// Name is a human-readable display name.
+	Name string
+	// Scopes lists the scopes the resource defines.
+	Scopes    []string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// APIResources stores API resources. Every method works within one tenant.
+type APIResources interface {
+	// Create inserts r. It returns ErrConflict when the ID, or the
+	// identifier within the tenant, is already in use, and ErrNotFound when
+	// the tenant does not exist.
+	Create(ctx context.Context, r APIResource) error
+	// GetByIdentifier returns the resource of a tenant with the given
+	// identifier, or ErrNotFound.
+	GetByIdentifier(ctx context.Context, tenantID uuid.UUID, identifier string) (APIResource, error)
+	// List returns up to limit resources of a tenant with an ID greater than
+	// after, in ascending ID order. Paging and limits work as in
+	// Tenants.List.
+	List(ctx context.Context, tenantID, after uuid.UUID, limit int) ([]APIResource, error)
+	// Delete removes the resource of a tenant with the given ID, or returns
+	// ErrNotFound.
+	Delete(ctx context.Context, tenantID, id uuid.UUID) error
 }

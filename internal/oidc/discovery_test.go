@@ -2,23 +2,32 @@ package oidc
 
 import (
 	"encoding/json/v2"
+	"slices"
 	"testing"
 )
 
 func TestNewMetadata(t *testing.T) {
 	t.Parallel()
 
-	algs := []string{"RS256", "ES256"}
-	m := NewMetadata("https://auth.example.com/t/acme", algs)
+	m := NewMetadata("https://auth.example.com/t/acme")
 	if m.Issuer != "https://auth.example.com/t/acme" ||
 		m.AuthorizationEndpoint != "https://auth.example.com/t/acme/oauth2/authorize" ||
 		m.TokenEndpoint != "https://auth.example.com/t/acme/oauth2/token" ||
+		m.UserinfoEndpoint != "https://auth.example.com/t/acme/oauth2/userinfo" ||
 		m.JWKSURI != "https://auth.example.com/t/acme/oauth2/jwks" {
 		t.Errorf("endpoints are not derived from the issuer: %+v", m)
 	}
-	algs[0] = "none"
-	if m.IDTokenSigningAlgValuesSupported[0] != "RS256" {
-		t.Error("metadata shares the caller's algorithm slice")
+	if !slices.Equal(m.IDTokenSigningAlgValuesSupported, []string{"RS256"}) {
+		t.Errorf("id_token_signing_alg_values_supported = %v, want only the algorithm ID tokens use",
+			m.IDTokenSigningAlgValuesSupported)
+	}
+	for _, claim := range []string{"sub", "email", "address", "phone_number", "updated_at"} {
+		if !slices.Contains(m.ClaimsSupported, claim) {
+			t.Errorf("claims_supported = %v, want %s", m.ClaimsSupported, claim)
+		}
+	}
+	if !slices.Contains(m.ScopesSupported, "openid") || !slices.Contains(m.TokenEndpointAuthMethodsSupported, "none") {
+		t.Errorf("metadata = %+v", m)
 	}
 }
 
@@ -27,7 +36,7 @@ func TestNewMetadata(t *testing.T) {
 func TestMetadataOverridesMisleadingDefaults(t *testing.T) {
 	t.Parallel()
 
-	body, err := json.Marshal(NewMetadata("https://auth.example.com", []string{"RS256"}))
+	body, err := json.Marshal(NewMetadata("https://auth.example.com"))
 	if err != nil {
 		t.Fatalf("encoding metadata: %v", err)
 	}
@@ -45,14 +54,13 @@ func TestMetadataOverridesMisleadingDefaults(t *testing.T) {
 			t.Errorf("%s = %v, want %v", field, doc[field], want)
 		}
 	}
-	for field, want := range map[string]string{
+	for field, want := range map[string][]any{
 		// Defaults include fragment and implicit.
-		"response_modes_supported": "query",
-		"grant_types_supported":    "authorization_code",
+		"response_modes_supported": {"query"},
+		"grant_types_supported":    {"authorization_code", "client_credentials"},
 	} {
-		values, ok := doc[field].([]any)
-		if !ok || len(values) != 1 || values[0] != want {
-			t.Errorf("%s = %v, want [%s]", field, doc[field], want)
+		if values, ok := doc[field].([]any); !ok || !slices.Equal(values, want) {
+			t.Errorf("%s = %v, want %v", field, doc[field], want)
 		}
 	}
 }

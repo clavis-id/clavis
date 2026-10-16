@@ -661,3 +661,36 @@ func TestReadPasswordFromAPipe(t *testing.T) {
 		t.Errorf("readPassword() of a failing reader = %v", err)
 	}
 }
+
+func TestResourcesCommands(t *testing.T) {
+	t.Parallel()
+
+	environ := []string{"CLAVIS_DATABASE_DSN=" + filepath.Join(t.TempDir(), "clavis.db")}
+	run := func(args ...string) (stdout, stderr string, code int) {
+		var out, errOut bytes.Buffer
+		code = Execute(t.Context(), args, nil, &out, &errOut, environ)
+		return out.String(), errOut.String(), code
+	}
+	out, errOut, code := run("resources", "create", "https://api.example.com/orders", "--name", "Orders",
+		"--scope", "orders:read", "--scope", "orders:write")
+	if code != 0 || !strings.Contains(out, "Created API resource https://api.example.com/orders in tenant default "+
+		"with scopes orders:read orders:write") {
+		t.Fatalf("resources create = %d, %q, %q", code, out, errOut)
+	}
+	if _, errOut, code := run("resources", "create", "https://api.example.com/v2", "--scope", "orders:read"); code == 0 ||
+		!strings.Contains(errOut, "belongs to https://api.example.com/orders") {
+		t.Errorf("creating a resource with a taken scope = %d, %q", code, errOut)
+	}
+	out, _, code = run("resources", "list")
+	if code != 0 || !strings.Contains(out, "IDENTIFIER") || !strings.Contains(out, "Orders") {
+		t.Errorf("resources list = %d, %q", code, out)
+	}
+	if _, errOut, code := run("resources", "delete", "https://api.example.com/orders"); code == 0 ||
+		!strings.Contains(errOut, "--yes") {
+		t.Errorf("resources delete without --yes = %d, %q", code, errOut)
+	}
+	if out, errOut, code := run("resources", "delete", "https://api.example.com/orders", "--yes"); code != 0 ||
+		!strings.Contains(out, "Deleted API resource") {
+		t.Errorf("resources delete = %d, %q, %q", code, out, errOut)
+	}
+}

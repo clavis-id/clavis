@@ -4,6 +4,32 @@
 
 package db
 
+import (
+	"database/sql"
+)
+
+type AccessToken struct {
+	ID        string
+	TenantID  string
+	ClientID  string
+	UserID    sql.NullString
+	CodeHash  []byte
+	Scopes    string
+	IssuedAt  int64
+	ExpiresAt int64
+	RevokedAt sql.NullInt64
+}
+
+type ApiResource struct {
+	ID         string
+	TenantID   string
+	Identifier string
+	Name       string
+	Scopes     string
+	CreatedAt  int64
+	UpdatedAt  int64
+}
+
 type AuthorizationCode struct {
 	Hash                []byte
 	TenantID            string
@@ -21,6 +47,7 @@ type AuthorizationCode struct {
 	Acr                 string
 	CreatedAt           int64
 	ExpiresAt           int64
+	RedeemedAt          sql.NullInt64
 }
 
 type AuthorizationRequest struct {

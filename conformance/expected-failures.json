@@ -1,38 +1,122 @@
 [
     {
-        "test-name": "oidcc-discovery-endpoint-verification",
+        "test-name": "oidcc-prompt-none-logged-in",
         "variant": {
+            "client_auth_type": "client_secret_basic",
             "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "default",
             "client_registration": "static_client"
         },
-        "configuration-filename": "config/clavis-oidcc.json",
-        "current-block": "",
-        "condition": "CheckDiscEndpointScopesSupportedContainsOpenId",
-        "expected-result": "warning",
-        "comment": "scopes_supported is published with the scopes and userinfo in work item 1.6 (#23)"
+        "configuration-filename": ".cache/clavis-oidcc.json",
+        "current-block": "Second authorization: Verify authorization endpoint response",
+        "condition": "CheckIfAuthorizationEndpointError",
+        "expected-result": "failure",
+        "comment": "Single sign-on, which prompt=none needs, arrives in work item 2.1 (#24)"
     },
     {
-        "test-name": "oidcc-discovery-endpoint-verification",
+        "test-name": "oidcc-id-token-hint",
         "variant": {
+            "client_auth_type": "client_secret_basic",
             "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "default",
             "client_registration": "static_client"
         },
-        "configuration-filename": "config/clavis-oidcc.json",
-        "current-block": "",
-        "condition": "CheckDiscEndpointUserinfoEndpoint",
-        "expected-result": "warning",
-        "comment": "userinfo_endpoint arrives with the userinfo endpoint in work item 1.6 (#23)"
+        "configuration-filename": ".cache/clavis-oidcc.json",
+        "current-block": "Second authorization: Verify authorization endpoint response",
+        "condition": "CheckIfAuthorizationEndpointError",
+        "expected-result": "failure",
+        "comment": "Single sign-on, which prompt=none needs, arrives in work item 2.1 (#24); id_token_hint arrives with it"
     },
     {
-        "test-name": "oidcc-discovery-endpoint-verification",
+        "test-name": "oidcc-scope-profile",
         "variant": {
+            "client_auth_type": "client_secret_basic",
             "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "default",
             "client_registration": "static_client"
         },
-        "configuration-filename": "config/clavis-oidcc.json",
+        "configuration-filename": ".cache/clavis-oidcc.json",
         "current-block": "",
-        "condition": "OIDCCCheckDiscEndpointClaimsSupported",
+        "condition": "VerifyScopesReturnedInUserInfoClaims",
         "expected-result": "warning",
-        "comment": "claims_supported is published with the userinfo claims in work item 1.6 (#23)"
+        "comment": "The conformance user has only the claims the CLI can set (name, given_name, family_name, email); users get the other standard claims with profile editing (#32, #39)"
+    },
+    {
+        "test-name": "oidcc-scope-address",
+        "variant": {
+            "client_auth_type": "client_secret_basic",
+            "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "default",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": ".cache/clavis-oidcc.json",
+        "current-block": "",
+        "condition": "VerifyScopesReturnedInUserInfoClaims",
+        "expected-result": "warning",
+        "comment": "The conformance user has only the claims the CLI can set (name, given_name, family_name, email); users get the other standard claims with profile editing (#32, #39)"
+    },
+    {
+        "test-name": "oidcc-scope-phone",
+        "variant": {
+            "client_auth_type": "client_secret_basic",
+            "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "default",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": ".cache/clavis-oidcc.json",
+        "current-block": "",
+        "condition": "VerifyScopesReturnedInUserInfoClaims",
+        "expected-result": "warning",
+        "comment": "The conformance user has only the claims the CLI can set (name, given_name, family_name, email); users get the other standard claims with profile editing (#32, #39)"
+    },
+    {
+        "test-name": "oidcc-scope-all",
+        "variant": {
+            "client_auth_type": "client_secret_basic",
+            "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "default",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": ".cache/clavis-oidcc.json",
+        "current-block": "",
+        "condition": "VerifyScopesReturnedInUserInfoClaims",
+        "expected-result": "warning",
+        "comment": "The conformance user has only the claims the CLI can set (name, given_name, family_name, email); users get the other standard claims with profile editing (#32, #39)"
+    },
+    {
+        "test-name": "oidcc-ensure-request-with-acr-values-succeeds",
+        "variant": {
+            "client_auth_type": "client_secret_basic",
+            "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "default",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": ".cache/clavis-oidcc.json",
+        "current-block": "Verify authorization endpoint response",
+        "condition": "ValidateIdTokenACRClaimAgainstAcrValuesRequest",
+        "expected-result": "warning",
+        "comment": "acr_values and the acr claim arrive in work item 2.1 (#24)"
+    },
+    {
+        "test-name": "oidcc-claims-essential",
+        "variant": {
+            "client_auth_type": "client_secret_basic",
+            "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "default",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": ".cache/clavis-oidcc.json",
+        "current-block": "",
+        "condition": "EnsureUserInfoContainsName",
+        "expected-result": "warning",
+        "comment": "The claims request parameter arrives in work item 2.1 (#24)"
     }
 ]

@@ -182,7 +182,16 @@ func (r authorizationCodes) Get(ctx context.Context, tenantID uuid.UUID, hash []
 		ACR:                 row.Acr,
 		CreatedAt:           row.CreatedAt.UTC(),
 		ExpiresAt:           row.ExpiresAt.UTC(),
+		RedeemedAt:          utcOrZero(row.RedeemedAt),
 	}, nil
+}
+
+// utcOrZero returns t in UTC, or the zero time for NULL.
+func utcOrZero(t *time.Time) time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	return t.UTC()
 }
 
 func (r authorizationCodes) DeleteExpired(ctx context.Context, before time.Time) (int64, error) {

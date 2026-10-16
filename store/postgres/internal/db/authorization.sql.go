@@ -228,7 +228,7 @@ func (q *Queries) DeleteSession(ctx context.Context, arg DeleteSessionParams) (i
 
 const getAuthorizationCode = `-- name: GetAuthorizationCode :one
 SELECT hash, tenant_id, client_id, user_id, session_id, redirect_uri, redirect_uri_provided, scopes, nonce,
-    code_challenge, code_challenge_method, auth_time, amr, acr, created_at, expires_at
+    code_challenge, code_challenge_method, auth_time, amr, acr, created_at, expires_at, redeemed_at
 FROM authorization_codes
 WHERE tenant_id = $1 AND hash = $2
 `
@@ -258,6 +258,7 @@ func (q *Queries) GetAuthorizationCode(ctx context.Context, arg GetAuthorization
 		&i.Acr,
 		&i.CreatedAt,
 		&i.ExpiresAt,
+		&i.RedeemedAt,
 	)
 	return i, err
 }
@@ -323,4 +324,24 @@ func (q *Queries) GetSessionByTokenHash(ctx context.Context, arg GetSessionByTok
 		&i.ExpiresAt,
 	)
 	return i, err
+}
+
+const redeemAuthorizationCode = `-- name: RedeemAuthorizationCode :execrows
+UPDATE authorization_codes
+SET redeemed_at = $1
+WHERE tenant_id = $2 AND hash = $3 AND redeemed_at IS NULL
+`
+
+type RedeemAuthorizationCodeParams struct {
+	RedeemedAt *time.Time
+	TenantID   uuid.UUID
+	Hash       []byte
+}
+
+func (q *Queries) RedeemAuthorizationCode(ctx context.Context, arg RedeemAuthorizationCodeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, redeemAuthorizationCode, arg.RedeemedAt, arg.TenantID, arg.Hash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

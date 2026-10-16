@@ -50,6 +50,8 @@ type Store struct {
 	authzReqs   authorizationRequests
 	sessions    sessions
 	codes       authorizationCodes
+	tokens      accessTokens
+	resources   apiResources
 }
 
 var _ store.Store = (*Store)(nil)
@@ -101,6 +103,8 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		authzReqs:   authorizationRequests{q: q},
 		sessions:    sessions{q: q},
 		codes:       authorizationCodes{q: q},
+		tokens:      accessTokens{q: q},
+		resources:   apiResources{q: q},
 	}
 
 	if err := s.Ping(ctx); err != nil {
@@ -193,6 +197,12 @@ func (s *Store) Sessions() store.Sessions { return s.sessions }
 
 // AuthorizationCodes returns the authorization code repository.
 func (s *Store) AuthorizationCodes() store.AuthorizationCodes { return s.codes }
+
+// AccessTokens returns the access token repository.
+func (s *Store) AccessTokens() store.AccessTokens { return s.tokens }
+
+// APIResources returns the API resource repository.
+func (s *Store) APIResources() store.APIResources { return s.resources }
 
 type tenants struct {
 	q *db.Queries

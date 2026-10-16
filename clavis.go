@@ -168,12 +168,12 @@ type Server struct {
 	issuer        *url.URL
 	store         store.Store
 	keys          *keys.Manager
+	signer        tokenSigner
 	passwords     *password.Hasher
 	assets        *ui.Assets
 	crossOrigin   *http.CrossOriginProtection
 	deps          app.Deps
 	defaultTenant store.Tenant
-	algorithms    []string
 	logger        *slog.Logger
 	tracer        trace.TracerProvider
 	meter         metric.MeterProvider
@@ -258,12 +258,12 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		issuer:        iss,
 		store:         cfg.Store,
 		keys:          manager,
+		signer:        tokenSigner{manager},
 		passwords:     passwords,
 		assets:        assets,
 		crossOrigin:   http.NewCrossOriginProtection(),
 		deps:          deps,
 		defaultTenant: tenant,
-		algorithms:    policy.Algorithms,
 		logger:        logger,
 		tracer:        tracer,
 		meter:         meter,
@@ -343,6 +343,11 @@ func (s *Server) routes() http.Handler {
 	s.handleTenant(mux, http.MethodGet, oidc.JWKSPath, s.handleJWKS)
 	s.handleTenant(mux, http.MethodGet, oidc.AuthorizationPath, s.handleAuthorize)
 	s.handleTenant(mux, http.MethodPost, oidc.AuthorizationPath, s.handleAuthorize)
+	s.handleTenant(mux, http.MethodPost, oidc.TokenPath, s.handleToken)
+	s.handleTenant(mux, http.MethodOptions, oidc.TokenPath, handlePreflight("POST"))
+	s.handleTenant(mux, http.MethodGet, oidc.UserinfoPath, s.handleUserInfo)
+	s.handleTenant(mux, http.MethodPost, oidc.UserinfoPath, s.handleUserInfo)
+	s.handleTenant(mux, http.MethodOptions, oidc.UserinfoPath, handlePreflight("GET, POST"))
 	s.handleTenant(mux, http.MethodGet, loginPath, s.handleLoginPage)
 	s.handleTenant(mux, http.MethodPost, loginPath, s.handleLogin)
 	// Assets are the same for every tenant and are not instrumented, like
@@ -458,7 +463,7 @@ func (s *Server) handleJWKS(w http.ResponseWriter, r *http.Request, t tenant) {
 // handleMetadata serves the provider metadata of a tenant, for OpenID
 // Connect Discovery 1.0, section 4, and RFC 8414, section 3.
 func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request, t tenant) {
-	s.writePublicJSON(w, r, "application/json", metadataMaxAge, oidc.NewMetadata(t.issuer, s.algorithms))
+	s.writePublicJSON(w, r, "application/json", metadataMaxAge, oidc.NewMetadata(t.issuer))
 }
 
 // allowGet answers requests other than GET and HEAD with 405 before they
