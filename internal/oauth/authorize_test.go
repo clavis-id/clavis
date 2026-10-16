@@ -90,6 +90,11 @@ func TestParseAuthorizationRequest(t *testing.T) {
 			func(r AuthorizationRequest) bool { return r.MaxAge == 0 }},
 		{"largest max_age", func(p url.Values) { p.Set("max_age", "2147483647") },
 			func(r AuthorizationRequest) bool { return r.MaxAge == maxMaxAge }},
+		{"empty unsupported parameters count as omitted", func(p url.Values) {
+			p.Set("request", "")
+			p.Set("request_uri", "")
+			p.Set("registration", "")
+		}, nil},
 		{"ignored parameters", func(p url.Values) {
 			p.Set("login_hint", "ada@example.com")
 			p.Set("claims", "{}")
@@ -123,7 +128,7 @@ func TestParseAuthorizationRequestErrors(t *testing.T) {
 		{"non-ASCII state", func(p url.Values) { p.Set("state", "café") }, ErrorInvalidRequest, ""},
 		{"long state", func(p url.Values) { p.Set("state", strings.Repeat("s", MaxStateLength+1)) }, ErrorInvalidRequest, ""},
 		{"request object", func(p url.Values) { p.Set("request", "eyJ") }, ErrorRequestNotSupported, "af0ifjsldkj"},
-		{"empty request object", func(p url.Values) { p.Set("request", "") }, ErrorRequestNotSupported, "af0ifjsldkj"},
+		{"repeated empty request object", func(p url.Values) { p["request"] = []string{"", ""} }, ErrorRequestNotSupported, "af0ifjsldkj"},
 		{"request_uri", func(p url.Values) { p.Set("request_uri", "https://a.example/r") }, ErrorRequestURINotSupported, "af0ifjsldkj"},
 		{"registration", func(p url.Values) { p.Set("registration", "{}") }, ErrorRegistrationNotSupported, "af0ifjsldkj"},
 		{"missing response_type", func(p url.Values) { p.Del("response_type") }, ErrorInvalidRequest, "af0ifjsldkj"},

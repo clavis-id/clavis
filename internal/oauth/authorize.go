@@ -131,12 +131,13 @@ func ParseAuthorizationRequest(params url.Values) (AuthorizationRequest, error) 
 	r.State = state
 
 	// OpenID Connect Core 1.0, section 6, and section 7.2.1 for registration.
+	// Like any parameter, an empty one counts as omitted.
 	for _, unsupported := range []struct{ param, code string }{
 		{"request", ErrorRequestNotSupported},
 		{"request_uri", ErrorRequestURINotSupported},
 		{"registration", ErrorRegistrationNotSupported},
 	} {
-		if params.Has(unsupported.param) {
+		if value, ok := single(params, unsupported.param); !ok || value != "" {
 			return r, &Error{Code: unsupported.code, Description: unsupported.param + " is not supported"}
 		}
 	}
