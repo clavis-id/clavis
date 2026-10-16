@@ -10,6 +10,41 @@ import (
 	"uuid"
 )
 
+type AuthorizationCode struct {
+	Hash                []byte
+	TenantID            uuid.UUID
+	ClientID            uuid.UUID
+	UserID              uuid.UUID
+	SessionID           uuid.UUID
+	RedirectUri         string
+	RedirectUriProvided bool
+	Scopes              []string
+	Nonce               string
+	CodeChallenge       string
+	CodeChallengeMethod string
+	AuthTime            time.Time
+	Amr                 []string
+	Acr                 string
+	CreatedAt           time.Time
+	ExpiresAt           time.Time
+}
+
+type AuthorizationRequest struct {
+	ID                  string
+	TenantID            uuid.UUID
+	ClientID            uuid.UUID
+	BindingHash         []byte
+	RedirectUri         string
+	RedirectUriProvided bool
+	Scopes              []string
+	State               string
+	Nonce               string
+	CodeChallenge       string
+	CodeChallengeMethod string
+	CreatedAt           time.Time
+	ExpiresAt           time.Time
+}
+
 type Client struct {
 	ID                                  uuid.UUID
 	TenantID                            uuid.UUID
@@ -36,6 +71,20 @@ type Password struct {
 	TenantID uuid.UUID
 	Hash     string
 	SetAt    time.Time
+}
+
+type Session struct {
+	ID            uuid.UUID
+	TenantID      uuid.UUID
+	TokenHash     []byte
+	UserID        uuid.UUID
+	AuthTime      time.Time
+	Amr           []string
+	Acr           string
+	CreatedAt     time.Time
+	LastSeenAt    time.Time
+	IdleExpiresAt time.Time
+	ExpiresAt     time.Time
 }
 
 type SigningKey struct {

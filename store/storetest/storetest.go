@@ -55,6 +55,18 @@ func Run(t *testing.T, open OpenFunc) {
 		t.Parallel()
 		runPasswords(t, open)
 	})
+	t.Run("AuthorizationRequests", func(t *testing.T) {
+		t.Parallel()
+		runAuthorizationRequests(t, open)
+	})
+	t.Run("Sessions", func(t *testing.T) {
+		t.Parallel()
+		runSessions(t, open)
+	})
+	t.Run("AuthorizationCodes", func(t *testing.T) {
+		t.Parallel()
+		runAuthorizationCodes(t, open)
+	})
 }
 
 func runTenants(t *testing.T, open OpenFunc) {
@@ -417,6 +429,13 @@ func runClients(t *testing.T, open OpenFunc) {
 		if diff := cmp.Diff(normalizeClient(want), got, cmpopts.EquateEmpty()); diff != "" {
 			t.Errorf("GetByClientID() mismatch (-want +got):\n%s", diff)
 		}
+		got, err = s.Clients().Get(t.Context(), tn.ID, want.ID)
+		if err != nil {
+			t.Fatalf("Get() unexpected error: %v", err)
+		}
+		if diff := cmp.Diff(normalizeClient(want), got, cmpopts.EquateEmpty()); diff != "" {
+			t.Errorf("Get() mismatch (-want +got):\n%s", diff)
+		}
 	})
 
 	t.Run("PublicClientWithoutSecretOrLists", func(t *testing.T) {
@@ -467,6 +486,9 @@ func runClients(t *testing.T, open OpenFunc) {
 			t.Errorf("GetByClientID() error = %v, want ErrNotFound", err)
 		}
 		missing := uuid.NewV7()
+		if _, err := clients.Get(t.Context(), tn.ID, missing); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Get() error = %v, want ErrNotFound", err)
+		}
 		if err := clients.UpdateSecret(t.Context(), tn.ID, missing, []byte("hash"), time.Now()); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("UpdateSecret() error = %v, want ErrNotFound", err)
 		}
@@ -569,6 +591,9 @@ func runClients(t *testing.T, open OpenFunc) {
 
 		if _, err := clients.GetByClientID(t.Context(), b.ID, c.ClientID); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("GetByClientID() through tenant b error = %v, want ErrNotFound", err)
+		}
+		if _, err := clients.Get(t.Context(), b.ID, c.ID); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Get() through tenant b error = %v, want ErrNotFound", err)
 		}
 		if got, err := clients.List(t.Context(), b.ID, uuid.Nil(), store.MaxPageSize); err != nil || len(got) != 0 {
 			t.Errorf("List() for tenant b = %d clients, %v; want none", len(got), err)

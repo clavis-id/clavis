@@ -47,6 +47,9 @@ type Store struct {
 	clients     clients
 	users       users
 	passwords   passwords
+	authzReqs   authorizationRequests
+	sessions    sessions
+	codes       authorizationCodes
 }
 
 var _ store.Store = (*Store)(nil)
@@ -95,6 +98,9 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		clients:     clients{q: q},
 		users:       users{q: q},
 		passwords:   passwords{q: q},
+		authzReqs:   authorizationRequests{q: q},
+		sessions:    sessions{q: q},
+		codes:       authorizationCodes{q: q},
 	}
 
 	if err := s.Ping(ctx); err != nil {
@@ -178,6 +184,15 @@ func (s *Store) Users() store.Users { return s.users }
 
 // Passwords returns the password repository.
 func (s *Store) Passwords() store.Passwords { return s.passwords }
+
+// AuthorizationRequests returns the authorization request repository.
+func (s *Store) AuthorizationRequests() store.AuthorizationRequests { return s.authzReqs }
+
+// Sessions returns the browser session repository.
+func (s *Store) Sessions() store.Sessions { return s.sessions }
+
+// AuthorizationCodes returns the authorization code repository.
+func (s *Store) AuthorizationCodes() store.AuthorizationCodes { return s.codes }
 
 type tenants struct {
 	q *db.Queries
@@ -349,6 +364,14 @@ func (r clients) Create(ctx context.Context, c store.Client) error {
 		UpdatedAt:                           c.UpdatedAt.UnixMicro(),
 	})
 	return mapError("creating client", err)
+}
+
+func (r clients) Get(ctx context.Context, tenantID, id uuid.UUID) (store.Client, error) {
+	row, err := r.q.GetClient(ctx, db.GetClientParams{TenantID: tenantID.String(), ID: id.String()})
+	if err != nil {
+		return store.Client{}, mapError("getting client", err)
+	}
+	return clientFromRow(row)
 }
 
 func (r clients) GetByClientID(ctx context.Context, tenantID uuid.UUID, clientID string) (store.Client, error) {
