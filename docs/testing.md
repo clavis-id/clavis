@@ -48,8 +48,8 @@ of the product. No change merges without the tests described here.
   code or `conformance/`, and on demand.
 - `conformance/expected-failures.json` and `expected-skips.json` list the known gaps, each with
   its reason. Any other failure, and any listed entry that no longer happens, fails the run.
-- Profiles grow with the roadmap: Config OP (from work item 1.2), Basic OP, Form Post and
-  RP-Initiated Logout (Phase 1); Dynamic OP and PAR (Phase 2); FAPI 2.0 Security Profile
+- Profiles grow with the roadmap: Config OP (from work item 1.2), Basic OP (from work item
+  1.6), Form Post and RP-Initiated Logout (Phase 1); Dynamic OP and PAR (Phase 2); FAPI 2.0 Security Profile
   (later).
 - A failing conformance run is fixed before merging. It is not a required status check, because
   it only runs for the pull requests that change protocol code.
@@ -62,11 +62,15 @@ of the product. No change merges without the tests described here.
 - Native Go fuzzing. Current targets: issuer parsing (`internal/issuer`), configuration parsing
   (`internal/config`), ciphertext decryption (`kek`), tenant slugs and email addresses
   (`internal/app`), redirect URI validation and matching and authorization request parsing
-  (`internal/oauth`), stored password hashes (`internal/authn/password`), and the
-  authorization endpoint as a whole, which must answer any query with the login page, an
-  error page or a redirect to a registered redirect URI (root package). Planned: JWS and JWT
-  parsing, token requests, client metadata documents (Phase 1 and 2) and SCIM filters
-  (Phase 3). Short runs on every pull request; long nightly runs are planned.
+  (`internal/oauth`), client credentials at the token endpoint (`internal/oauth`), stored
+  password hashes (`internal/authn/password`), and the authorization endpoint as a whole,
+  which must answer any query with the login page, an error page or a redirect to a
+  registered redirect URI (root package). Planned: client metadata documents (Phase 2) and
+  SCIM filters (Phase 3). JWS parsing is left to go-jose, which has its own fuzz targets.
+  Short runs on every pull request; long nightly runs are planned.
+- Interoperability: `golang.org/x/oauth2` and `github.com/coreos/go-oidc/v3` drive the
+  authorization code flow (confidential and public clients), userinfo and the client
+  credentials grant against a TLS server (`interop_test.go`).
 - Static and supply chain analysis: `govulncheck`, `gosec` through golangci-lint, CodeQL,
   gitleaks, OSSF Scorecard, dependency review on pull requests.
 
