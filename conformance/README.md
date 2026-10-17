@@ -68,10 +68,8 @@ configuration generated from `config/clavis-oidcc.json`, which names the discove
 clients and the browser steps that fill the login form, and the per-test steps that expect an
 error page or a second login.
 
-Basic OP runs its modules by name from `BASIC_MODULES`, without `oidcc-max-age-10000`: that
-test needs single sign-on, and until work item 2.1 adds it, the test passes or fails depending
-on whether its two sign-ins fall in the same second. Tests that end in REVIEW need a person to
-check a screenshot for certification; automated runs accept them.
+Tests that end in REVIEW need a person to check a screenshot for certification; automated runs
+accept them.
 
 Plans are added as the plan for Phase 1 lands their features (see
 [`docs/plans/phase-1.md`](../docs/plans/phase-1.md#conformance-progression)).
