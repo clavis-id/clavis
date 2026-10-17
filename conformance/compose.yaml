@@ -7,6 +7,8 @@ name: clavis-conformance
 
 services:
   mongodb:
+    # The version the suite's own docker-compose.yml uses at the pinned
+    # release. Dependabot ignores this image: move it only with the suite.
     image: mongo:6.0.13@sha256:b415b12f638e2685d06c58ab7fb5943577c50fadec6d9340ef67d21aeac72070
     tmpfs:
       - /data/db
@@ -70,7 +72,7 @@ services:
 
   # Runs the suite's test plans through its API. Started on demand by run.sh.
   runner:
-    image: python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f
+    image: python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
     profiles: [runner]
     working_dir: /conformance
     entrypoint: ["/conformance/runner.sh"]
