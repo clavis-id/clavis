@@ -13,12 +13,13 @@ import (
 const createAuthorizationCode = `-- name: CreateAuthorizationCode :exec
 INSERT INTO authorization_codes (
     hash, tenant_id, client_id, user_id, session_id, redirect_uri, redirect_uri_provided, scopes, nonce,
-    code_challenge, code_challenge_method, auth_time, amr, acr, created_at, expires_at
+    code_challenge, code_challenge_method, auth_time, amr, acr, userinfo_claims, id_token_claims, created_at,
+    expires_at
 ) VALUES (
     ?1, ?2, ?3, ?4, ?5,
     ?6, ?7, ?8, ?9,
     ?10, ?11, ?12, ?13, ?14,
-    ?15, ?16
+    ?15, ?16, ?17, ?18
 )
 `
 
@@ -37,6 +38,8 @@ type CreateAuthorizationCodeParams struct {
 	AuthTime            int64
 	Amr                 string
 	Acr                 string
+	UserinfoClaims      string
+	IDTokenClaims       string
 	CreatedAt           int64
 	ExpiresAt           int64
 }
@@ -57,6 +60,8 @@ func (q *Queries) CreateAuthorizationCode(ctx context.Context, arg CreateAuthori
 		arg.AuthTime,
 		arg.Amr,
 		arg.Acr,
+		arg.UserinfoClaims,
+		arg.IDTokenClaims,
 		arg.CreatedAt,
 		arg.ExpiresAt,
 	)
@@ -66,11 +71,13 @@ func (q *Queries) CreateAuthorizationCode(ctx context.Context, arg CreateAuthori
 const createAuthorizationRequest = `-- name: CreateAuthorizationRequest :exec
 INSERT INTO authorization_requests (
     id, tenant_id, client_id, binding_hash, redirect_uri, redirect_uri_provided, scopes, state, nonce,
-    code_challenge, code_challenge_method, created_at, expires_at
+    code_challenge, code_challenge_method, login_hint, hint_subject, userinfo_claims, id_token_claims, created_at,
+    expires_at
 ) VALUES (
     ?1, ?2, ?3, ?4, ?5,
     ?6, ?7, ?8, ?9, ?10,
-    ?11, ?12, ?13
+    ?11, ?12, ?13, ?14,
+    ?15, ?16, ?17
 )
 `
 
@@ -86,6 +93,10 @@ type CreateAuthorizationRequestParams struct {
 	Nonce               string
 	CodeChallenge       string
 	CodeChallengeMethod string
+	LoginHint           string
+	HintSubject         sql.NullString
+	UserinfoClaims      string
+	IDTokenClaims       string
 	CreatedAt           int64
 	ExpiresAt           int64
 }
@@ -103,6 +114,10 @@ func (q *Queries) CreateAuthorizationRequest(ctx context.Context, arg CreateAuth
 		arg.Nonce,
 		arg.CodeChallenge,
 		arg.CodeChallengeMethod,
+		arg.LoginHint,
+		arg.HintSubject,
+		arg.UserinfoClaims,
+		arg.IDTokenClaims,
 		arg.CreatedAt,
 		arg.ExpiresAt,
 	)
@@ -226,7 +241,8 @@ func (q *Queries) DeleteSession(ctx context.Context, arg DeleteSessionParams) (i
 
 const getAuthorizationCode = `-- name: GetAuthorizationCode :one
 SELECT hash, tenant_id, client_id, user_id, session_id, redirect_uri, redirect_uri_provided, scopes, nonce,
-    code_challenge, code_challenge_method, auth_time, amr, acr, created_at, expires_at, redeemed_at
+    code_challenge, code_challenge_method, auth_time, amr, acr, userinfo_claims, id_token_claims, created_at,
+    expires_at, redeemed_at
 FROM authorization_codes
 WHERE tenant_id = ?1 AND hash = ?2
 `
@@ -236,9 +252,31 @@ type GetAuthorizationCodeParams struct {
 	Hash     []byte
 }
 
-func (q *Queries) GetAuthorizationCode(ctx context.Context, arg GetAuthorizationCodeParams) (AuthorizationCode, error) {
+type GetAuthorizationCodeRow struct {
+	Hash                []byte
+	TenantID            string
+	ClientID            string
+	UserID              string
+	SessionID           string
+	RedirectUri         string
+	RedirectUriProvided int64
+	Scopes              string
+	Nonce               string
+	CodeChallenge       string
+	CodeChallengeMethod string
+	AuthTime            int64
+	Amr                 string
+	Acr                 string
+	UserinfoClaims      string
+	IDTokenClaims       string
+	CreatedAt           int64
+	ExpiresAt           int64
+	RedeemedAt          sql.NullInt64
+}
+
+func (q *Queries) GetAuthorizationCode(ctx context.Context, arg GetAuthorizationCodeParams) (GetAuthorizationCodeRow, error) {
 	row := q.db.QueryRowContext(ctx, getAuthorizationCode, arg.TenantID, arg.Hash)
-	var i AuthorizationCode
+	var i GetAuthorizationCodeRow
 	err := row.Scan(
 		&i.Hash,
 		&i.TenantID,
@@ -254,6 +292,8 @@ func (q *Queries) GetAuthorizationCode(ctx context.Context, arg GetAuthorization
 		&i.AuthTime,
 		&i.Amr,
 		&i.Acr,
+		&i.UserinfoClaims,
+		&i.IDTokenClaims,
 		&i.CreatedAt,
 		&i.ExpiresAt,
 		&i.RedeemedAt,
@@ -263,7 +303,8 @@ func (q *Queries) GetAuthorizationCode(ctx context.Context, arg GetAuthorization
 
 const getAuthorizationRequest = `-- name: GetAuthorizationRequest :one
 SELECT id, tenant_id, client_id, binding_hash, redirect_uri, redirect_uri_provided, scopes, state, nonce,
-    code_challenge, code_challenge_method, created_at, expires_at
+    code_challenge, code_challenge_method, login_hint, hint_subject, userinfo_claims, id_token_claims, created_at,
+    expires_at
 FROM authorization_requests
 WHERE tenant_id = ?1 AND id = ?2
 `
@@ -273,9 +314,29 @@ type GetAuthorizationRequestParams struct {
 	ID       string
 }
 
-func (q *Queries) GetAuthorizationRequest(ctx context.Context, arg GetAuthorizationRequestParams) (AuthorizationRequest, error) {
+type GetAuthorizationRequestRow struct {
+	ID                  string
+	TenantID            string
+	ClientID            string
+	BindingHash         []byte
+	RedirectUri         string
+	RedirectUriProvided int64
+	Scopes              string
+	State               string
+	Nonce               string
+	CodeChallenge       string
+	CodeChallengeMethod string
+	LoginHint           string
+	HintSubject         sql.NullString
+	UserinfoClaims      string
+	IDTokenClaims       string
+	CreatedAt           int64
+	ExpiresAt           int64
+}
+
+func (q *Queries) GetAuthorizationRequest(ctx context.Context, arg GetAuthorizationRequestParams) (GetAuthorizationRequestRow, error) {
 	row := q.db.QueryRowContext(ctx, getAuthorizationRequest, arg.TenantID, arg.ID)
-	var i AuthorizationRequest
+	var i GetAuthorizationRequestRow
 	err := row.Scan(
 		&i.ID,
 		&i.TenantID,
@@ -288,6 +349,10 @@ func (q *Queries) GetAuthorizationRequest(ctx context.Context, arg GetAuthorizat
 		&i.Nonce,
 		&i.CodeChallenge,
 		&i.CodeChallengeMethod,
+		&i.LoginHint,
+		&i.HintSubject,
+		&i.UserinfoClaims,
+		&i.IDTokenClaims,
 		&i.CreatedAt,
 		&i.ExpiresAt,
 	)
@@ -338,6 +403,32 @@ type RedeemAuthorizationCodeParams struct {
 
 func (q *Queries) RedeemAuthorizationCode(ctx context.Context, arg RedeemAuthorizationCodeParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, redeemAuthorizationCode, arg.RedeemedAt, arg.TenantID, arg.Hash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const touchSession = `-- name: TouchSession :execrows
+UPDATE sessions
+SET last_seen_at = ?1, idle_expires_at = ?2
+WHERE tenant_id = ?3 AND id = ?4
+`
+
+type TouchSessionParams struct {
+	LastSeenAt    int64
+	IdleExpiresAt int64
+	TenantID      string
+	ID            string
+}
+
+func (q *Queries) TouchSession(ctx context.Context, arg TouchSessionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, touchSession,
+		arg.LastSeenAt,
+		arg.IdleExpiresAt,
+		arg.TenantID,
+		arg.ID,
+	)
 	if err != nil {
 		return 0, err
 	}

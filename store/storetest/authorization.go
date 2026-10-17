@@ -75,6 +75,7 @@ func runAuthorizationRequests(t *testing.T, open OpenFunc) {
 		f := newAuthorizationFixture(t, open)
 		want := newAuthorizationRequest(f.client)
 		want.Scopes, want.State, want.Nonce, want.CodeChallenge, want.CodeChallengeMethod = nil, "", "", "", ""
+		want.LoginHint, want.HintSubject, want.UserInfoClaims, want.IDTokenClaims = "", uuid.Nil(), nil, nil
 		want.RedirectURIProvided = false
 		want.ExpiresAt = want.CreatedAt.Add(-time.Second)
 		mustCreateAuthorizationRequest(t, f.s, want)
@@ -218,11 +219,34 @@ func runSessions(t *testing.T, open OpenFunc) {
 		}
 	})
 
+	t.Run("Touch", func(t *testing.T) {
+		t.Parallel()
+		f := newAuthorizationFixture(t, open)
+		want := newSession(f.user)
+		mustCreateSession(t, f.s, want)
+		want.LastSeenAt = want.LastSeenAt.Add(time.Hour + time.Nanosecond)
+		want.IdleExpiresAt = want.LastSeenAt.Add(24 * time.Hour)
+		if err := f.s.Sessions().Touch(t.Context(), f.a.ID, want.ID, want.LastSeenAt, want.IdleExpiresAt); err != nil {
+			t.Fatalf("Touch() unexpected error: %v", err)
+		}
+		got, err := get(t, f, want.TokenHash)
+		if err != nil {
+			t.Fatalf("GetByTokenHash() unexpected error: %v", err)
+		}
+		if diff := cmp.Diff(normalizeSession(want), got, cmpopts.EquateEmpty()); diff != "" {
+			t.Errorf("GetByTokenHash() after Touch() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
 	t.Run("NotFound", func(t *testing.T) {
 		t.Parallel()
 		f := newAuthorizationFixture(t, open)
 		if _, err := get(t, f, hashOf("missing")); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("GetByTokenHash() error = %v, want ErrNotFound", err)
+		}
+		now := time.Now()
+		if err := f.s.Sessions().Touch(t.Context(), f.a.ID, uuid.NewV7(), now, now); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Touch() error = %v, want ErrNotFound", err)
 		}
 		if err := f.s.Sessions().Delete(t.Context(), f.a.ID, uuid.NewV7()); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("Delete() error = %v, want ErrNotFound", err)
@@ -260,6 +284,13 @@ func runSessions(t *testing.T, open OpenFunc) {
 		sessions := f.s.Sessions()
 		if _, err := sessions.GetByTokenHash(t.Context(), f.b.ID, s.TokenHash); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("GetByTokenHash() from another tenant error = %v, want ErrNotFound", err)
+		}
+		later := s.LastSeenAt.Add(time.Hour)
+		if err := sessions.Touch(t.Context(), f.b.ID, s.ID, later, later); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Touch() from another tenant error = %v, want ErrNotFound", err)
+		}
+		if got, err := get(t, f, s.TokenHash); err != nil || !got.LastSeenAt.Equal(normalizeSession(s).LastSeenAt) {
+			t.Errorf("GetByTokenHash() after Touch() from another tenant = %v, %v; want it unchanged", got.LastSeenAt, err)
 		}
 		if err := sessions.Delete(t.Context(), f.b.ID, s.ID); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("Delete() from another tenant error = %v, want ErrNotFound", err)
@@ -345,6 +376,7 @@ func runAuthorizationCodes(t *testing.T, open OpenFunc) {
 		f := newAuthorizationFixture(t, open)
 		want := newAuthorizationCode(f.client, f.user)
 		want.Scopes, want.AMR, want.Nonce, want.ACR, want.CodeChallenge, want.CodeChallengeMethod = nil, nil, "", "", "", ""
+		want.UserInfoClaims, want.IDTokenClaims = nil, nil
 		want.ExpiresAt = want.CreatedAt.Add(-time.Second)
 		mustCreateAuthorizationCode(t, f.s, want)
 		got, err := get(t, f, want.Hash)
@@ -481,8 +513,13 @@ func newAuthorizationRequest(c store.Client) store.AuthorizationRequest {
 		Nonce:               "n-0S6_WzA2Mj",
 		CodeChallenge:       "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
 		CodeChallengeMethod: "S256",
-		CreatedAt:           created,
-		ExpiresAt:           created.Add(10 * time.Minute),
+		LoginHint:           "ada@example.com",
+		// Not a reference: any user ID is stored as is.
+		HintSubject:    uuid.NewV7(),
+		UserInfoClaims: []string{"name", "email"},
+		IDTokenClaims:  []string{"email"},
+		CreatedAt:      created,
+		ExpiresAt:      created.Add(10 * time.Minute),
 	}
 }
 
@@ -553,6 +590,8 @@ func newAuthorizationCode(c store.Client, u store.User) store.AuthorizationCode 
 		AuthTime:            created.Add(-time.Minute),
 		AMR:                 []string{"pwd"},
 		ACR:                 "urn:example:acr:pwd",
+		UserInfoClaims:      []string{"name"},
+		IDTokenClaims:       []string{"email", "email_verified"},
 		CreatedAt:           created,
 		ExpiresAt:           created.Add(time.Minute),
 	}

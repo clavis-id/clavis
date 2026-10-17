@@ -13,23 +13,25 @@ import (
 )
 
 const createAccessToken = `-- name: CreateAccessToken :exec
-INSERT INTO access_tokens (id, tenant_id, client_id, user_id, code_hash, scopes, issued_at, expires_at, revoked_at)
-VALUES (
+INSERT INTO access_tokens (
+    id, tenant_id, client_id, user_id, code_hash, scopes, userinfo_claims, issued_at, expires_at, revoked_at
+) VALUES (
     $1, $2, $3, $4, $5, $6,
-    $7, $8, $9
+    $7, $8, $9, $10
 )
 `
 
 type CreateAccessTokenParams struct {
-	ID        string
-	TenantID  uuid.UUID
-	ClientID  uuid.UUID
-	UserID    *uuid.UUID
-	CodeHash  []byte
-	Scopes    []string
-	IssuedAt  time.Time
-	ExpiresAt time.Time
-	RevokedAt *time.Time
+	ID             string
+	TenantID       uuid.UUID
+	ClientID       uuid.UUID
+	UserID         *uuid.UUID
+	CodeHash       []byte
+	Scopes         []string
+	UserinfoClaims []string
+	IssuedAt       time.Time
+	ExpiresAt      time.Time
+	RevokedAt      *time.Time
 }
 
 func (q *Queries) CreateAccessToken(ctx context.Context, arg CreateAccessTokenParams) error {
@@ -40,6 +42,7 @@ func (q *Queries) CreateAccessToken(ctx context.Context, arg CreateAccessTokenPa
 		arg.UserID,
 		arg.CodeHash,
 		arg.Scopes,
+		arg.UserinfoClaims,
 		arg.IssuedAt,
 		arg.ExpiresAt,
 		arg.RevokedAt,
@@ -61,7 +64,7 @@ func (q *Queries) DeleteExpiredAccessTokens(ctx context.Context, now time.Time) 
 }
 
 const getAccessToken = `-- name: GetAccessToken :one
-SELECT id, tenant_id, client_id, user_id, code_hash, scopes, issued_at, expires_at, revoked_at
+SELECT id, tenant_id, client_id, user_id, code_hash, scopes, userinfo_claims, issued_at, expires_at, revoked_at
 FROM access_tokens
 WHERE tenant_id = $1 AND id = $2
 `
@@ -71,9 +74,22 @@ type GetAccessTokenParams struct {
 	ID       string
 }
 
-func (q *Queries) GetAccessToken(ctx context.Context, arg GetAccessTokenParams) (AccessToken, error) {
+type GetAccessTokenRow struct {
+	ID             string
+	TenantID       uuid.UUID
+	ClientID       uuid.UUID
+	UserID         *uuid.UUID
+	CodeHash       []byte
+	Scopes         []string
+	UserinfoClaims []string
+	IssuedAt       time.Time
+	ExpiresAt      time.Time
+	RevokedAt      *time.Time
+}
+
+func (q *Queries) GetAccessToken(ctx context.Context, arg GetAccessTokenParams) (GetAccessTokenRow, error) {
 	row := q.db.QueryRow(ctx, getAccessToken, arg.TenantID, arg.ID)
-	var i AccessToken
+	var i GetAccessTokenRow
 	err := row.Scan(
 		&i.ID,
 		&i.TenantID,
@@ -81,6 +97,7 @@ func (q *Queries) GetAccessToken(ctx context.Context, arg GetAccessTokenParams) 
 		&i.UserID,
 		&i.CodeHash,
 		&i.Scopes,
+		&i.UserinfoClaims,
 		&i.IssuedAt,
 		&i.ExpiresAt,
 		&i.RevokedAt,

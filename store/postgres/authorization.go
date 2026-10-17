@@ -27,6 +27,10 @@ func (r authorizationRequests) Create(ctx context.Context, a store.Authorization
 		Nonce:               a.Nonce,
 		CodeChallenge:       a.CodeChallenge,
 		CodeChallengeMethod: a.CodeChallengeMethod,
+		LoginHint:           a.LoginHint,
+		HintSubject:         optionalID(a.HintSubject),
+		UserinfoClaims:      orEmpty(a.UserInfoClaims),
+		IDTokenClaims:       orEmpty(a.IDTokenClaims),
 		CreatedAt:           a.CreatedAt,
 		ExpiresAt:           a.ExpiresAt,
 	})
@@ -38,7 +42,7 @@ func (r authorizationRequests) Get(ctx context.Context, tenantID uuid.UUID, id s
 	if err != nil {
 		return store.AuthorizationRequest{}, mapError("getting authorization request", err)
 	}
-	return store.AuthorizationRequest{
+	a := store.AuthorizationRequest{
 		ID:                  row.ID,
 		TenantID:            row.TenantID,
 		ClientID:            row.ClientID,
@@ -50,9 +54,16 @@ func (r authorizationRequests) Get(ctx context.Context, tenantID uuid.UUID, id s
 		Nonce:               row.Nonce,
 		CodeChallenge:       row.CodeChallenge,
 		CodeChallengeMethod: row.CodeChallengeMethod,
+		LoginHint:           row.LoginHint,
+		UserInfoClaims:      row.UserinfoClaims,
+		IDTokenClaims:       row.IDTokenClaims,
 		CreatedAt:           row.CreatedAt.UTC(),
 		ExpiresAt:           row.ExpiresAt.UTC(),
-	}, nil
+	}
+	if row.HintSubject != nil {
+		a.HintSubject = *row.HintSubject
+	}
+	return a, nil
 }
 
 func (r authorizationRequests) Delete(ctx context.Context, tenantID uuid.UUID, id string) error {
@@ -115,6 +126,22 @@ func (r sessions) GetByTokenHash(ctx context.Context, tenantID uuid.UUID, tokenH
 	}, nil
 }
 
+func (r sessions) Touch(ctx context.Context, tenantID, id uuid.UUID, lastSeenAt, idleExpiresAt time.Time) error {
+	n, err := r.q.TouchSession(ctx, db.TouchSessionParams{
+		LastSeenAt:    lastSeenAt,
+		IdleExpiresAt: idleExpiresAt,
+		TenantID:      tenantID,
+		ID:            id,
+	})
+	if err != nil {
+		return mapError("touching session", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("postgres: touching session: %w", store.ErrNotFound)
+	}
+	return nil
+}
+
 func (r sessions) Delete(ctx context.Context, tenantID, id uuid.UUID) error {
 	n, err := r.q.DeleteSession(ctx, db.DeleteSessionParams{TenantID: tenantID, ID: id})
 	if err != nil {
@@ -154,6 +181,8 @@ func (r authorizationCodes) Create(ctx context.Context, c store.AuthorizationCod
 		AuthTime:            c.AuthTime,
 		Amr:                 orEmpty(c.AMR),
 		Acr:                 c.ACR,
+		UserinfoClaims:      orEmpty(c.UserInfoClaims),
+		IDTokenClaims:       orEmpty(c.IDTokenClaims),
 		CreatedAt:           c.CreatedAt,
 		ExpiresAt:           c.ExpiresAt,
 	})
@@ -180,6 +209,8 @@ func (r authorizationCodes) Get(ctx context.Context, tenantID uuid.UUID, hash []
 		AuthTime:            row.AuthTime.UTC(),
 		AMR:                 row.Amr,
 		ACR:                 row.Acr,
+		UserInfoClaims:      row.UserinfoClaims,
+		IDTokenClaims:       row.IDTokenClaims,
 		CreatedAt:           row.CreatedAt.UTC(),
 		ExpiresAt:           row.ExpiresAt.UTC(),
 		RedeemedAt:          utcOrZero(row.RedeemedAt),

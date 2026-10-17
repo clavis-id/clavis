@@ -11,15 +11,16 @@ import (
 )
 
 type AccessToken struct {
-	ID        string
-	TenantID  uuid.UUID
-	ClientID  uuid.UUID
-	UserID    *uuid.UUID
-	CodeHash  []byte
-	Scopes    []string
-	IssuedAt  time.Time
-	ExpiresAt time.Time
-	RevokedAt *time.Time
+	ID             string
+	TenantID       uuid.UUID
+	ClientID       uuid.UUID
+	UserID         *uuid.UUID
+	CodeHash       []byte
+	Scopes         []string
+	IssuedAt       time.Time
+	ExpiresAt      time.Time
+	RevokedAt      *time.Time
+	UserinfoClaims []string
 }
 
 type ApiResource struct {
@@ -50,6 +51,8 @@ type AuthorizationCode struct {
 	CreatedAt           time.Time
 	ExpiresAt           time.Time
 	RedeemedAt          *time.Time
+	UserinfoClaims      []string
+	IDTokenClaims       []string
 }
 
 type AuthorizationRequest struct {
@@ -66,6 +69,10 @@ type AuthorizationRequest struct {
 	CodeChallengeMethod string
 	CreatedAt           time.Time
 	ExpiresAt           time.Time
+	LoginHint           string
+	HintSubject         *uuid.UUID
+	UserinfoClaims      []string
+	IDTokenClaims       []string
 }
 
 type Client struct {

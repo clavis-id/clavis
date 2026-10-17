@@ -34,15 +34,16 @@ type accessTokens struct {
 
 func (r accessTokens) Create(ctx context.Context, t store.AccessToken) error {
 	err := r.q.CreateAccessToken(ctx, db.CreateAccessTokenParams{
-		ID:        t.ID,
-		TenantID:  t.TenantID,
-		ClientID:  t.ClientID,
-		UserID:    optionalID(t.UserID),
-		CodeHash:  t.CodeHash,
-		Scopes:    orEmpty(t.Scopes),
-		IssuedAt:  t.IssuedAt,
-		ExpiresAt: t.ExpiresAt,
-		RevokedAt: optionalTime(t.RevokedAt),
+		ID:             t.ID,
+		TenantID:       t.TenantID,
+		ClientID:       t.ClientID,
+		UserID:         optionalID(t.UserID),
+		CodeHash:       t.CodeHash,
+		Scopes:         orEmpty(t.Scopes),
+		UserinfoClaims: orEmpty(t.UserInfoClaims),
+		IssuedAt:       t.IssuedAt,
+		ExpiresAt:      t.ExpiresAt,
+		RevokedAt:      optionalTime(t.RevokedAt),
 	})
 	return mapError("creating access token", err)
 }
@@ -53,13 +54,14 @@ func (r accessTokens) Get(ctx context.Context, tenantID uuid.UUID, id string) (s
 		return store.AccessToken{}, mapError("getting access token", err)
 	}
 	t := store.AccessToken{
-		ID:        row.ID,
-		TenantID:  row.TenantID,
-		ClientID:  row.ClientID,
-		CodeHash:  row.CodeHash,
-		Scopes:    row.Scopes,
-		IssuedAt:  row.IssuedAt.UTC(),
-		ExpiresAt: row.ExpiresAt.UTC(),
+		ID:             row.ID,
+		TenantID:       row.TenantID,
+		ClientID:       row.ClientID,
+		CodeHash:       row.CodeHash,
+		Scopes:         row.Scopes,
+		UserInfoClaims: row.UserinfoClaims,
+		IssuedAt:       row.IssuedAt.UTC(),
+		ExpiresAt:      row.ExpiresAt.UTC(),
 	}
 	if row.UserID != nil {
 		t.UserID = *row.UserID
