@@ -82,11 +82,11 @@ var testBinding = oauth.HashToken("browser")
 
 func (f authzFixture) start(t *testing.T, params url.Values) PendingAuthorization {
 	t.Helper()
-	id, err := StartAuthorization(t.Context(), f.d, f.tenant, params, testBinding)
-	if err != nil {
-		t.Fatalf("StartAuthorization() unexpected error: %v", err)
+	a, err := StartAuthorization(t.Context(), f.d, fakeSigner{}, f.tenant, params, testBinding, nil)
+	if err != nil || a.RequestID == "" || a.RedirectURI != "" {
+		t.Fatalf("StartAuthorization() = %+v, %v; want a stored request", a, err)
 	}
-	p, err := FindAuthorizationRequest(t.Context(), f.d, f.tenant.ID, id, testBinding)
+	p, err := FindAuthorizationRequest(t.Context(), f.d, f.tenant.ID, a.RequestID, testBinding)
 	if err != nil {
 		t.Fatalf("FindAuthorizationRequest() unexpected error: %v", err)
 	}
@@ -137,12 +137,12 @@ func TestStartAuthorizationAcceptedVariants(t *testing.T) {
 	for _, tt := range tests {
 		params := webRequest()
 		tt.edit(params)
-		id, err := StartAuthorization(t.Context(), f.d, f.tenant, params, testBinding)
+		a, err := StartAuthorization(t.Context(), f.d, fakeSigner{}, f.tenant, params, testBinding, nil)
 		if err != nil {
 			t.Errorf("%s: StartAuthorization() unexpected error: %v", tt.name, err)
 			continue
 		}
-		p, err := FindAuthorizationRequest(t.Context(), f.d, f.tenant.ID, id, testBinding)
+		p, err := FindAuthorizationRequest(t.Context(), f.d, f.tenant.ID, a.RequestID, testBinding)
 		if err != nil || !tt.check(p.Request) {
 			t.Errorf("%s: stored request = %+v, %v", tt.name, p.Request, err)
 		}
@@ -167,7 +167,7 @@ func TestStartAuthorizationShowsTargetErrors(t *testing.T) {
 	} {
 		params := webRequest()
 		edit(params)
-		_, err := StartAuthorization(t.Context(), f.d, f.tenant, params, testBinding)
+		_, err := StartAuthorization(t.Context(), f.d, fakeSigner{}, f.tenant, params, testBinding, nil)
 		var redirect *RedirectError
 		if !errors.Is(err, oauth.ErrInvalidAuthorizationTarget) || errors.As(err, &redirect) {
 			t.Errorf("%s: StartAuthorization() = %v, want ErrInvalidAuthorizationTarget", name, err)
@@ -203,7 +203,7 @@ func TestStartAuthorizationRedirectsErrors(t *testing.T) {
 	for _, tt := range tests {
 		params := webRequest()
 		tt.edit(params)
-		_, err := StartAuthorization(t.Context(), f.d, f.tenant, params, testBinding)
+		_, err := StartAuthorization(t.Context(), f.d, fakeSigner{}, f.tenant, params, testBinding, nil)
 		if tt.code == "" {
 			// The service client has no redirect URIs, so its error is
 			// shown rather than redirected.
@@ -240,7 +240,7 @@ func TestErrorResponseKeepsTheRedirectQuery(t *testing.T) {
 	params := webRequest()
 	params.Set("redirect_uri", "https://app.example.com/other?x=1")
 	params.Set("response_type", "token")
-	_, err := StartAuthorization(t.Context(), f.d, f.tenant, params, testBinding)
+	_, err := StartAuthorization(t.Context(), f.d, fakeSigner{}, f.tenant, params, testBinding, nil)
 	var redirect *RedirectError
 	if !errors.As(err, &redirect) || !strings.HasPrefix(redirect.URI, "https://app.example.com/other?x=1&") {
 		t.Errorf("StartAuthorization() = %v, want a redirect that keeps x=1", err)
@@ -427,7 +427,7 @@ func TestAuthorizationReportsStoreFailures(t *testing.T) {
 	p := f.start(t, webRequest())
 	f.d.Store = failingAuthzStore{f.d.Store}
 	var redirect *RedirectError
-	if _, err := StartAuthorization(t.Context(), f.d, f.tenant, webRequest(), testBinding); !errors.Is(err, errUnavailable) ||
+	if _, err := StartAuthorization(t.Context(), f.d, fakeSigner{}, f.tenant, webRequest(), testBinding, nil); !errors.Is(err, errUnavailable) ||
 		errors.As(err, &redirect) {
 		t.Errorf("StartAuthorization() = %v, want the store error", err)
 	}

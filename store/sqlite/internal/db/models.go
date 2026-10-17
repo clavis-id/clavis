@@ -9,15 +9,16 @@ import (
 )
 
 type AccessToken struct {
-	ID        string
-	TenantID  string
-	ClientID  string
-	UserID    sql.NullString
-	CodeHash  []byte
-	Scopes    string
-	IssuedAt  int64
-	ExpiresAt int64
-	RevokedAt sql.NullInt64
+	ID             string
+	TenantID       string
+	ClientID       string
+	UserID         sql.NullString
+	CodeHash       []byte
+	Scopes         string
+	IssuedAt       int64
+	ExpiresAt      int64
+	RevokedAt      sql.NullInt64
+	UserinfoClaims string
 }
 
 type ApiResource struct {
@@ -48,6 +49,8 @@ type AuthorizationCode struct {
 	CreatedAt           int64
 	ExpiresAt           int64
 	RedeemedAt          sql.NullInt64
+	UserinfoClaims      string
+	IDTokenClaims       string
 }
 
 type AuthorizationRequest struct {
@@ -64,6 +67,10 @@ type AuthorizationRequest struct {
 	CodeChallengeMethod string
 	CreatedAt           int64
 	ExpiresAt           int64
+	LoginHint           string
+	HintSubject         sql.NullString
+	UserinfoClaims      string
+	IDTokenClaims       string
 }
 
 type Client struct {

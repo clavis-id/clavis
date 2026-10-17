@@ -23,28 +23,9 @@ RUNNER_SCRIPTS=(
 # Plans run by default, as "<plan name and variants> <configuration file>".
 # The configuration is generated from config/clavis-oidcc.json with the
 # secrets of the clients and user that setup_clavis creates.
-#
-# Basic OP runs its modules by name, without oidcc-max-age-10000: that test
-# needs single sign-on (work item 2.1, #24), and until then it passes or fails
-# depending on whether its two sign-ins fall in the same second. Add it back
-# with single sign-on, and check this list when the suite is updated.
-BASIC_MODULES=(
-	oidcc-server oidcc-response-type-missing oidcc-userinfo-get oidcc-userinfo-post-header
-	oidcc-userinfo-post-body oidcc-ensure-request-without-nonce-succeeds-for-code-flow oidcc-scope-profile
-	oidcc-scope-email oidcc-scope-address oidcc-scope-phone oidcc-scope-all oidcc-alternate-happy-flow
-	oidcc-display-page oidcc-display-popup oidcc-prompt-login oidcc-prompt-none-not-logged-in
-	oidcc-prompt-none-logged-in oidcc-max-age-1 oidcc-ensure-request-with-unknown-parameter-succeeds
-	oidcc-id-token-hint oidcc-login-hint oidcc-ui-locales oidcc-claims-locales
-	oidcc-ensure-request-with-acr-values-succeeds oidcc-codereuse oidcc-codereuse-30seconds
-	oidcc-ensure-registered-redirect-uri oidcc-ensure-post-request-succeeds oidcc-server-client-secret-post
-	oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported oidcc-claims-essential
-	oidcc-ensure-request-object-with-redirect-uri oidcc-refresh-token oidcc-ensure-request-with-valid-pkce-succeeds
-)
-BASIC_PLAN="oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client]"
-BASIC_PLAN+=":$(IFS=,; echo "${BASIC_MODULES[*]}")"
 PLANS=(
 	"oidcc-config-certification-test-plan .cache/clavis-oidcc.json"
-	"$BASIC_PLAN .cache/clavis-oidcc.json"
+	"oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client] .cache/clavis-oidcc.json"
 )
 
 # Redirect URI of the suite's clients for the alias in the configuration.

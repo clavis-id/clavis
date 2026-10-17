@@ -20,41 +20,52 @@ import (
 	"clavisid.org/clavis/store"
 )
 
-// fakeSigner "signs" a token by encoding its tenant, algorithm, type and
-// payload, so tests can read every claim without keys.
+// fakeSigner "signs" a token by encoding its tenant, algorithm and type in
+// the header and its payload as is, so tests can read every claim without
+// keys. Its tokens have the syntax of a compact JWS.
 type fakeSigner struct{}
 
 func (fakeSigner) Sign(_ context.Context, tenantID uuid.UUID, alg, typ string, payload []byte) (string, error) {
-	return strings.Join([]string{tenantID.String(), alg, typ, base64.RawURLEncoding.EncodeToString(payload)}, "."), nil
+	header := strings.Join([]string{tenantID.String(), alg, typ}, " ")
+	return base64.RawURLEncoding.EncodeToString([]byte(header)) + "." +
+		base64.RawURLEncoding.EncodeToString(payload) + ".fake", nil
 }
 
 func (fakeSigner) Verify(_ context.Context, tenantID uuid.UUID, token, typ string) ([]byte, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 4 || parts[0] != tenantID.String() || parts[2] != typ {
-		return nil, fmt.Errorf("fake signature: %w", ErrInvalidToken)
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[3])
-	if err != nil {
+	header, payload, ok := fakeParts(token)
+	if !ok || header[0] != tenantID.String() || header[2] != typ {
 		return nil, fmt.Errorf("fake signature: %w", ErrInvalidToken)
 	}
 	return payload, nil
 }
 
+// fakeParts returns the tenant, algorithm and type, and the payload, of a
+// token from fakeSigner.
+func fakeParts(token string) (header []string, payload []byte, ok bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 || parts[2] != "fake" {
+		return nil, nil, false
+	}
+	h, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return nil, nil, false
+	}
+	header = strings.Split(string(h), " ")
+	payload, err = base64.RawURLEncoding.DecodeString(parts[1])
+	return header, payload, err == nil && len(header) == 3
+}
+
 // decode returns the claims of a token from fakeSigner.
 func decode[T any](t *testing.T, token string) (alg, typ string, claims T) {
 	t.Helper()
-	parts := strings.Split(token, ".")
-	if len(parts) != 4 {
+	header, payload, ok := fakeParts(token)
+	if !ok {
 		t.Fatalf("token %q is not from fakeSigner", token)
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[3])
-	if err != nil {
-		t.Fatalf("decoding token: %v", err)
 	}
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		t.Fatalf("decoding claims: %v", err)
 	}
-	return parts[1], parts[2], claims
+	return header[1], header[2], claims
 }
 
 // codeFor signs ada in through an authorization request and returns the code
@@ -332,7 +343,7 @@ func TestTokensForAPIScopesAndUser(t *testing.T) {
 	// A scope that no resource defines is refused at the authorization
 	// endpoint.
 	params.Set("scope", "openid undefined:scope")
-	_, err = StartAuthorization(t.Context(), f.d, f.tenant, params, testBinding)
+	_, err = StartAuthorization(t.Context(), f.d, fakeSigner{}, f.tenant, params, testBinding, nil)
 	var redirect *RedirectError
 	if !errors.As(err, &redirect) || redirect.Err.Code != oauth.ErrorInvalidScope {
 		t.Errorf("StartAuthorization() with an undefined scope = %v, want invalid_scope", err)

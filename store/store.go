@@ -345,8 +345,19 @@ type AuthorizationRequest struct {
 	// no PKCE challenge.
 	CodeChallenge       string
 	CodeChallengeMethod string
-	CreatedAt           time.Time
-	ExpiresAt           time.Time
+	// LoginHint is the email address to suggest on the sign-in form, or
+	// empty.
+	LoginHint string
+	// HintSubject is the user that the request's id_token_hint names, who
+	// must be the one to sign in, or the zero UUID. It is not a reference:
+	// the user may have been deleted since.
+	HintSubject uuid.UUID
+	// UserInfoClaims and IDTokenClaims name the claims that the request asks
+	// for individually, for the userinfo response and the ID token.
+	UserInfoClaims []string
+	IDTokenClaims  []string
+	CreatedAt      time.Time
+	ExpiresAt      time.Time
 }
 
 // AuthorizationRequests stores authorization requests. Every method works
@@ -399,6 +410,10 @@ type Sessions interface {
 	// hash, or ErrNotFound. It returns expired sessions too; callers check
 	// the expiry times.
 	GetByTokenHash(ctx context.Context, tenantID uuid.UUID, tokenHash []byte) (Session, error)
+	// Touch records that the session of a tenant with the given ID was used
+	// at lastSeenAt and moves its IdleExpiresAt to idleExpiresAt. It returns
+	// ErrNotFound when there is no such session.
+	Touch(ctx context.Context, tenantID, id uuid.UUID, lastSeenAt, idleExpiresAt time.Time) error
 	// Delete removes the session of a tenant with the given ID, or returns
 	// ErrNotFound.
 	Delete(ctx context.Context, tenantID, id uuid.UUID) error
@@ -429,8 +444,12 @@ type AuthorizationCode struct {
 	AuthTime            time.Time
 	AMR                 []string
 	ACR                 string
-	CreatedAt           time.Time
-	ExpiresAt           time.Time
+	// UserInfoClaims and IDTokenClaims are those of the authorization
+	// request.
+	UserInfoClaims []string
+	IDTokenClaims  []string
+	CreatedAt      time.Time
+	ExpiresAt      time.Time
 	// RedeemedAt is when the code was exchanged for tokens, or zero. Create
 	// ignores it; Redeem sets it.
 	RedeemedAt time.Time
@@ -469,10 +488,13 @@ type AccessToken struct {
 	UserID uuid.UUID
 	// CodeHash is the hash of the authorization code the token was issued
 	// for, or nil.
-	CodeHash  []byte
-	Scopes    []string
-	IssuedAt  time.Time
-	ExpiresAt time.Time
+	CodeHash []byte
+	Scopes   []string
+	// UserInfoClaims names the claims that the authorization request asked
+	// for individually, which the userinfo response includes.
+	UserInfoClaims []string
+	IssuedAt       time.Time
+	ExpiresAt      time.Time
 	// RevokedAt is when the token was revoked, or zero.
 	RevokedAt time.Time
 }

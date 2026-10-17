@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"bytes"
 	"encoding/json/v2"
 	"strings"
 	"testing"
@@ -61,5 +62,47 @@ func TestTokenClaimsOmitEmptyValues(t *testing.T) {
 	}
 	if !strings.Contains(string(b), `"auth_time":1`) || strings.Contains(string(b), "nonce") {
 		t.Errorf("ID token claims = %s", b)
+	}
+}
+
+func TestClaimScope(t *testing.T) {
+	t.Parallel()
+	for claim, want := range map[string]string{
+		"name":                  "profile",
+		"updated_at":            "profile",
+		"email_verified":        "email",
+		"address":               "address",
+		"phone_number_verified": "phone",
+		"sub":                   "",
+		"acr":                   "",
+		"unknown":               "",
+	} {
+		if got := ClaimScope(claim); got != want {
+			t.Errorf("ClaimScope(%s) = %q, want %q", claim, got, want)
+		}
+	}
+}
+
+func TestIDTokenPayload(t *testing.T) {
+	t.Parallel()
+	claims := IDTokenClaims{Issuer: "i", Subject: "s", Audience: "c", AuthTime: 1}
+	plain, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatalf("encoding: %v", err)
+	}
+	if b, err := IDTokenPayload(claims, nil); err != nil || !bytes.Equal(b, plain) {
+		t.Errorf("IDTokenPayload() without user claims = %s, %v; want %s", b, err, plain)
+	}
+	b, err := IDTokenPayload(claims, map[string]any{"name": "Ada", "email_verified": true})
+	if err != nil {
+		t.Fatalf("IDTokenPayload() unexpected error: %v", err)
+	}
+	const want = `{"aud":"c","auth_time":1,"email_verified":true,"exp":0,"iat":0,"iss":"i","name":"Ada","sub":"s"}`
+	if string(b) != want {
+		t.Errorf("IDTokenPayload() = %s, want %s", b, want)
+	}
+	// A user claim cannot replace a claim of the token.
+	if b, err := IDTokenPayload(claims, map[string]any{"sub": "other"}); err == nil {
+		t.Errorf("IDTokenPayload() with a user claim named sub = %s, want an error", b)
 	}
 }

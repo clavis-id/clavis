@@ -40,10 +40,11 @@ const sessionCookiePrefix = "__Host-clavis-session-"
 const tokenLength = 43
 
 // handleAuthorize serves the authorization endpoint (RFC 6749, section
-// 3.1; OpenID Connect Core 1.0, section 3.1.2.1). A valid request is stored
-// and the browser goes on to the login page; an invalid one either goes back
-// to the client with an error or, when the client or redirect URI cannot be
-// trusted, ends on an error page.
+// 3.1; OpenID Connect Core 1.0, section 3.1.2.1). When the browser's session
+// answers a valid request, the browser goes back to the client with a code;
+// otherwise the request is stored and the browser goes on to the login page.
+// An invalid request either goes back to the client with an error or, when
+// the client or redirect URI cannot be trusted, ends on an error page.
 func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request, t tenant) {
 	// The mux sends HEAD to GET routes, but a HEAD request has no use for a
 	// stored authorization request.
@@ -58,7 +59,8 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request, t tenan
 			"The sign-in request is malformed. Return to the application and try again.")
 		return
 	}
-	id, err := app.StartAuthorization(r.Context(), s.deps, t.authorizationTenant(), params, s.bindBrowser(w, r))
+	a, err := app.StartAuthorization(r.Context(), s.deps, s.signer, t.authorizationTenant(), params,
+		s.bindBrowser(w, r), sessionHash(r, t.ID))
 	var redirect *app.RedirectError
 	switch {
 	case errors.As(err, &redirect):
@@ -70,8 +72,10 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request, t tenan
 				"). Return to the application and try again.")
 	case err != nil:
 		s.internalError(w, r, "starting the authorization", err)
+	case a.RedirectURI != "":
+		seeOther(w, a.RedirectURI)
 	default:
-		seeOther(w, t.issuer+loginPath+"?"+url.Values{"request": {id}}.Encode())
+		seeOther(w, t.issuer+loginPath+"?"+url.Values{"request": {a.RequestID}}.Encode())
 	}
 }
 
@@ -100,7 +104,7 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request, t tenan
 		s.authorizationRequestError(w, r, err)
 		return
 	}
-	s.loginPage(w, r, t, p, "", "")
+	s.loginPage(w, r, t, p, p.Request.LoginHint, "")
 }
 
 // handleLogin checks the credentials posted from the sign-in form. On

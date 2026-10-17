@@ -27,3 +27,4 @@ request. Status values: Proposed, Accepted, Superseded by NNNN, Deprecated.
 | [0016](0016-administration-and-the-admin-tenant.md) | Administration and the admin tenant | Accepted |
 | [0017](0017-openid-conformance-suite-in-ci.md) | OpenID conformance suite in CI | Accepted |
 | [0018](0018-pkce-exemption-is-a-client-setting.md) | PKCE exemption is a client setting | Accepted |
+| [0019](0019-authentication-context-class-references.md) | Authentication context class references | Accepted |

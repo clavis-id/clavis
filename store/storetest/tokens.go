@@ -263,14 +263,15 @@ func runAPIResources(t *testing.T, open OpenFunc) {
 func newAccessToken(c store.Client, userID uuid.UUID) store.AccessToken {
 	issued := time.Date(2026, 10, 16, 9, 31, 0, 123456789, time.UTC)
 	return store.AccessToken{
-		ID:        uuid.NewV7().String(),
-		TenantID:  c.TenantID,
-		ClientID:  c.ID,
-		UserID:    userID,
-		CodeHash:  hashOf("code " + uuid.NewV7().String()),
-		Scopes:    []string{"openid", "orders:read"},
-		IssuedAt:  issued,
-		ExpiresAt: issued.Add(10 * time.Minute),
+		ID:             uuid.NewV7().String(),
+		TenantID:       c.TenantID,
+		ClientID:       c.ID,
+		UserID:         userID,
+		CodeHash:       hashOf("code " + uuid.NewV7().String()),
+		Scopes:         []string{"openid", "orders:read"},
+		UserInfoClaims: []string{"name"},
+		IssuedAt:       issued,
+		ExpiresAt:      issued.Add(10 * time.Minute),
 	}
 }
 

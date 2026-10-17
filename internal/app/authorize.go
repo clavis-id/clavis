@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"uuid"
 
 	"clavisid.org/clavis/internal/oauth"
+	"clavisid.org/clavis/internal/oidc"
 	"clavisid.org/clavis/store"
 )
 
@@ -60,19 +62,30 @@ type AuthorizationTenant struct {
 	Issuer string
 }
 
-// StartAuthorization validates an authorization request and stores it for
-// the sign-in that follows, bound to the browser whose binding cookie hashes
-// to bindingHash (ADR 0013). It returns the ID of the stored request.
+// Authorization is the outcome of a valid authorization request. When the
+// browser's session answers the request, RedirectURI is the authorization
+// response. Otherwise the request is stored, and RequestID identifies it
+// until the user signs in.
+type Authorization struct {
+	RedirectURI string
+	RequestID   string
+}
+
+// StartAuthorization validates an authorization request (ADR 0013). When the
+// session whose cookie hashes to sessionHash satisfies the request, it issues
+// an authorization code at once: that is single sign-on. Otherwise it stores
+// the request for the sign-in that follows, bound to the browser whose
+// binding cookie hashes to bindingHash. signer verifies an id_token_hint.
 //
 // A request whose client or redirect URI is unusable returns an error that
 // wraps oauth.ErrInvalidAuthorizationTarget, which must be shown to the user;
 // any other invalid request returns a *RedirectError.
-func StartAuthorization(ctx context.Context, d Deps, t AuthorizationTenant, params url.Values,
-	bindingHash []byte,
-) (string, error) {
+func StartAuthorization(ctx context.Context, d Deps, signer TokenSigner, t AuthorizationTenant, params url.Values,
+	bindingHash, sessionHash []byte,
+) (Authorization, error) {
 	client, redirectURI, provided, err := authorizationTarget(ctx, d, t.ID, params)
 	if err != nil {
-		return "", err
+		return Authorization{}, err
 	}
 	fail := func(e *oauth.Error, state string) error {
 		return &RedirectError{Err: e, URI: errorResponseURI(redirectURI, t.Issuer, state, e)}
@@ -82,40 +95,48 @@ func StartAuthorization(ctx context.Context, d Deps, t AuthorizationTenant, para
 	if err != nil {
 		var oauthErr *oauth.Error
 		if !errors.As(err, &oauthErr) {
-			return "", fmt.Errorf("parsing the authorization request: %w", err)
+			return Authorization{}, fmt.Errorf("parsing the authorization request: %w", err)
 		}
-		return "", fail(oauthErr, r.State)
+		return Authorization{}, fail(oauthErr, r.State)
 	}
 	if !slices.Contains(client.GrantTypes, oauth.GrantTypeAuthorizationCode) {
-		return "", fail(&oauth.Error{Code: oauth.ErrorUnauthorizedClient,
+		return Authorization{}, fail(&oauth.Error{Code: oauth.ErrorUnauthorizedClient,
 			Description: "the client may not use the authorization code grant"}, r.State)
 	}
 	for _, scope := range r.Scopes {
 		if !slices.Contains(client.Scopes, scope) {
-			return "", fail(&oauth.Error{Code: oauth.ErrorInvalidScope,
+			return Authorization{}, fail(&oauth.Error{Code: oauth.ErrorInvalidScope,
 				Description: "the client may not request every scope in the request"}, r.State)
 		}
 	}
 	owners, err := scopeOwners(ctx, d, t.ID)
 	if err != nil {
-		return "", err
+		return Authorization{}, err
 	}
 	if undefinedScope(r.Scopes, owners) != "" {
-		return "", fail(&oauth.Error{Code: oauth.ErrorInvalidScope,
+		return Authorization{}, fail(&oauth.Error{Code: oauth.ErrorInvalidScope,
 			Description: "the request includes a scope that no API resource defines"}, r.State)
 	}
 	// ADR 0018: PKCE is required unless an operator exempted this
 	// confidential client.
 	if r.CodeChallenge == "" && (client.Type != store.ClientConfidential || !client.PKCEExempt) {
-		return "", fail(&oauth.Error{Code: oauth.ErrorInvalidRequest,
+		return Authorization{}, fail(&oauth.Error{Code: oauth.ErrorInvalidRequest,
 			Description: "code_challenge is required"}, r.State)
 	}
-	// Sessions are not reused until single sign-on arrives, so a request
-	// that forbids interaction always needs a login it cannot get (OpenID
-	// Connect Core 1.0, section 3.1.2.6).
-	if r.HasPrompt(oauth.PromptNone) {
-		return "", fail(&oauth.Error{Code: oauth.ErrorLoginRequired,
-			Description: "the user must sign in"}, r.State)
+	hintSubject, err := verifyIDTokenHint(ctx, signer, t, client, r.IDTokenHint)
+	if err != nil {
+		var oauthErr *oauth.Error
+		if errors.As(err, &oauthErr) {
+			return Authorization{}, fail(oauthErr, r.State)
+		}
+		return Authorization{}, err
+	}
+	// ADR 0019 and OpenID Connect Core 1.0, section 5.5.1.1: an essential
+	// acr with values Clavis cannot produce fails the authentication.
+	if acr, ok := r.Claims.IDToken["acr"]; ok && acr.Essential && len(acr.Values) > 0 &&
+		!slices.Contains(acr.Values, oidc.ACRPassword) {
+		return Authorization{}, fail(&oauth.Error{Code: oauth.ErrorAccessDenied,
+			Description: "the requested authentication context class is not available"}, r.State)
 	}
 
 	now := d.Now()
@@ -129,6 +150,7 @@ func StartAuthorization(ctx context.Context, d Deps, t AuthorizationTenant, para
 		Scopes:              r.Scopes,
 		State:               r.State,
 		Nonce:               r.Nonce,
+		HintSubject:         hintSubject,
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(AuthorizationRequestLifetime),
 	}
@@ -136,10 +158,143 @@ func StartAuthorization(ctx context.Context, d Deps, t AuthorizationTenant, para
 		stored.CodeChallenge = r.CodeChallenge
 		stored.CodeChallengeMethod = oauth.CodeChallengeMethodS256
 	}
-	if err := d.Store.AuthorizationRequests().Create(ctx, stored); err != nil {
-		return "", fmt.Errorf("storing the authorization request: %w", err)
+	// The claims parameter belongs to OpenID Connect requests.
+	if r.OpenID() {
+		stored.UserInfoClaims = grantableClaims(r.Claims.UserInfo, client)
+		stored.IDTokenClaims = grantableClaims(r.Claims.IDToken, client)
 	}
-	return stored.ID, nil
+
+	session, ok, err := resumeSession(ctx, d, t.ID, sessionHash, r, hintSubject)
+	switch {
+	case err != nil:
+		return Authorization{}, err
+	case ok:
+		uri, err := issueCode(ctx, d, t, stored, session)
+		if err != nil {
+			return Authorization{}, err
+		}
+		d.Logger.LogAttrs(ctx, slog.LevelInfo, "user signed in with an existing session",
+			slog.String("tenant_id", t.ID.String()),
+			slog.String("user_id", session.UserID.String()),
+			slog.String("client_id", client.ClientID),
+			slog.String("session_id", session.ID.String()))
+		return Authorization{RedirectURI: uri}, nil
+	case r.HasPrompt(oauth.PromptNone):
+		// OpenID Connect Core 1.0, section 3.1.2.6: the request forbids the
+		// sign-in it needs.
+		return Authorization{}, fail(&oauth.Error{Code: oauth.ErrorLoginRequired,
+			Description: "the user must sign in"}, r.State)
+	}
+
+	// A login_hint that is not an email address cannot help the sign-in
+	// form, which asks for one.
+	stored.LoginHint, _ = NormalizeEmail(r.LoginHint)
+	if err := d.Store.AuthorizationRequests().Create(ctx, stored); err != nil {
+		return Authorization{}, fmt.Errorf("storing the authorization request: %w", err)
+	}
+	return Authorization{RequestID: stored.ID}, nil
+}
+
+// verifyIDTokenHint returns the user that an id_token_hint names, or the
+// zero UUID when hint is empty. The hint must be an ID token that the tenant
+// issued to client, which may have expired (OpenID Connect Core 1.0, section
+// 3.1.2.1). An invalid hint returns an *oauth.Error.
+func verifyIDTokenHint(ctx context.Context, signer TokenSigner, t AuthorizationTenant, client store.Client,
+	hint string,
+) (uuid.UUID, error) {
+	if hint == "" {
+		return uuid.Nil(), nil
+	}
+	invalid := &oauth.Error{Code: oauth.ErrorInvalidRequest,
+		Description: "id_token_hint is not an ID token that this provider issued to the client"}
+	payload, err := signer.Verify(ctx, t.ID, hint, oidc.IDTokenType)
+	switch {
+	case errors.Is(err, ErrInvalidToken):
+		return uuid.Nil(), invalid
+	case err != nil:
+		return uuid.Nil(), fmt.Errorf("verifying the id_token_hint: %w", err)
+	}
+	var claims oidc.IDTokenClaims
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.Issuer != t.Issuer ||
+		claims.Audience != client.ClientID {
+		return uuid.Nil(), invalid
+	}
+	subject, err := uuid.Parse(claims.Subject)
+	if err != nil {
+		return uuid.Nil(), invalid
+	}
+	return subject, nil
+}
+
+// grantableClaims returns, sorted, the names in requested of the claims
+// about the user that the client may receive individually (OpenID Connect
+// Core 1.0, section 5.5): claims that a scope requests, when the client may
+// request that scope. Other names are ignored.
+func grantableClaims(requested map[string]oauth.ClaimRequest, client store.Client) []string {
+	var names []string
+	for name := range requested {
+		if scope := oidc.ClaimScope(name); scope != "" && slices.Contains(client.Scopes, scope) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+// resumeSession returns the session whose token hashes to tokenHash when it
+// can answer r without signing the user in again (ADR 0013), after
+// recording its use. That needs a session that has not expired, of a user
+// who can still sign in and, when r has an id_token_hint, of the user it
+// names. It also needs a request that asks for no interaction and accepts
+// the age of the authentication.
+func resumeSession(ctx context.Context, d Deps, tenantID uuid.UUID, tokenHash []byte, r oauth.AuthorizationRequest,
+	hintSubject uuid.UUID,
+) (store.Session, bool, error) {
+	// Until the consent page (work item 2.2) and account selection exist,
+	// the sign-in form answers prompt=consent and prompt=select_account: it
+	// names the client and lets the user choose the account.
+	if tokenHash == nil || r.HasPrompt(oauth.PromptLogin) || r.HasPrompt(oauth.PromptConsent) ||
+		r.HasPrompt(oauth.PromptSelectAccount) {
+		return store.Session{}, false, nil
+	}
+	s, err := d.Store.Sessions().GetByTokenHash(ctx, tenantID, tokenHash)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return store.Session{}, false, nil
+	case err != nil:
+		return store.Session{}, false, fmt.Errorf("looking up the session: %w", err)
+	}
+	now := d.Now()
+	switch {
+	case !now.Before(s.IdleExpiresAt), !now.Before(s.ExpiresAt):
+		return store.Session{}, false, nil
+	// OpenID Connect Core 1.0, section 3.1.2.1: max_age=0 is equivalent to
+	// prompt=login.
+	case r.MaxAge == 0, r.MaxAge > 0 && now.Sub(s.AuthTime) > time.Duration(r.MaxAge)*time.Second:
+		return store.Session{}, false, nil
+	case hintSubject != uuid.Nil() && hintSubject != s.UserID:
+		return store.Session{}, false, nil
+	}
+	u, err := d.Store.Users().Get(ctx, tenantID, s.UserID)
+	switch {
+	case errors.Is(err, store.ErrNotFound) || err == nil && u.Status != store.UserActive:
+		return store.Session{}, false, nil
+	case err != nil:
+		return store.Session{}, false, fmt.Errorf("looking up the user of the session: %w", err)
+	}
+	s.LastSeenAt = now
+	s.IdleExpiresAt = now.Add(SessionIdleTimeout)
+	if s.IdleExpiresAt.After(s.ExpiresAt) {
+		s.IdleExpiresAt = s.ExpiresAt
+	}
+	switch err := d.Store.Sessions().Touch(ctx, tenantID, s.ID, s.LastSeenAt, s.IdleExpiresAt); {
+	case errors.Is(err, store.ErrNotFound):
+		// The session ended in the meantime.
+		return store.Session{}, false, nil
+	case err != nil:
+		return store.Session{}, false, fmt.Errorf("recording the use of the session: %w", err)
+	}
+	return s, true, nil
 }
 
 // authorizationTarget finds the client of an authorization request and the
@@ -239,7 +394,9 @@ type Login struct {
 // authorization request p, which FindAuthorizationRequest returned. It
 // replaces the session whose token hashes to previousSession, if any, with
 // a new one, and issues an authorization code bound to the request
-// (ADR 0014).
+// (ADR 0014). When the request has an id_token_hint that names another
+// user, the response is a login_required error instead (OpenID Connect Core
+// 1.0, section 3.1.2.1), and the new session stays.
 //
 // Wrong credentials return ErrInvalidCredentials and leave the request in
 // place for another attempt; a request completed in the meantime returns
@@ -275,6 +432,7 @@ func CompletePasswordLogin(ctx context.Context, d Deps, h PasswordHasher, t Auth
 		UserID:        u.ID,
 		AuthTime:      now,
 		AMR:           []string{amrPassword},
+		ACR:           oidc.ACRPassword,
 		CreatedAt:     now,
 		LastSeenAt:    now,
 		IdleExpiresAt: now.Add(SessionIdleTimeout),
@@ -283,13 +441,35 @@ func CompletePasswordLogin(ctx context.Context, d Deps, h PasswordHasher, t Auth
 	if err := d.Store.Sessions().Create(ctx, session); err != nil {
 		return Login{}, fmt.Errorf("creating the session: %w", err)
 	}
+	d.Logger.LogAttrs(ctx, slog.LevelInfo, "user signed in",
+		slog.String("tenant_id", t.ID.String()),
+		slog.String("user_id", u.ID.String()),
+		slog.String("client_id", p.Client.ClientID),
+		slog.String("session_id", session.ID.String()))
 
+	login := Login{SessionToken: token, SessionExpiresAt: session.ExpiresAt}
+	if r.HintSubject != uuid.Nil() && r.HintSubject != u.ID {
+		login.RedirectURI = errorResponseURI(r.RedirectURI, t.Issuer, r.State, &oauth.Error{
+			Code: oauth.ErrorLoginRequired, Description: "the user who signed in is not the user of id_token_hint"})
+		return login, nil
+	}
+	if login.RedirectURI, err = issueCode(ctx, d, t, r, session); err != nil {
+		return Login{}, err
+	}
+	return login, nil
+}
+
+// issueCode issues an authorization code that answers r for the user of
+// session (ADR 0014) and returns the authorization response.
+func issueCode(ctx context.Context, d Deps, t AuthorizationTenant, r store.AuthorizationRequest, session store.Session,
+) (string, error) {
+	now := d.Now()
 	code := oauth.NewToken()
 	if err := d.Store.AuthorizationCodes().Create(ctx, store.AuthorizationCode{
 		Hash:                oauth.HashToken(code),
 		TenantID:            t.ID,
 		ClientID:            r.ClientID,
-		UserID:              u.ID,
+		UserID:              session.UserID,
 		SessionID:           session.ID,
 		RedirectURI:         r.RedirectURI,
 		RedirectURIProvided: r.RedirectURIProvided,
@@ -299,28 +479,20 @@ func CompletePasswordLogin(ctx context.Context, d Deps, h PasswordHasher, t Auth
 		CodeChallengeMethod: r.CodeChallengeMethod,
 		AuthTime:            session.AuthTime,
 		AMR:                 session.AMR,
+		ACR:                 session.ACR,
+		UserInfoClaims:      r.UserInfoClaims,
+		IDTokenClaims:       r.IDTokenClaims,
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(AuthorizationCodeLifetime),
 	}); err != nil {
-		return Login{}, fmt.Errorf("storing the authorization code: %w", err)
+		return "", fmt.Errorf("storing the authorization code: %w", err)
 	}
-
-	d.Logger.LogAttrs(ctx, slog.LevelInfo, "user signed in",
-		slog.String("tenant_id", t.ID.String()),
-		slog.String("user_id", u.ID.String()),
-		slog.String("client_id", p.Client.ClientID),
-		slog.String("session_id", session.ID.String()))
-
 	// RFC 6749, section 4.1.2, and RFC 9207, section 2.
 	params := url.Values{"code": {code}, "iss": {t.Issuer}}
 	if r.State != "" {
 		params.Set("state", r.State)
 	}
-	return Login{
-		RedirectURI:      oauth.AuthorizationResponseURI(r.RedirectURI, params),
-		SessionToken:     token,
-		SessionExpiresAt: session.ExpiresAt,
-	}, nil
+	return oauth.AuthorizationResponseURI(r.RedirectURI, params), nil
 }
 
 // endSession deletes the session of a tenant whose token hashes to

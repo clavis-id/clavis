@@ -1,12 +1,13 @@
 -- name: CreateAccessToken :exec
-INSERT INTO access_tokens (id, tenant_id, client_id, user_id, code_hash, scopes, issued_at, expires_at, revoked_at)
-VALUES (
+INSERT INTO access_tokens (
+    id, tenant_id, client_id, user_id, code_hash, scopes, userinfo_claims, issued_at, expires_at, revoked_at
+) VALUES (
     sqlc.arg(id), sqlc.arg(tenant_id), sqlc.arg(client_id), sqlc.narg(user_id), sqlc.narg(code_hash), sqlc.arg(scopes),
-    sqlc.arg(issued_at), sqlc.arg(expires_at), sqlc.narg(revoked_at)
+    sqlc.arg(userinfo_claims), sqlc.arg(issued_at), sqlc.arg(expires_at), sqlc.narg(revoked_at)
 );
 
 -- name: GetAccessToken :one
-SELECT id, tenant_id, client_id, user_id, code_hash, scopes, issued_at, expires_at, revoked_at
+SELECT id, tenant_id, client_id, user_id, code_hash, scopes, userinfo_claims, issued_at, expires_at, revoked_at
 FROM access_tokens
 WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id);
 

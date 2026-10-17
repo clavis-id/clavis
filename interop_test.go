@@ -41,15 +41,15 @@ func interopServer(t *testing.T) (*Server, string, *http.Client) {
 	return s, ts.URL, ts.Client()
 }
 
-// signIn plays the browser: it follows auth to the login page, signs in as
-// ada and returns the authorization response that reaches the client.
-func signIn(t *testing.T, client *http.Client, authURL string) url.Values {
+// interopBrowser returns a client that keeps cookies like a browser and
+// stops at redirects to the relying party.
+func interopBrowser(t *testing.T, client *http.Client) *http.Client {
 	t.Helper()
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		t.Fatalf("creating a cookie jar: %v", err)
 	}
-	browser := &http.Client{
+	return &http.Client{
 		Transport: client.Transport,
 		Jar:       jar,
 		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
@@ -59,6 +59,12 @@ func signIn(t *testing.T, client *http.Client, authURL string) url.Values {
 			return nil
 		},
 	}
+}
+
+// signIn plays the browser: it follows auth to the login page, signs in as
+// ada and returns the authorization response that reaches the client.
+func signIn(t *testing.T, browser *http.Client, authURL string) url.Values {
+	t.Helper()
 	res, err := browser.Get(authURL) //nolint:noctx // A test helper; the request ends with the test.
 	if err != nil {
 		t.Fatalf("GET the authorization URL: %v", err)
@@ -126,7 +132,7 @@ func TestInteropAuthorizationCodeFlow(t *testing.T) {
 		Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
 	}
 	verifier := oauth2.GenerateVerifier()
-	response := signIn(t, httpClient, config.AuthCodeURL("state-1",
+	response := signIn(t, interopBrowser(t, httpClient), config.AuthCodeURL("state-1",
 		oauth2.S256ChallengeOption(verifier), oidc.Nonce("nonce-1")))
 	if response.Get("state") != "state-1" || response.Get("iss") != issuer {
 		t.Fatalf("authorization response = %v", response)
@@ -186,13 +192,89 @@ func TestInteropPublicClient(t *testing.T) {
 	config := oauth2.Config{ClientID: "native", Endpoint: endpoint, RedirectURL: interopRedirectURI,
 		Scopes: []string{oidc.ScopeOpenID}}
 	verifier := oauth2.GenerateVerifier()
-	response := signIn(t, httpClient, config.AuthCodeURL("s", oauth2.S256ChallengeOption(verifier)))
+	response := signIn(t, interopBrowser(t, httpClient), config.AuthCodeURL("s", oauth2.S256ChallengeOption(verifier)))
 	token, err := config.Exchange(ctx, response.Get("code"), oauth2.VerifierOption(verifier))
 	if err != nil {
 		t.Fatalf("exchanging the code: %v", err)
 	}
 	if _, err := provider.Verifier(&oidc.Config{ClientID: "native"}).Verify(ctx, token.Extra("id_token").(string)); err != nil {
 		t.Errorf("verifying the ID token: %v", err)
+	}
+}
+
+func TestInteropSingleSignOn(t *testing.T) {
+	t.Parallel()
+	s, issuer, httpClient := interopServer(t)
+	ctx := oidc.ClientContext(t.Context(), httpClient)
+	_, secret, err := app.CreateClient(t.Context(), s.deps, s.defaultTenant.ID, app.ClientSpec{
+		ClientID: "rp", Type: store.ClientConfidential, RedirectURIs: []string{interopRedirectURI},
+	})
+	if err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	createUser(t, s, s.defaultTenant)
+	provider, err := oidc.NewProvider(ctx, issuer)
+	if err != nil {
+		t.Fatalf("discovering the provider: %v", err)
+	}
+	config := oauth2.Config{ClientID: "rp", ClientSecret: secret, Endpoint: provider.Endpoint(),
+		RedirectURL: interopRedirectURI, Scopes: []string{oidc.ScopeOpenID}}
+	verifier := provider.Verifier(&oidc.Config{ClientID: "rp"})
+	exchange := func(response url.Values, codeVerifier string) (*oauth2.Token, *oidc.IDToken, string) {
+		t.Helper()
+		token, err := config.Exchange(ctx, response.Get("code"), oauth2.VerifierOption(codeVerifier))
+		if err != nil {
+			t.Fatalf("exchanging the code of %v: %v", response, err)
+		}
+		raw, _ := token.Extra("id_token").(string)
+		idToken, err := verifier.Verify(ctx, raw)
+		if err != nil {
+			t.Fatalf("verifying the ID token: %v", err)
+		}
+		return token, idToken, raw
+	}
+
+	browser := interopBrowser(t, httpClient)
+	codeVerifier := oauth2.GenerateVerifier()
+	_, first, firstRaw := exchange(signIn(t, browser, config.AuthCodeURL("s1",
+		oauth2.S256ChallengeOption(codeVerifier))), codeVerifier)
+	type authClaims struct {
+		ACR      string `json:"acr"`
+		AuthTime int64  `json:"auth_time"`
+	}
+	var firstClaims authClaims
+	if err := first.Claims(&firstClaims); err != nil || firstClaims.ACR != "https://clavisid.org/acr/password" ||
+		firstClaims.AuthTime == 0 {
+		t.Errorf("ID token claims = %+v, %v; want the password class and auth_time", firstClaims, err)
+	}
+
+	// The second request forbids interaction, names the user with the first
+	// ID token and asks for the email address in the userinfo response.
+	codeVerifier = oauth2.GenerateVerifier()
+	authURL := config.AuthCodeURL("s2", oauth2.S256ChallengeOption(codeVerifier),
+		oauth2.SetAuthURLParam("prompt", "none"),
+		oauth2.SetAuthURLParam("max_age", "10000"),
+		oauth2.SetAuthURLParam("id_token_hint", firstRaw),
+		oauth2.SetAuthURLParam("claims", `{"userinfo":{"email":{"essential":true}}}`))
+	res, err := browser.Get(authURL) //nolint:noctx // A test helper; the request ends with the test.
+	if err != nil {
+		t.Fatalf("GET the authorization URL: %v", err)
+	}
+	readBody(t, res)
+	loc, err := url.Parse(res.Header.Get("Location"))
+	if res.StatusCode != http.StatusSeeOther || err != nil || loc.Host != "client.example" || loc.Query().Get("code") == "" {
+		t.Fatalf("authorize with a session = %d to %q, want a code", res.StatusCode, res.Header.Get("Location"))
+	}
+	token, second, _ := exchange(loc.Query(), codeVerifier)
+	var secondClaims authClaims
+	if err := second.Claims(&secondClaims); err != nil || second.Subject != first.Subject ||
+		secondClaims != firstClaims {
+		t.Errorf("second ID token sub %s, claims %+v, %v; want %s, %+v", second.Subject, secondClaims, err,
+			first.Subject, firstClaims)
+	}
+	info, err := provider.UserInfo(ctx, oauth2.StaticTokenSource(token))
+	if err != nil || info.Email != "ada@example.com" {
+		t.Errorf("userinfo = %+v, %v; want the email address that the claims parameter asked for", info, err)
 	}
 }
 

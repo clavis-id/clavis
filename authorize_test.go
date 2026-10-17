@@ -339,8 +339,11 @@ func TestLoginReplacesTheSession(t *testing.T) {
 	b := newBrowser(t, s.Handler())
 	name := "__Host-clavis-session-" + tn.ID.String()
 	var tokens []string
+	// prompt=login keeps the second request from using the first session.
+	query := authorizeQuery()
+	query.Set("prompt", "login")
 	for range 2 {
-		id := b.startLogin(issuer, authorizeQuery())
+		id := b.startLogin(issuer, query)
 		if res, _ := b.post(issuer+"/login", loginForm(id, testPassword), "same-origin"); res.StatusCode != http.StatusSeeOther {
 			t.Fatalf("login = %d, want 303", res.StatusCode)
 		}
@@ -352,6 +355,71 @@ func TestLoginReplacesTheSession(t *testing.T) {
 	if _, err := s.store.Sessions().GetByTokenHash(t.Context(), tn.ID, oauth.HashToken(tokens[0])); err == nil {
 		t.Error("the first session still exists after the second login")
 	}
+}
+
+func TestSingleSignOn(t *testing.T) {
+	t.Parallel()
+	const issuer = "https://auth.example.com"
+	s, tn := newLoginServer(t, issuer, "")
+	b := newBrowser(t, s.Handler())
+	id := b.startLogin(issuer, authorizeQuery())
+	if res, _ := b.post(issuer+"/login", loginForm(id, testPassword), "same-origin"); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("login = %d, want 303", res.StatusCode)
+	}
+
+	// The session answers the next request, even one that forbids
+	// interaction, without the login page.
+	query := authorizeQuery()
+	query.Set("prompt", "none")
+	res, _ := b.get(issuer + "/oauth2/authorize?" + query.Encode())
+	loc, err := url.Parse(res.Header.Get("Location"))
+	if res.StatusCode != http.StatusSeeOther || err != nil || !strings.HasPrefix(loc.String(), "https://app.example.com/callback?") ||
+		loc.Query().Get("code") == "" || loc.Query().Get("state") != "af0ifjsldkj" {
+		t.Fatalf("authorize with a session = %d to %q, want a code", res.StatusCode, res.Header.Get("Location"))
+	}
+	if res.Header.Get("Cache-Control") != "no-store" || res.Header.Get("Referrer-Policy") != "no-referrer" {
+		t.Errorf("authorization response headers = %v", res.Header)
+	}
+	if _, err := s.store.AuthorizationCodes().Get(t.Context(), tn.ID, oauth.HashToken(loc.Query().Get("code"))); err != nil {
+		t.Errorf("the issued code: %v", err)
+	}
+
+	// Another browser has no session.
+	res, _ = newBrowser(t, s.Handler()).get(issuer + "/oauth2/authorize?" + query.Encode())
+	if loc, err := url.Parse(res.Header.Get("Location")); res.StatusCode != http.StatusSeeOther || err != nil ||
+		loc.Query().Get("error") != "login_required" {
+		t.Errorf("authorize with prompt=none and no session = %d to %q, want login_required", res.StatusCode,
+			res.Header.Get("Location"))
+	}
+
+	// prompt=login shows the login page, filled in with the login hint.
+	query = authorizeQuery()
+	query.Set("prompt", "login")
+	query.Set("login_hint", "Grace@Example.com")
+	id = b.startLogin(issuer, query)
+	if res, page := b.get(issuer + "/login?request=" + id); res.StatusCode != http.StatusOK ||
+		!strings.Contains(page, `value="grace@example.com"`) {
+		t.Errorf("login page with a login hint = %d:\n%s", res.StatusCode, page)
+	}
+}
+
+func TestSessionsBelongToOneTenant(t *testing.T) {
+	t.Parallel()
+	const issuer = "https://auth.example.com"
+	s, _ := newLoginServer(t, issuer, "acme")
+	b := newBrowser(t, s.Handler())
+	id := b.startLogin(issuer+"/t/acme", authorizeQuery())
+	if res, _ := b.post(issuer+"/t/acme/login", loginForm(id, testPassword), "same-origin"); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("login = %d, want 303", res.StatusCode)
+	}
+	if _, _, err := app.CreateClient(t.Context(), s.deps, s.defaultTenant.ID, app.ClientSpec{
+		ClientID: "web", Type: store.ClientConfidential, RedirectURIs: []string{"https://app.example.com/callback"},
+	}); err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	// The session of acme does not sign the browser in to the default
+	// tenant.
+	b.startLogin(issuer, authorizeQuery())
 }
 
 func TestTenantLogin(t *testing.T) {

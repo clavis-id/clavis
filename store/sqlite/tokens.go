@@ -34,24 +34,21 @@ type accessTokens struct {
 }
 
 func (r accessTokens) Create(ctx context.Context, t store.AccessToken) error {
-	scopes, err := encodeList(t.Scopes)
+	lists, err := encodeLists(t.Scopes, t.UserInfoClaims)
 	if err != nil {
 		return fmt.Errorf("sqlite: creating access token: %w", err)
 	}
-	var userID sql.NullString
-	if t.UserID != uuid.Nil() {
-		userID = sql.NullString{String: t.UserID.String(), Valid: true}
-	}
 	err = r.q.CreateAccessToken(ctx, db.CreateAccessTokenParams{
-		ID:        t.ID,
-		TenantID:  t.TenantID.String(),
-		ClientID:  t.ClientID.String(),
-		UserID:    userID,
-		CodeHash:  t.CodeHash,
-		Scopes:    scopes,
-		IssuedAt:  t.IssuedAt.UnixMicro(),
-		ExpiresAt: t.ExpiresAt.UnixMicro(),
-		RevokedAt: optionalTime(t.RevokedAt),
+		ID:             t.ID,
+		TenantID:       t.TenantID.String(),
+		ClientID:       t.ClientID.String(),
+		UserID:         optionalID(t.UserID),
+		CodeHash:       t.CodeHash,
+		Scopes:         lists[0],
+		UserinfoClaims: lists[1],
+		IssuedAt:       t.IssuedAt.UnixMicro(),
+		ExpiresAt:      t.ExpiresAt.UnixMicro(),
+		RevokedAt:      optionalTime(t.RevokedAt),
 	})
 	return mapError("creating access token", err)
 }
@@ -69,19 +66,20 @@ func (r accessTokens) Get(ctx context.Context, tenantID uuid.UUID, id string) (s
 	if err != nil {
 		return store.AccessToken{}, err
 	}
-	scopes, err := decodeList(row.Scopes)
+	lists, err := decodeLists(row.Scopes, row.UserinfoClaims)
 	if err != nil {
-		return store.AccessToken{}, fmt.Errorf("sqlite: corrupt scopes in an access token: %w", err)
+		return store.AccessToken{}, fmt.Errorf("sqlite: corrupt list in an access token: %w", err)
 	}
 	t := store.AccessToken{
-		ID:        row.ID,
-		TenantID:  ids[0],
-		ClientID:  ids[1],
-		CodeHash:  row.CodeHash,
-		Scopes:    scopes,
-		IssuedAt:  time.UnixMicro(row.IssuedAt).UTC(),
-		ExpiresAt: time.UnixMicro(row.ExpiresAt).UTC(),
-		RevokedAt: timeOrZero(row.RevokedAt),
+		ID:             row.ID,
+		TenantID:       ids[0],
+		ClientID:       ids[1],
+		CodeHash:       row.CodeHash,
+		Scopes:         lists[0],
+		UserInfoClaims: lists[1],
+		IssuedAt:       time.UnixMicro(row.IssuedAt).UTC(),
+		ExpiresAt:      time.UnixMicro(row.ExpiresAt).UTC(),
+		RevokedAt:      timeOrZero(row.RevokedAt),
 	}
 	if row.UserID.Valid {
 		t.UserID = ids[2]
@@ -194,6 +192,14 @@ func apiResourceFromRow(row db.ApiResource) (store.APIResource, error) {
 		CreatedAt:  time.UnixMicro(row.CreatedAt).UTC(),
 		UpdatedAt:  time.UnixMicro(row.UpdatedAt).UTC(),
 	}, nil
+}
+
+// optionalID stores the zero UUID as NULL.
+func optionalID(id uuid.UUID) sql.NullString {
+	if id == uuid.Nil() {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: id.String(), Valid: true}
 }
 
 // optionalTime stores the zero time as NULL.

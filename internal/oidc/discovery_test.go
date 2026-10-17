@@ -21,7 +21,11 @@ func TestNewMetadata(t *testing.T) {
 		t.Errorf("id_token_signing_alg_values_supported = %v, want only the algorithm ID tokens use",
 			m.IDTokenSigningAlgValuesSupported)
 	}
-	for _, claim := range []string{"sub", "email", "address", "phone_number", "updated_at"} {
+	if !slices.Equal(m.ACRValuesSupported, []string{ACRPassword}) || !m.ClaimsParameterSupported {
+		t.Errorf("acr_values_supported = %v, claims_parameter_supported = %v; want the password ACR and true",
+			m.ACRValuesSupported, m.ClaimsParameterSupported)
+	}
+	for _, claim := range []string{"sub", "acr", "email", "address", "phone_number", "updated_at"} {
 		if !slices.Contains(m.ClaimsSupported, claim) {
 			t.Errorf("claims_supported = %v, want %s", m.ClaimsSupported, claim)
 		}
@@ -48,7 +52,6 @@ func TestMetadataOverridesMisleadingDefaults(t *testing.T) {
 		// OpenID Connect Discovery 1.0, section 3: defaults to true.
 		"request_uri_parameter_supported": false,
 		"request_parameter_supported":     false,
-		"claims_parameter_supported":      false,
 	} {
 		if doc[field] != want {
 			t.Errorf("%s = %v, want %v", field, doc[field], want)
