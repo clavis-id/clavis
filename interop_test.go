@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -215,6 +216,89 @@ func TestInteropPublicClient(t *testing.T) {
 	}
 	if _, err := provider.Verifier(&oidc.Config{ClientID: "native"}).Verify(ctx, token.Extra("id_token").(string)); err != nil {
 		t.Errorf("verifying the ID token: %v", err)
+	}
+}
+
+// TestInteropRefreshToken refreshes tokens through the token source of
+// x/oauth2, which replaces an expired access token, and checks rotation and
+// reuse detection (ADR 0021).
+func TestInteropRefreshToken(t *testing.T) {
+	t.Parallel()
+	s, issuer, httpClient := interopServer(t)
+	ctx := oidc.ClientContext(t.Context(), httpClient)
+	_, secret, err := app.CreateClient(t.Context(), s.deps, s.defaultTenant.ID, app.ClientSpec{
+		ClientID: "rp", Type: store.ClientConfidential, RedirectURIs: []string{interopRedirectURI},
+	})
+	if err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	createUser(t, s, s.defaultTenant)
+	provider, err := oidc.NewProvider(ctx, issuer)
+	if err != nil {
+		t.Fatalf("discovering the provider: %v", err)
+	}
+	config := oauth2.Config{
+		ClientID:     "rp",
+		ClientSecret: secret,
+		Endpoint:     provider.Endpoint(),
+		RedirectURL:  interopRedirectURI,
+		Scopes:       []string{oidc.ScopeOpenID, oidc.ScopeOfflineAccess},
+	}
+	verifier := oauth2.GenerateVerifier()
+	response := signIn(t, interopBrowser(t, httpClient), config.AuthCodeURL("s", oauth2.S256ChallengeOption(verifier),
+		oidc.Nonce("nonce-1")))
+	first, err := config.Exchange(ctx, response.Get("code"), oauth2.VerifierOption(verifier))
+	if err != nil || first.RefreshToken == "" {
+		t.Fatalf("exchanging the code = %+v, %v; want a refresh token", first, err)
+	}
+	idVerifier := provider.Verifier(&oidc.Config{ClientID: "rp"})
+	firstID, err := idVerifier.Verify(ctx, first.Extra("id_token").(string))
+	if err != nil {
+		t.Fatalf("verifying the first ID token: %v", err)
+	}
+
+	// An expired token makes the token source refresh it.
+	expired := *first
+	expired.Expiry = time.Now().Add(-time.Minute)
+	second, err := config.TokenSource(ctx, &expired).Token()
+	if err != nil {
+		t.Fatalf("refreshing the token: %v", err)
+	}
+	if second.AccessToken == first.AccessToken || second.RefreshToken == "" || second.RefreshToken == first.RefreshToken {
+		t.Errorf("refreshed token = %+v, want a new access token and a new refresh token", second)
+	}
+	secondID, err := idVerifier.Verify(ctx, second.Extra("id_token").(string))
+	if err != nil {
+		t.Fatalf("verifying the refreshed ID token: %v", err)
+	}
+	var firstClaims, secondClaims struct {
+		AuthTime int64 `json:"auth_time"`
+	}
+	if err := errors.Join(firstID.Claims(&firstClaims), secondID.Claims(&secondClaims)); err != nil {
+		t.Fatalf("reading the ID token claims: %v", err)
+	}
+	if secondID.Subject != firstID.Subject || secondClaims.AuthTime != firstClaims.AuthTime || secondID.Nonce != "" {
+		t.Errorf("refreshed ID token = %+v (auth_time %d), first %+v (auth_time %d)",
+			secondID, secondClaims.AuthTime, firstID, firstClaims.AuthTime)
+	}
+	if _, err := provider.UserInfo(ctx, oauth2.StaticTokenSource(second)); err != nil {
+		t.Errorf("userinfo with the refreshed token: %v", err)
+	}
+
+	// Presenting the first refresh token again revokes the family.
+	_, err = config.TokenSource(ctx, &expired).Token()
+	var retrieveErr *oauth2.RetrieveError
+	if !errors.As(err, &retrieveErr) || retrieveErr.ErrorCode != "invalid_grant" {
+		t.Errorf("reusing the refresh token = %v, want invalid_grant", err)
+	}
+	reexpired := *second
+	reexpired.Expiry = time.Now().Add(-time.Minute)
+	if _, err := config.TokenSource(ctx, &reexpired).Token(); !errors.As(err, &retrieveErr) ||
+		retrieveErr.ErrorCode != "invalid_grant" {
+		t.Errorf("refreshing after the reuse = %v, want invalid_grant", err)
+	}
+	if _, err := provider.UserInfo(ctx, oauth2.StaticTokenSource(second)); err == nil {
+		t.Error("userinfo accepted an access token of a revoked family")
 	}
 }
 

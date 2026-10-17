@@ -30,7 +30,8 @@ func TestNewMetadata(t *testing.T) {
 			t.Errorf("claims_supported = %v, want %s", m.ClaimsSupported, claim)
 		}
 	}
-	if !slices.Contains(m.ScopesSupported, "openid") || !slices.Contains(m.TokenEndpointAuthMethodsSupported, "none") {
+	if !slices.Contains(m.ScopesSupported, "openid") || !slices.Contains(m.ScopesSupported, "offline_access") ||
+		!slices.Contains(m.TokenEndpointAuthMethodsSupported, "none") {
 		t.Errorf("metadata = %+v", m)
 	}
 }
@@ -60,7 +61,7 @@ func TestMetadataOverridesMisleadingDefaults(t *testing.T) {
 	for field, want := range map[string][]any{
 		// Defaults include fragment and implicit.
 		"response_modes_supported": {"query"},
-		"grant_types_supported":    {"authorization_code", "client_credentials"},
+		"grant_types_supported":    {"authorization_code", "refresh_token", "client_credentials"},
 	} {
 		if values, ok := doc[field].([]any); !ok || !slices.Equal(values, want) {
 			t.Errorf("%s = %v, want %v", field, doc[field], want)

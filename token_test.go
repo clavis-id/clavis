@@ -8,8 +8,12 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
+	"uuid"
 
 	"clavisid.org/clavis/internal/app"
+	"clavisid.org/clavis/internal/oauth"
 	"clavisid.org/clavis/store"
 )
 
@@ -73,6 +77,8 @@ func TestTokenEndpointErrors(t *testing.T) {
 		{"missing grant", formContentType, "code=x", basic, 400, "invalid_request"},
 		{"unknown code", formContentType, "grant_type=authorization_code&code=x&redirect_uri=https://app.example.com/callback", basic, 400, "invalid_grant"},
 		{"client credentials not allowed", formContentType, "grant_type=client_credentials", basic, 400, "unauthorized_client"},
+		{"missing refresh token", formContentType, "grant_type=refresh_token", basic, 400, "invalid_request"},
+		{"unknown refresh token", formContentType, "grant_type=refresh_token&refresh_token=x", basic, 400, "invalid_grant"},
 		{"malformed form", formContentType, "grant_type=%zz", basic, 400, "invalid_request"},
 	}
 	for _, tt := range tests {
@@ -187,4 +193,45 @@ func TestJSONResponsesCannotBeReadAsHTML(t *testing.T) {
 	if strings.ContainsAny(rec.Body.String(), "<>&") || rec.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Errorf("response = %q, %v", rec.Body.String(), rec.Header())
 	}
+}
+
+func TestServerDeletesExpiredRefreshTokens(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, tn := newLoginServer(t, "https://auth.example.com", "")
+		client, err := s.store.Clients().GetByClientID(t.Context(), tn.ID, "web")
+		if err != nil {
+			t.Fatalf("looking up the client: %v", err)
+		}
+		u, err := s.store.Users().GetByEmail(t.Context(), tn.ID, "ada@example.com")
+		if err != nil {
+			t.Fatalf("looking up the user: %v", err)
+		}
+		// The family ends unless it is used before the first cleanup.
+		now := time.Now()
+		family := store.RefreshTokenFamily{
+			ID: uuid.NewV7(), TenantID: tn.ID, ClientID: client.ID, UserID: u.ID,
+			Scopes: []string{"openid", "offline_access"}, AuthTime: now, CreatedAt: now,
+			IdleExpiresAt: now.Add(cleanupInterval), ExpiresAt: now.Add(app.DefaultRefreshTokenAbsoluteLifetime),
+		}
+		token := store.RefreshToken{Hash: oauth.HashToken(oauth.NewToken()), TenantID: tn.ID, FamilyID: family.ID,
+			IssuedAt: now, ExpiresAt: family.IdleExpiresAt}
+		if err := s.store.RefreshTokens().Create(t.Context(), family, token); err != nil {
+			t.Fatalf("storing a refresh token: %v", err)
+		}
+		stored := func() bool {
+			_, _, err := s.store.RefreshTokens().Get(t.Context(), tn.ID, token.Hash)
+			return err == nil
+		}
+
+		time.Sleep(cleanupInterval - time.Second)
+		synctest.Wait()
+		if !stored() {
+			t.Fatal("the refresh token was deleted before it expired")
+		}
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if stored() {
+			t.Error("the expired refresh token is still stored after the cleanup")
+		}
+	})
 }

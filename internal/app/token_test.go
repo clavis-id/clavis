@@ -334,10 +334,9 @@ func TestTokensForAPIScopesAndUser(t *testing.T) {
 		t.Fatalf("ExchangeCode() unexpected error: %v", err)
 	}
 	_, _, at := decode[oidc.AccessTokenClaims](t, resp.AccessToken)
-	// offline_access is not granted until refresh tokens exist.
-	if resp.Scope != "openid orders:read" ||
+	if resp.Scope != "openid orders:read offline_access" || resp.RefreshToken == "" ||
 		!slices.Equal(at.Audience, []string{testIssuer, "https://api.example.com/orders"}) {
-		t.Errorf("scope %q, aud %v", resp.Scope, at.Audience)
+		t.Errorf("scope %q, refresh token %q, aud %v", resp.Scope, resp.RefreshToken, at.Audience)
 	}
 
 	// A scope that no resource defines is refused at the authorization

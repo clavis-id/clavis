@@ -60,14 +60,14 @@ func NewMetadata(issuer string) Metadata {
 		TokenEndpoint:         issuer + TokenPath,
 		UserinfoEndpoint:      issuer + UserinfoPath,
 		JWKSURI:               issuer + JWKSPath,
-		ScopesSupported:       []string{"openid", ScopeProfile, ScopeEmail, ScopeAddress, ScopePhone},
+		ScopesSupported:       []string{"openid", ScopeProfile, ScopeEmail, ScopeAddress, ScopePhone, ScopeOfflineAccess},
 		// OAuth 2.1 keeps only the authorization code flow.
 		ResponseTypesSupported: []string{"code"},
 		// The default is query and fragment; fragment serves implicit flows,
 		// which Clavis does not support.
 		ResponseModesSupported: []string{"query"},
 		// The default is authorization_code and implicit.
-		GrantTypesSupported:              []string{"authorization_code", "client_credentials"},
+		GrantTypesSupported:              []string{"authorization_code", "refresh_token", "client_credentials"},
 		SubjectTypesSupported:            []string{"public"},
 		IDTokenSigningAlgValuesSupported: []string{IDTokenSigningAlgorithm},
 		// OpenID Connect Core 1.0, section 9; none is for public clients.
