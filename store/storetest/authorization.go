@@ -76,6 +76,7 @@ func runAuthorizationRequests(t *testing.T, open OpenFunc) {
 		want := newAuthorizationRequest(f.client)
 		want.Scopes, want.State, want.Nonce, want.CodeChallenge, want.CodeChallengeMethod = nil, "", "", "", ""
 		want.LoginHint, want.HintSubject, want.UserInfoClaims, want.IDTokenClaims = "", uuid.Nil(), nil, nil
+		want.SessionID, want.ForceConsent = uuid.Nil(), false
 		want.RedirectURIProvided = false
 		want.ExpiresAt = want.CreatedAt.Add(-time.Second)
 		mustCreateAuthorizationRequest(t, f.s, want)
@@ -85,6 +86,32 @@ func runAuthorizationRequests(t *testing.T, open OpenFunc) {
 		}
 		if diff := cmp.Diff(normalizeAuthorizationRequest(want), got, cmpopts.EquateEmpty()); diff != "" {
 			t.Errorf("Get() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("SetSession", func(t *testing.T) {
+		t.Parallel()
+		f := newAuthorizationFixture(t, open)
+		r := newAuthorizationRequest(f.client)
+		r.SessionID = uuid.Nil()
+		mustCreateAuthorizationRequest(t, f.s, r)
+		requests := f.s.AuthorizationRequests()
+		session := uuid.NewV7()
+		if err := requests.SetSession(t.Context(), f.b.ID, r.ID, session); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("SetSession() through another tenant = %v, want ErrNotFound", err)
+		}
+		if err := requests.SetSession(t.Context(), f.a.ID, r.ID, session); err != nil {
+			t.Fatalf("SetSession() unexpected error: %v", err)
+		}
+		// A request gets a session once.
+		if err := requests.SetSession(t.Context(), f.a.ID, r.ID, uuid.NewV7()); !errors.Is(err, store.ErrConflict) {
+			t.Errorf("a second SetSession() = %v, want ErrConflict", err)
+		}
+		if got, err := get(t, f, r.ID); err != nil || got.SessionID != session {
+			t.Errorf("Get() after SetSession() = %v, %v; want session %v", got.SessionID, err, session)
+		}
+		if err := requests.SetSession(t.Context(), f.a.ID, "missing", session); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("SetSession() of an unknown request = %v, want ErrNotFound", err)
 		}
 	})
 
@@ -518,8 +545,11 @@ func newAuthorizationRequest(c store.Client) store.AuthorizationRequest {
 		HintSubject:    uuid.NewV7(),
 		UserInfoClaims: []string{"name", "email"},
 		IDTokenClaims:  []string{"email"},
-		CreatedAt:      created,
-		ExpiresAt:      created.Add(10 * time.Minute),
+		ForceConsent:   true,
+		// Not a reference either.
+		SessionID: uuid.NewV7(),
+		CreatedAt: created,
+		ExpiresAt: created.Add(10 * time.Minute),
 	}
 }
 

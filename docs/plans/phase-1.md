@@ -27,6 +27,7 @@ The design decisions this plan relies on are recorded as ADRs:
 | [0017](../adr/0017-openid-conformance-suite-in-ci.md) | OpenID conformance suite in CI with committed expected failures |
 | [0018](../adr/0018-pkce-exemption-is-a-client-setting.md) | The PKCE exemption for confidential clients is a client setting (supersedes the PKCE policy of 0014) |
 | [0019](../adr/0019-authentication-context-class-references.md) | `acr` values are URIs under `https://clavisid.org/acr/` plus the EAP values `phr` and `phrh`; `acr_values` is voluntary |
+| [0020](../adr/0020-consent-and-grants.md) | Grants per user and client; consent when a scope is new or `prompt=consent`; revoking a grant revokes its tokens |
 
 ## Rules for every work item
 

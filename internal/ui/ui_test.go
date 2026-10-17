@@ -150,3 +150,51 @@ func TestError(t *testing.T) {
 		t.Errorf("Error() rendered:\n%s", page)
 	}
 }
+
+func TestConsentEscapesItsInput(t *testing.T) {
+	t.Parallel()
+	var b bytes.Buffer
+	err := Consent(ConsentPage{
+		Layout:     Layout{Stylesheet: "/assets/clavis-0123456789ab.css"},
+		ClientName: `<script>alert(1)</script>`,
+		Account:    `ada@example.com<img src=x>`,
+		Scopes:     []string{ScopeDescription("openid", ""), ScopeDescription("orders:read", `<b>Orders</b>`)},
+		Action:     "/consent",
+		RequestID:  `"><img src=x>`,
+	}).Render(t.Context(), &b)
+	if err != nil {
+		t.Fatalf("Render() unexpected error: %v", err)
+	}
+	page := b.String()
+	for _, unsafe := range []string{"<script>", "<img", "<b>"} {
+		if strings.Contains(page, unsafe) {
+			t.Errorf("the page contains %q unescaped:\n%s", unsafe, page)
+		}
+	}
+	for _, want := range []string{
+		`<title>Allow access</title>`, `action="/consent"`, `id="allow"`, `id="deny"`, `name="decision"`,
+		"<li>Know who you are</li>", "orders:read",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the page does not contain %q:\n%s", want, page)
+		}
+	}
+}
+
+func TestScopeDescription(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct{ scope, resource, want string }{
+		{"openid", "", "Know who you are"},
+		{"profile", "", "See your name and profile"},
+		{"email", "", "See your email address"},
+		{"address", "", "See your postal address"},
+		{"phone", "", "See your phone number"},
+		{"offline_access", "", "Keep access while you are signed out"},
+		{"orders:read", "Orders", "Use Orders (orders:read)"},
+		{"unknown", "", "unknown"},
+	} {
+		if got := ScopeDescription(tt.scope, tt.resource); got != tt.want {
+			t.Errorf("ScopeDescription(%q, %q) = %q, want %q", tt.scope, tt.resource, got, tt.want)
+		}
+	}
+}

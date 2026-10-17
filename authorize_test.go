@@ -22,7 +22,8 @@ const testChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
 const testPassword = "correct horse battery"
 
 // newLoginServer returns a server whose tenant, the default one unless a
-// slug is given, has the client "web" and the user ada@example.com.
+// slug is given, has the client "web", which skips consent, and the user
+// ada@example.com.
 func newLoginServer(t testing.TB, issuer, slug string) (*Server, store.Tenant) {
 	t.Helper()
 	cfg := testConfig(t, openStore(t))
@@ -40,6 +41,7 @@ func newLoginServer(t testing.TB, issuer, slug string) (*Server, store.Tenant) {
 		Name:         "Web App",
 		Type:         store.ClientConfidential,
 		RedirectURIs: []string{"https://app.example.com/callback"},
+		SkipConsent:  true,
 	}); err != nil {
 		t.Fatalf("CreateClient() unexpected error: %v", err)
 	}
@@ -400,6 +402,86 @@ func TestSingleSignOn(t *testing.T) {
 	if res, page := b.get(issuer + "/login?request=" + id); res.StatusCode != http.StatusOK ||
 		!strings.Contains(page, `value="grace@example.com"`) {
 		t.Errorf("login page with a login hint = %d:\n%s", res.StatusCode, page)
+	}
+}
+
+func TestConsent(t *testing.T) {
+	t.Parallel()
+	const issuer = "https://auth.example.com"
+	s, tn := newLoginServer(t, issuer, "")
+	if _, _, err := app.CreateClient(t.Context(), s.deps, tn.ID, app.ClientSpec{
+		ClientID: "partner", Name: "Partner App", Type: store.ClientConfidential,
+		RedirectURIs: []string{"https://partner.example.com/callback"},
+	}); err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	query := authorizeQuery()
+	query.Set("client_id", "partner")
+	query.Set("redirect_uri", "https://partner.example.com/callback")
+	query.Set("scope", "openid email")
+	b := newBrowser(t, s.Handler())
+	id := b.startLogin(issuer, query)
+	res, _ := b.post(issuer+"/login", loginForm(id, testPassword), "same-origin")
+	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != issuer+"/consent?request="+id {
+		t.Fatalf("login = %d to %q, want the consent page", res.StatusCode, res.Header.Get("Location"))
+	}
+	// Going back to the login page leads to the consent page.
+	if res, _ := b.get(issuer + "/login?request=" + id); res.Header.Get("Location") != issuer+"/consent?request="+id {
+		t.Errorf("login page of a signed-in request = %d to %q", res.StatusCode, res.Header.Get("Location"))
+	}
+
+	res, page := b.get(issuer + "/consent?request=" + id)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("consent page = %d:\n%s", res.StatusCode, page)
+	}
+	for _, want := range []string{"Partner App", "ada@example.com", "Know who you are", "See your email address",
+		`id="allow"`, `id="deny"`, `action="/consent"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("consent page does not contain %q:\n%s", want, page)
+		}
+	}
+	if csp := res.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "form-action 'self' https://partner.example.com;") {
+		t.Errorf("Content-Security-Policy = %q, want the client as a form target", csp)
+	}
+
+	// Another browser cannot see or answer the request.
+	if res, _ := newBrowser(t, s.Handler()).get(issuer + "/consent?request=" + id); res.StatusCode != http.StatusBadRequest {
+		t.Errorf("consent page from another browser = %d, want 400", res.StatusCode)
+	}
+	decide := func(decision, site string) (response, string) {
+		t.Helper()
+		return b.post(issuer+"/consent", url.Values{"request": {id}, "decision": {decision}}, site)
+	}
+	if res, _ := decide("allow", "cross-site"); res.StatusCode != http.StatusForbidden {
+		t.Errorf("cross-site consent = %d, want 403", res.StatusCode)
+	}
+	if res, _ := decide("maybe", "same-origin"); res.StatusCode != http.StatusBadRequest {
+		t.Errorf("consent with an unknown decision = %d, want 400", res.StatusCode)
+	}
+	res, _ = decide("allow", "same-origin")
+	loc, err := url.Parse(res.Header.Get("Location"))
+	if res.StatusCode != http.StatusSeeOther || err != nil || !strings.HasPrefix(loc.String(), "https://partner.example.com/callback?") ||
+		loc.Query().Get("code") == "" || res.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("consent = %d to %q, want a code", res.StatusCode, res.Header.Get("Location"))
+	}
+
+	// The grant answers the next request; prompt=consent asks again, and a
+	// denial goes back to the client.
+	res, _ = b.get(issuer + "/oauth2/authorize?" + query.Encode())
+	if loc, _ := url.Parse(res.Header.Get("Location")); res.StatusCode != http.StatusSeeOther || loc.Query().Get("code") == "" {
+		t.Errorf("authorize with a grant = %d to %q, want a code", res.StatusCode, res.Header.Get("Location"))
+	}
+	query.Set("prompt", "consent")
+	res, _ = b.get(issuer + "/oauth2/authorize?" + query.Encode())
+	loc, err = url.Parse(res.Header.Get("Location"))
+	if res.StatusCode != http.StatusSeeOther || err != nil || loc.Path != "/consent" {
+		t.Fatalf("authorize with prompt=consent = %d to %q, want the consent page", res.StatusCode, res.Header.Get("Location"))
+	}
+	id = loc.Query().Get("request")
+	res, _ = decide("deny", "same-origin")
+	if loc, _ := url.Parse(res.Header.Get("Location")); res.StatusCode != http.StatusSeeOther ||
+		loc.Query().Get("error") != "access_denied" {
+		t.Errorf("denial = %d to %q, want access_denied", res.StatusCode, res.Header.Get("Location"))
 	}
 }
 

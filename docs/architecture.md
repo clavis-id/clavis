@@ -264,11 +264,24 @@ year.
   replaces the browser's previous session. Every Clavis cookie is `Secure`, `HttpOnly` and
   `SameSite=Lax`, with `Path=/`.
   - Single sign-on: a session answers the authorization requests of every client of its
-    tenant without the login page, while its user is active. Each use moves its idle expiry.
+    tenant without the login page, while its user is active and the request needs no
+    consent. Each use moves its idle expiry.
   - A new sign-in is needed for `prompt=login`, `max_age=0`, an authentication older than
-    `max_age`, or an `id_token_hint` of another user. Until the consent page and account
-    selection exist, `prompt=consent` and `prompt=select_account` show the sign-in form too.
-    With `prompt=none`, a request that needs a sign-in fails with `login_required`.
+    `max_age`, or an `id_token_hint` of another user. Until account selection exists,
+    `prompt=select_account` shows the sign-in form too. With `prompt=none`, a request that
+    needs a sign-in fails with `login_required`.
+- **Consent:** see ADR 0020. A grant records the scopes a user allowed a client.
+  - After the user authenticates, a request needs consent when it asks for a scope that the
+    grant lacks (a claim requested individually counts as its scope) or carries
+    `prompt=consent`. Clients that skip consent by policy, for first-party applications,
+    need it only for `prompt=consent`. With `prompt=none`, a request that needs consent
+    fails with `consent_required`.
+  - The consent page names the client, the account and each scope. Allowing adds the
+    request's scopes to the grant and issues the code; denying answers `access_denied`.
+  - The decision must come from the browser that started the request, with the session that
+    authenticated it; the form is protected like the sign-in form.
+  - `clavis grants list|revoke` lists and revokes the grants of a user. Revoking a grant
+    revokes the client's access tokens for the user, and the next request asks again.
 - **Hosted pages:** rendered on the server with templ, without scripts. They send a Content
   Security Policy that allows only same-origin stylesheets and images, forbids framing, and
   lets forms submit only to Clavis and, on the login page, to the origin of the client's

@@ -73,13 +73,14 @@ func (q *Queries) CreateAuthorizationCode(ctx context.Context, arg CreateAuthori
 const createAuthorizationRequest = `-- name: CreateAuthorizationRequest :exec
 INSERT INTO authorization_requests (
     id, tenant_id, client_id, binding_hash, redirect_uri, redirect_uri_provided, scopes, state, nonce,
-    code_challenge, code_challenge_method, login_hint, hint_subject, userinfo_claims, id_token_claims, created_at,
-    expires_at
+    code_challenge, code_challenge_method, login_hint, hint_subject, userinfo_claims, id_token_claims, force_consent,
+    session_id, created_at, expires_at
 ) VALUES (
     $1, $2, $3, $4, $5,
     $6, $7, $8, $9, $10,
     $11, $12, $13, $14,
-    $15, $16, $17
+    $15, $16, $17, $18,
+    $19
 )
 `
 
@@ -99,6 +100,8 @@ type CreateAuthorizationRequestParams struct {
 	HintSubject         *uuid.UUID
 	UserinfoClaims      []string
 	IDTokenClaims       []string
+	ForceConsent        bool
+	SessionID           *uuid.UUID
 	CreatedAt           time.Time
 	ExpiresAt           time.Time
 }
@@ -120,6 +123,8 @@ func (q *Queries) CreateAuthorizationRequest(ctx context.Context, arg CreateAuth
 		arg.HintSubject,
 		arg.UserinfoClaims,
 		arg.IDTokenClaims,
+		arg.ForceConsent,
+		arg.SessionID,
 		arg.CreatedAt,
 		arg.ExpiresAt,
 	)
@@ -305,8 +310,8 @@ func (q *Queries) GetAuthorizationCode(ctx context.Context, arg GetAuthorization
 
 const getAuthorizationRequest = `-- name: GetAuthorizationRequest :one
 SELECT id, tenant_id, client_id, binding_hash, redirect_uri, redirect_uri_provided, scopes, state, nonce,
-    code_challenge, code_challenge_method, login_hint, hint_subject, userinfo_claims, id_token_claims, created_at,
-    expires_at
+    code_challenge, code_challenge_method, login_hint, hint_subject, userinfo_claims, id_token_claims, force_consent,
+    session_id, created_at, expires_at
 FROM authorization_requests
 WHERE tenant_id = $1 AND id = $2
 `
@@ -332,6 +337,8 @@ type GetAuthorizationRequestRow struct {
 	HintSubject         *uuid.UUID
 	UserinfoClaims      []string
 	IDTokenClaims       []string
+	ForceConsent        bool
+	SessionID           *uuid.UUID
 	CreatedAt           time.Time
 	ExpiresAt           time.Time
 }
@@ -355,6 +362,8 @@ func (q *Queries) GetAuthorizationRequest(ctx context.Context, arg GetAuthorizat
 		&i.HintSubject,
 		&i.UserinfoClaims,
 		&i.IDTokenClaims,
+		&i.ForceConsent,
+		&i.SessionID,
 		&i.CreatedAt,
 		&i.ExpiresAt,
 	)
@@ -405,6 +414,26 @@ type RedeemAuthorizationCodeParams struct {
 
 func (q *Queries) RedeemAuthorizationCode(ctx context.Context, arg RedeemAuthorizationCodeParams) (int64, error) {
 	result, err := q.db.Exec(ctx, redeemAuthorizationCode, arg.RedeemedAt, arg.TenantID, arg.Hash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setAuthorizationRequestSession = `-- name: SetAuthorizationRequestSession :execrows
+UPDATE authorization_requests
+SET session_id = $1
+WHERE tenant_id = $2 AND id = $3 AND session_id IS NULL
+`
+
+type SetAuthorizationRequestSessionParams struct {
+	SessionID *uuid.UUID
+	TenantID  uuid.UUID
+	ID        string
+}
+
+func (q *Queries) SetAuthorizationRequestSession(ctx context.Context, arg SetAuthorizationRequestSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setAuthorizationRequestSession, arg.SessionID, arg.TenantID, arg.ID)
 	if err != nil {
 		return 0, err
 	}

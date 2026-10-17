@@ -76,6 +76,10 @@ func Run(t *testing.T, open OpenFunc) {
 		t.Parallel()
 		runAPIResources(t, open)
 	})
+	t.Run("Grants", func(t *testing.T) {
+		t.Parallel()
+		runGrants(t, open)
+	})
 }
 
 func runTenants(t *testing.T, open OpenFunc) {

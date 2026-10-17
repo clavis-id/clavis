@@ -71,6 +71,8 @@ type AuthorizationRequest struct {
 	HintSubject         sql.NullString
 	UserinfoClaims      string
 	IDTokenClaims       string
+	ForceConsent        int64
+	SessionID           sql.NullString
 }
 
 type Client struct {
@@ -92,6 +94,16 @@ type Client struct {
 	PkceExempt                          int64
 	CreatedAt                           int64
 	UpdatedAt                           int64
+}
+
+type Grant struct {
+	ID        string
+	TenantID  string
+	UserID    string
+	ClientID  string
+	Scopes    string
+	CreatedAt int64
+	UpdatedAt int64
 }
 
 type Password struct {

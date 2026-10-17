@@ -21,6 +21,7 @@ import (
 	"clavisid.org/clavis/internal/authn/password"
 	"clavisid.org/clavis/internal/oauth"
 	"clavisid.org/clavis/kek"
+	"clavisid.org/clavis/store"
 	"clavisid.org/clavis/store/sqlite"
 )
 
@@ -692,5 +693,74 @@ func TestResourcesCommands(t *testing.T) {
 	if out, errOut, code := run("resources", "delete", "https://api.example.com/orders", "--yes"); code != 0 ||
 		!strings.Contains(out, "Deleted API resource") {
 		t.Errorf("resources delete = %d, %q, %q", code, out, errOut)
+	}
+}
+
+func TestGrantsCommands(t *testing.T) {
+	t.Parallel()
+
+	dsn := filepath.Join(t.TempDir(), "clavis.db")
+	environ := []string{"CLAVIS_DATABASE_DSN=" + dsn}
+	run := func(args ...string) (stdout, stderr string, code int) {
+		var out, errOut bytes.Buffer
+		code = Execute(t.Context(), args, nil, &out, &errOut, environ)
+		return out.String(), errOut.String(), code
+	}
+	if _, errOut, code := run("clients", "create", "--client-id", "partner", "--redirect-uri",
+		"https://partner.example.com/callback"); code != 0 {
+		t.Fatalf("clients create = %d, %q", code, errOut)
+	}
+	if _, errOut, code := run("users", "create", "ada@example.com"); code != 0 {
+		t.Fatalf("users create = %d, %q", code, errOut)
+	}
+	// The consent page creates grants; the test writes one directly.
+	st, err := sqlite.Open(t.Context(), dsn)
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+	d := app.Deps{Store: st, Logger: slog.New(slog.DiscardHandler), Now: time.Now, NewID: uuid.NewV7}
+	tn, err := app.FindTenant(t.Context(), d, app.DefaultTenantSlug)
+	if err != nil {
+		t.Fatalf("default tenant: %v", err)
+	}
+	u, err := app.FindUser(t.Context(), d, tn.ID, "ada@example.com")
+	if err != nil {
+		t.Fatalf("FindUser() unexpected error: %v", err)
+	}
+	c, err := app.GetClient(t.Context(), d, tn.ID, "partner")
+	if err != nil {
+		t.Fatalf("GetClient() unexpected error: %v", err)
+	}
+	now := time.Now()
+	if err := st.Grants().Put(t.Context(), store.Grant{ID: uuid.NewV7(), TenantID: tn.ID, UserID: u.ID, ClientID: c.ID,
+		Scopes: []string{"openid", "email"}, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("Put() unexpected error: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("closing store: %v", err)
+	}
+
+	if _, errOut, code := run("grants", "list"); code == 0 || !strings.Contains(errOut, "--user is required") {
+		t.Errorf("grants list without --user = %d, %q", code, errOut)
+	}
+	out, errOut, code := run("grants", "list", "--user", "ada@example.com")
+	if code != 0 || !strings.Contains(out, "CLIENT ID") || !strings.Contains(out, "partner") ||
+		!strings.Contains(out, "openid email") {
+		t.Errorf("grants list = %d, %q, %q", code, out, errOut)
+	}
+	if _, errOut, code := run("grants", "revoke", "partner", "--user", "ada@example.com"); code == 0 ||
+		!strings.Contains(errOut, "--yes") {
+		t.Errorf("grants revoke without --yes = %d, %q", code, errOut)
+	}
+	if out, errOut, code := run("grants", "revoke", "partner", "--user", "ada@example.com", "--yes"); code != 0 ||
+		!strings.Contains(out, "Revoked the grant of ada@example.com for partner") {
+		t.Errorf("grants revoke = %d, %q, %q", code, out, errOut)
+	}
+	if _, errOut, code := run("grants", "revoke", "partner", "--user", "ada@example.com", "--yes"); code == 0 ||
+		!strings.Contains(errOut, "grant not found") {
+		t.Errorf("revoking a revoked grant = %d, %q", code, errOut)
+	}
+	if out, _, code := run("grants", "list", "--user", "ada@example.com"); code != 0 || strings.Contains(out, "partner") {
+		t.Errorf("grants list after revoke = %d, %q", code, out)
 	}
 }

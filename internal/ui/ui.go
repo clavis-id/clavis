@@ -180,6 +180,45 @@ type LoginPage struct {
 	Error string
 }
 
+// ConsentPage asks the user to allow or deny a client.
+type ConsentPage struct {
+	Layout
+	// ClientName names the application that asks for access.
+	ClientName string
+	// Account is the email address of the signed-in user.
+	Account string
+	// Scopes describes what the application asks for, one line each.
+	Scopes []string
+	// Action is the URL the form posts to.
+	Action string
+	// RequestID identifies the stored authorization request.
+	RequestID string
+}
+
+// ScopeDescription describes, for the consent page, what a scope lets an
+// application do. resource is the name of the API resource that defines the
+// scope, or empty for an OpenID Connect scope.
+func ScopeDescription(scope, resource string) string {
+	switch {
+	case resource != "":
+		return "Use " + resource + " (" + scope + ")"
+	case scope == "openid":
+		return "Know who you are"
+	case scope == "profile":
+		return "See your name and profile"
+	case scope == "email":
+		return "See your email address"
+	case scope == "address":
+		return "See your postal address"
+	case scope == "phone":
+		return "See your phone number"
+	case scope == "offline_access":
+		return "Keep access while you are signed out"
+	default:
+		return scope
+	}
+}
+
 // ErrorPage explains a request that cannot continue.
 type ErrorPage struct {
 	Layout

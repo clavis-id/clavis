@@ -122,3 +122,30 @@ func (q *Queries) RevokeAccessTokensByCode(ctx context.Context, arg RevokeAccess
 	}
 	return result.RowsAffected()
 }
+
+const revokeAccessTokensByUserAndClient = `-- name: RevokeAccessTokensByUserAndClient :execrows
+UPDATE access_tokens
+SET revoked_at = ?1
+WHERE tenant_id = ?2 AND user_id = ?3 AND client_id = ?4
+    AND revoked_at IS NULL
+`
+
+type RevokeAccessTokensByUserAndClientParams struct {
+	RevokedAt sql.NullInt64
+	TenantID  string
+	UserID    sql.NullString
+	ClientID  string
+}
+
+func (q *Queries) RevokeAccessTokensByUserAndClient(ctx context.Context, arg RevokeAccessTokensByUserAndClientParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, revokeAccessTokensByUserAndClient,
+		arg.RevokedAt,
+		arg.TenantID,
+		arg.UserID,
+		arg.ClientID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

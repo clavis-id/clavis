@@ -86,10 +86,26 @@ func signIn(t *testing.T, browser *http.Client, authURL string) url.Values {
 	if err != nil {
 		t.Fatalf("POST the login form: %v", err)
 	}
-	readBody(t, res)
+	page = readBody(t, res)
+	// A client that asks for consent shows the consent page next.
+	if m := regexp.MustCompile(`name="request" value="([^"]+)"`).FindStringSubmatch(page); m != nil &&
+		strings.Contains(page, `id="allow"`) {
+		form := url.Values{"request": {m[1]}, "decision": {"allow"}}
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, res.Request.URL.String(),
+			strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatalf("building the consent request: %v", err)
+		}
+		req.Header.Set("Content-Type", formContentType)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		if res, err = browser.Do(req); err != nil {
+			t.Fatalf("POST the consent form: %v", err)
+		}
+		readBody(t, res)
+	}
 	loc, err := url.Parse(res.Header.Get("Location"))
 	if res.StatusCode != http.StatusSeeOther || err != nil || loc.Host != "client.example" {
-		t.Fatalf("login = %d to %q", res.StatusCode, res.Header.Get("Location"))
+		t.Fatalf("sign-in = %d to %q", res.StatusCode, res.Header.Get("Location"))
 	}
 	return loc.Query()
 }
@@ -236,8 +252,10 @@ func TestInteropSingleSignOn(t *testing.T) {
 
 	browser := interopBrowser(t, httpClient)
 	codeVerifier := oauth2.GenerateVerifier()
+	// The user allows the email scope, which the second request asks for
+	// through the claims parameter.
 	_, first, firstRaw := exchange(signIn(t, browser, config.AuthCodeURL("s1",
-		oauth2.S256ChallengeOption(codeVerifier))), codeVerifier)
+		oauth2.S256ChallengeOption(codeVerifier), oauth2.SetAuthURLParam("scope", "openid email"))), codeVerifier)
 	type authClaims struct {
 		ACR      string `json:"acr"`
 		AuthTime int64  `json:"auth_time"`

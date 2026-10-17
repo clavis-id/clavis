@@ -319,7 +319,7 @@ func TestTokensForAPIScopesAndUser(t *testing.T) {
 		t.Fatalf("CreateAPIResource() unexpected error: %v", err)
 	}
 	if _, _, err := CreateClient(t.Context(), f.d, f.tenant.ID, ClientSpec{
-		ClientID: "shop", Type: store.ClientPublic, RedirectURIs: []string{"https://app.example.com/callback"},
+		ClientID: "shop", Type: store.ClientPublic, SkipConsent: true, RedirectURIs: []string{"https://app.example.com/callback"},
 		GrantTypes: []string{oauth.GrantTypeAuthorizationCode, oauth.GrantTypeRefreshToken},
 		Scopes:     []string{"openid", "email", "orders:read", "offline_access", "undefined:scope"},
 	}); err != nil {
@@ -359,7 +359,7 @@ func TestUserInfo(t *testing.T) {
 		Address: store.Address{Locality: "London", Country: "GB"},
 	}
 	if _, _, err := CreateClient(t.Context(), f.d, f.tenant.ID, ClientSpec{
-		ClientID: "all", Type: store.ClientConfidential, PKCEExempt: true,
+		ClientID: "all", Type: store.ClientConfidential, PKCEExempt: true, SkipConsent: true,
 		RedirectURIs: []string{"https://app.example.com/callback"},
 		Scopes:       []string{"openid", "profile", "email", "address", "phone"},
 	}); err != nil {

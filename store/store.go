@@ -61,6 +61,8 @@ type Store interface {
 	AccessTokens() AccessTokens
 	// APIResources returns the API resource repository.
 	APIResources() APIResources
+	// Grants returns the grant repository.
+	Grants() Grants
 	// Ping reports whether the underlying database is reachable.
 	Ping(ctx context.Context) error
 }
@@ -356,8 +358,15 @@ type AuthorizationRequest struct {
 	// for individually, for the userinfo response and the ID token.
 	UserInfoClaims []string
 	IDTokenClaims  []string
-	CreatedAt      time.Time
-	ExpiresAt      time.Time
+	// ForceConsent reports whether the request carries prompt=consent, which
+	// asks for consent even when a grant covers the request (ADR 0020).
+	ForceConsent bool
+	// SessionID is the session of the user who authenticated for the
+	// request, which waits for the user's consent, or the zero UUID until
+	// then. It is not a reference: the session may have ended since.
+	SessionID uuid.UUID
+	CreatedAt time.Time
+	ExpiresAt time.Time
 }
 
 // AuthorizationRequests stores authorization requests. Every method works
@@ -369,6 +378,12 @@ type AuthorizationRequests interface {
 	// Get returns the request of a tenant with the given ID, or ErrNotFound.
 	// It returns expired requests too; callers check ExpiresAt.
 	Get(ctx context.Context, tenantID uuid.UUID, id string) (AuthorizationRequest, error)
+	// SetSession records the session of the user who authenticated for the
+	// request of a tenant with the given ID. A request gets a session once:
+	// SetSession returns ErrConflict when the request has one already, so of
+	// several concurrent callers exactly one succeeds, and ErrNotFound when
+	// there is no such request.
+	SetSession(ctx context.Context, tenantID uuid.UUID, id string, sessionID uuid.UUID) error
 	// Delete removes the request of a tenant with the given ID, or returns
 	// ErrNotFound. When several callers delete the same request at once,
 	// exactly one succeeds, which makes a request single use.
@@ -513,6 +528,10 @@ type AccessTokens interface {
 	// were issued for the code with the given hash and are not revoked yet,
 	// and returns how many it revoked.
 	RevokeByCode(ctx context.Context, tenantID uuid.UUID, codeHash []byte, at time.Time) (int64, error)
+	// RevokeByUserAndClient revokes, at the given time, the tokens of a
+	// tenant that were issued to the client for the user and are not revoked
+	// yet, and returns how many it revoked.
+	RevokeByUserAndClient(ctx context.Context, tenantID, userID, clientID uuid.UUID, at time.Time) (int64, error)
 	// DeleteExpired removes the tokens of every tenant whose ExpiresAt is not
 	// after now, and returns how many were removed.
 	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
@@ -551,4 +570,35 @@ type APIResources interface {
 	// Delete removes the resource of a tenant with the given ID, or returns
 	// ErrNotFound.
 	Delete(ctx context.Context, tenantID, id uuid.UUID) error
+}
+
+// Grant records the scopes that a user allowed a client (ADR 0020). A tenant
+// has at most one grant per user and client.
+type Grant struct {
+	// ID is a version 7 UUID assigned on creation.
+	ID       uuid.UUID
+	TenantID uuid.UUID
+	UserID   uuid.UUID
+	// ClientID is the ID of the client record.
+	ClientID  uuid.UUID
+	Scopes    []string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// Grants stores grants. Every method works within one tenant.
+type Grants interface {
+	// Get returns the grant of a tenant for the user and client, or
+	// ErrNotFound.
+	Get(ctx context.Context, tenantID, userID, clientID uuid.UUID) (Grant, error)
+	// Put stores g as the grant of its user and client. When they have a
+	// grant already, Put replaces its scopes and update time, and keeps its
+	// ID and creation time. It returns ErrNotFound when the user or the
+	// client does not exist in the tenant.
+	Put(ctx context.Context, g Grant) error
+	// List returns the grants of a user of a tenant, oldest first.
+	List(ctx context.Context, tenantID, userID uuid.UUID) ([]Grant, error)
+	// Delete removes the grant of a tenant for the user and client, or
+	// returns ErrNotFound.
+	Delete(ctx context.Context, tenantID, userID, clientID uuid.UUID) error
 }

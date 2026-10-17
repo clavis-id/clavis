@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json/v2"
 	"fmt"
 	"time"
@@ -36,6 +37,8 @@ func (r authorizationRequests) Create(ctx context.Context, a store.Authorization
 		HintSubject:         optionalID(a.HintSubject),
 		UserinfoClaims:      lists[1],
 		IDTokenClaims:       lists[2],
+		ForceConsent:        boolInt(a.ForceConsent),
+		SessionID:           optionalID(a.SessionID),
 		CreatedAt:           a.CreatedAt.UnixMicro(),
 		ExpiresAt:           a.ExpiresAt.UnixMicro(),
 	})
@@ -47,11 +50,11 @@ func (r authorizationRequests) Get(ctx context.Context, tenantID uuid.UUID, id s
 	if err != nil {
 		return store.AuthorizationRequest{}, mapError("getting authorization request", err)
 	}
-	columns := []string{row.TenantID, row.ClientID}
-	if row.HintSubject.Valid {
-		columns = append(columns, row.HintSubject.String)
+	ids, err := parseIDs("authorization request", row.TenantID, row.ClientID)
+	if err != nil {
+		return store.AuthorizationRequest{}, err
 	}
-	ids, err := parseIDs("authorization request", columns...)
+	optional, err := parseOptionalIDs("authorization request", row.HintSubject, row.SessionID)
 	if err != nil {
 		return store.AuthorizationRequest{}, err
 	}
@@ -74,13 +77,32 @@ func (r authorizationRequests) Get(ctx context.Context, tenantID uuid.UUID, id s
 		LoginHint:           row.LoginHint,
 		UserInfoClaims:      lists[1],
 		IDTokenClaims:       lists[2],
+		HintSubject:         optional[0],
+		ForceConsent:        row.ForceConsent != 0,
+		SessionID:           optional[1],
 		CreatedAt:           time.UnixMicro(row.CreatedAt).UTC(),
 		ExpiresAt:           time.UnixMicro(row.ExpiresAt).UTC(),
 	}
-	if row.HintSubject.Valid {
-		a.HintSubject = ids[2]
-	}
 	return a, nil
+}
+
+func (r authorizationRequests) SetSession(ctx context.Context, tenantID uuid.UUID, id string, sessionID uuid.UUID) error {
+	n, err := r.q.SetAuthorizationRequestSession(ctx, db.SetAuthorizationRequestSessionParams{
+		SessionID: optionalID(sessionID),
+		TenantID:  tenantID.String(),
+		ID:        id,
+	})
+	if err != nil {
+		return mapError("setting the session of an authorization request", err)
+	}
+	if n == 0 {
+		// Tell a request that has a session from one that does not exist.
+		if _, err := r.Get(ctx, tenantID, id); err != nil {
+			return err
+		}
+		return fmt.Errorf("sqlite: setting the session of an authorization request: %w", store.ErrConflict)
+	}
+	return nil
 }
 
 func (r authorizationRequests) Delete(ctx context.Context, tenantID uuid.UUID, id string) error {
@@ -301,6 +323,23 @@ func decodeLists(encoded ...string) ([][]string, error) {
 		}
 	}
 	return lists, nil
+}
+
+// parseOptionalIDs parses nullable UUID columns of a record of the given
+// kind; NULL becomes the zero UUID.
+func parseOptionalIDs(kind string, columns ...sql.NullString) ([]uuid.UUID, error) {
+	ids := make([]uuid.UUID, len(columns))
+	for i, column := range columns {
+		if !column.Valid {
+			continue
+		}
+		id, err := uuid.Parse(column.String)
+		if err != nil {
+			return nil, fmt.Errorf("sqlite: corrupt id %q in %s: %w", column.String, kind, err)
+		}
+		ids[i] = id
+	}
+	return ids, nil
 }
 
 // parseIDs parses the UUID columns of a record of the given kind.

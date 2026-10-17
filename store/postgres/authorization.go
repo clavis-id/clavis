@@ -31,6 +31,8 @@ func (r authorizationRequests) Create(ctx context.Context, a store.Authorization
 		HintSubject:         optionalID(a.HintSubject),
 		UserinfoClaims:      orEmpty(a.UserInfoClaims),
 		IDTokenClaims:       orEmpty(a.IDTokenClaims),
+		ForceConsent:        a.ForceConsent,
+		SessionID:           optionalID(a.SessionID),
 		CreatedAt:           a.CreatedAt,
 		ExpiresAt:           a.ExpiresAt,
 	})
@@ -57,13 +59,36 @@ func (r authorizationRequests) Get(ctx context.Context, tenantID uuid.UUID, id s
 		LoginHint:           row.LoginHint,
 		UserInfoClaims:      row.UserinfoClaims,
 		IDTokenClaims:       row.IDTokenClaims,
+		ForceConsent:        row.ForceConsent,
 		CreatedAt:           row.CreatedAt.UTC(),
 		ExpiresAt:           row.ExpiresAt.UTC(),
 	}
 	if row.HintSubject != nil {
 		a.HintSubject = *row.HintSubject
 	}
+	if row.SessionID != nil {
+		a.SessionID = *row.SessionID
+	}
 	return a, nil
+}
+
+func (r authorizationRequests) SetSession(ctx context.Context, tenantID uuid.UUID, id string, sessionID uuid.UUID) error {
+	n, err := r.q.SetAuthorizationRequestSession(ctx, db.SetAuthorizationRequestSessionParams{
+		SessionID: optionalID(sessionID),
+		TenantID:  tenantID,
+		ID:        id,
+	})
+	if err != nil {
+		return mapError("setting the session of an authorization request", err)
+	}
+	if n == 0 {
+		// Tell a request that has a session from one that does not exist.
+		if _, err := r.Get(ctx, tenantID, id); err != nil {
+			return err
+		}
+		return fmt.Errorf("postgres: setting the session of an authorization request: %w", store.ErrConflict)
+	}
+	return nil
 }
 
 func (r authorizationRequests) Delete(ctx context.Context, tenantID uuid.UUID, id string) error {

@@ -38,6 +38,25 @@ templ Login(p LoginPage) {
 	}
 }
 
+// Consent renders the page where the user allows or denies a client
+// (ADR 0020).
+templ Consent(p ConsentPage) {
+	@layout(p.Layout, "Allow access") {
+		<p class="lead"><strong>{ p.ClientName }</strong> wants to access the account <strong>{ p.Account }</strong>.</p>
+		<p>It asks to:</p>
+		<ul class="scopes">
+			for _, scope := range p.Scopes {
+				<li>{ scope }</li>
+			}
+		</ul>
+		<form method="post" action={ templ.SafeURL(p.Action) }>
+			<input type="hidden" name="request" value={ p.RequestID }/>
+			<button id="allow" type="submit" name="decision" value="allow">Allow</button>
+			<button id="deny" class="secondary" type="submit" name="decision" value="deny">Deny</button>
+		</form>
+	}
+}
+
 // Error renders a page that explains why a request cannot continue.
 templ Error(p ErrorPage) {
 	@layout(p.Layout, p.Title) {

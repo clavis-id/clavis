@@ -146,6 +146,48 @@ func runAccessTokens(t *testing.T, open OpenFunc) {
 		}
 	})
 
+	t.Run("RevokeByUserAndClient", func(t *testing.T) {
+		t.Parallel()
+		f := newAuthorizationFixture(t, open)
+		tokens := f.s.AccessTokens()
+		other := newClient(f.a.ID, "other")
+		mustCreateClient(t, f.s.Clients(), other)
+		grace := newUser(f.a.ID, "grace@example.com")
+		mustCreateUser(t, f.s.Users(), grace)
+		a, b := newAccessToken(f.client, f.user.ID), newAccessToken(f.client, f.user.ID)
+		kept := []store.AccessToken{
+			newAccessToken(other, f.user.ID),     // another client
+			newAccessToken(f.client, grace.ID),   // another user
+			newAccessToken(f.client, uuid.Nil()), // the client for itself
+		}
+		for _, tok := range append([]store.AccessToken{a, b}, kept...) {
+			if err := tokens.Create(t.Context(), tok); err != nil {
+				t.Fatalf("Create() unexpected error: %v", err)
+			}
+		}
+		at := time.Date(2026, 10, 17, 10, 0, 0, 0, time.UTC)
+		if n, err := tokens.RevokeByUserAndClient(t.Context(), f.b.ID, f.user.ID, f.client.ID, at); err != nil || n != 0 {
+			t.Errorf("RevokeByUserAndClient() through another tenant = %d, %v; want 0", n, err)
+		}
+		if n, err := tokens.RevokeByUserAndClient(t.Context(), f.a.ID, f.user.ID, f.client.ID, at); err != nil || n != 2 {
+			t.Errorf("RevokeByUserAndClient() = %d, %v; want 2", n, err)
+		}
+		// Revoked tokens keep the time of their first revocation.
+		if n, err := tokens.RevokeByUserAndClient(t.Context(), f.a.ID, f.user.ID, f.client.ID, at.Add(time.Hour)); err != nil || n != 0 {
+			t.Errorf("a second RevokeByUserAndClient() = %d, %v; want 0", n, err)
+		}
+		for _, tok := range []store.AccessToken{a, b} {
+			if got, err := tokens.Get(t.Context(), f.a.ID, tok.ID); err != nil || !got.RevokedAt.Equal(at) {
+				t.Errorf("revoked token = %v, %v; want RevokedAt %v", got.RevokedAt, err, at)
+			}
+		}
+		for _, tok := range kept {
+			if got, err := tokens.Get(t.Context(), f.a.ID, tok.ID); err != nil || !got.RevokedAt.IsZero() {
+				t.Errorf("token of another user or client = %v, %v; want it not revoked", got.RevokedAt, err)
+			}
+		}
+	})
+
 	t.Run("DeleteExpiredAndCascades", func(t *testing.T) {
 		t.Parallel()
 		f := newAuthorizationFixture(t, open)

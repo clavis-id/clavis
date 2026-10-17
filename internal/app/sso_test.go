@@ -128,10 +128,6 @@ func TestSingleSignOnNeedsAUsableSession(t *testing.T) {
 			h, _ := f.signIn(t, webRequest())
 			return h, with(webRequest(), "prompt", "login")
 		}},
-		{"prompt consent", func(t *testing.T, f *authzFixture) ([]byte, url.Values) {
-			h, _ := f.signIn(t, webRequest())
-			return h, with(webRequest(), "prompt", "consent")
-		}},
 		{"prompt select_account", func(t *testing.T, f *authzFixture) ([]byte, url.Values) {
 			h, _ := f.signIn(t, webRequest())
 			return h, with(webRequest(), "prompt", "select_account")
@@ -182,7 +178,7 @@ func TestSingleSignOnNeedsAUsableSession(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CreateTenant() unexpected error: %v", err)
 			}
-			if _, _, err := CreateClient(t.Context(), f.d, other.ID, ClientSpec{ClientID: "web",
+			if _, _, err := CreateClient(t.Context(), f.d, other.ID, ClientSpec{ClientID: "web", SkipConsent: true,
 				Type: store.ClientConfidential, RedirectURIs: []string{"https://app.example.com/callback"}}); err != nil {
 				t.Fatalf("CreateClient() unexpected error: %v", err)
 			}

@@ -110,3 +110,18 @@ button {
   border-radius: var(--clavis-radius);
   cursor: pointer;
 }
+
+button.secondary {
+  color: var(--clavis-text);
+  background: transparent;
+  border: 1px solid var(--clavis-border);
+}
+
+.scopes {
+  margin: 0 0 1.5rem;
+  padding-left: 1.25rem;
+}
+
+.scopes li + li {
+  margin-top: 0.25rem;
+}

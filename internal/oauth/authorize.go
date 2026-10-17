@@ -20,6 +20,7 @@ const (
 	ErrorUnsupportedResponseType  = "unsupported_response_type"
 	ErrorInvalidScope             = "invalid_scope"
 	ErrorLoginRequired            = "login_required"
+	ErrorConsentRequired          = "consent_required"
 	ErrorRequestNotSupported      = "request_not_supported"
 	ErrorRequestURINotSupported   = "request_uri_not_supported"
 	ErrorRegistrationNotSupported = "registration_not_supported"
