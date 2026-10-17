@@ -248,8 +248,9 @@ year.
   - Requests that use the request object, `request_uri`, dynamic registration or a response
     type other than `code` are rejected with the matching error.
   - `id_token_hint` must be an ID token that the tenant issued to the client; it may have
-    expired. Only that user's session or sign-in answers the request. A `login_hint` that is
-    an email address fills in the sign-in form.
+    expired. Only that user's session or sign-in answers the request, and the same holds for
+    a `sub` claim that the `claims` parameter requests with a value (OpenID Connect Core 1.0,
+    section 5.5.1). A `login_hint` that is an email address fills in the sign-in form.
 - **Authorization codes:** 256 random bits, stored as a SHA-256 hash, valid for 60 seconds,
   bound to the client, the redirect URI, the PKCE challenge, the nonce, the scopes and the
   session (ADR 0014).

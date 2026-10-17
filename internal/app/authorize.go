@@ -131,6 +131,10 @@ func StartAuthorization(ctx context.Context, d Deps, signer TokenSigner, t Autho
 		}
 		return Authorization{}, err
 	}
+	subject, oauthErr := requiredSubject(hintSubject, r.Claims.IDToken["sub"])
+	if oauthErr != nil {
+		return Authorization{}, fail(oauthErr, r.State)
+	}
 	// ADR 0019 and OpenID Connect Core 1.0, section 5.5.1.1: an essential
 	// acr with values Clavis cannot produce fails the authentication.
 	if acr, ok := r.Claims.IDToken["acr"]; ok && acr.Essential && len(acr.Values) > 0 &&
@@ -150,7 +154,7 @@ func StartAuthorization(ctx context.Context, d Deps, signer TokenSigner, t Autho
 		Scopes:              r.Scopes,
 		State:               r.State,
 		Nonce:               r.Nonce,
-		HintSubject:         hintSubject,
+		HintSubject:         subject,
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(AuthorizationRequestLifetime),
 	}
@@ -164,7 +168,7 @@ func StartAuthorization(ctx context.Context, d Deps, signer TokenSigner, t Autho
 		stored.IDTokenClaims = grantableClaims(r.Claims.IDToken, client)
 	}
 
-	session, ok, err := resumeSession(ctx, d, t.ID, sessionHash, r, hintSubject)
+	session, ok, err := resumeSession(ctx, d, t.ID, sessionHash, r, subject)
 	switch {
 	case err != nil:
 		return Authorization{}, err
@@ -226,6 +230,39 @@ func verifyIDTokenHint(ctx context.Context, signer TokenSigner, t AuthorizationT
 	return subject, nil
 }
 
+// requiredSubject returns the user who alone may answer a request: the
+// subject of its id_token_hint, or the user it names by requesting the sub
+// claim of the ID token with a value (OpenID Connect Core 1.0, sections
+// 3.1.2.1 and 5.5.1). It returns the zero UUID when any user may answer, and
+// an error when no user can.
+func requiredSubject(hintSubject uuid.UUID, sub oauth.ClaimRequest) (uuid.UUID, *oauth.Error) {
+	if !sub.ValueRequested {
+		return hintSubject, nil
+	}
+	var subjects []uuid.UUID
+	for _, v := range sub.Values {
+		// Claim values are compared as strings, so only the canonical form
+		// of a user ID names a user.
+		if id, err := uuid.Parse(v); err == nil && id.String() == v && !slices.Contains(subjects, id) {
+			subjects = append(subjects, id)
+		}
+	}
+	switch {
+	case hintSubject != uuid.Nil() && slices.Contains(subjects, hintSubject):
+		return hintSubject, nil
+	case hintSubject != uuid.Nil():
+		return uuid.Nil(), &oauth.Error{Code: oauth.ErrorLoginRequired,
+			Description: "id_token_hint and the requested sub claim name different users"}
+	case len(subjects) == 0:
+		return uuid.Nil(), &oauth.Error{Code: oauth.ErrorLoginRequired,
+			Description: "no user has the requested sub claim"}
+	case len(subjects) > 1:
+		return uuid.Nil(), &oauth.Error{Code: oauth.ErrorInvalidRequest,
+			Description: "the sub claim may be requested with one value only"}
+	}
+	return subjects[0], nil
+}
+
 // grantableClaims returns, sorted, the names in requested of the claims
 // about the user that the client may receive individually (OpenID Connect
 // Core 1.0, section 5.5): claims that a scope requests, when the client may
@@ -244,11 +281,11 @@ func grantableClaims(requested map[string]oauth.ClaimRequest, client store.Clien
 // resumeSession returns the session whose token hashes to tokenHash when it
 // can answer r without signing the user in again (ADR 0013), after
 // recording its use. That needs a session that has not expired, of a user
-// who can still sign in and, when r has an id_token_hint, of the user it
-// names. It also needs a request that asks for no interaction and accepts
-// the age of the authentication.
+// who can still sign in and, when subject is not the zero UUID, of that
+// user. It also needs a request that asks for no interaction and accepts the
+// age of the authentication.
 func resumeSession(ctx context.Context, d Deps, tenantID uuid.UUID, tokenHash []byte, r oauth.AuthorizationRequest,
-	hintSubject uuid.UUID,
+	subject uuid.UUID,
 ) (store.Session, bool, error) {
 	// Until the consent page (work item 2.2) and account selection exist,
 	// the sign-in form answers prompt=consent and prompt=select_account: it
@@ -272,7 +309,7 @@ func resumeSession(ctx context.Context, d Deps, tenantID uuid.UUID, tokenHash []
 	// prompt=login.
 	case r.MaxAge == 0, r.MaxAge > 0 && now.Sub(s.AuthTime) > time.Duration(r.MaxAge)*time.Second:
 		return store.Session{}, false, nil
-	case hintSubject != uuid.Nil() && hintSubject != s.UserID:
+	case subject != uuid.Nil() && subject != s.UserID:
 		return store.Session{}, false, nil
 	}
 	u, err := d.Store.Users().Get(ctx, tenantID, s.UserID)
@@ -394,9 +431,9 @@ type Login struct {
 // authorization request p, which FindAuthorizationRequest returned. It
 // replaces the session whose token hashes to previousSession, if any, with
 // a new one, and issues an authorization code bound to the request
-// (ADR 0014). When the request has an id_token_hint that names another
-// user, the response is a login_required error instead (OpenID Connect Core
-// 1.0, section 3.1.2.1), and the new session stays.
+// (ADR 0014). When the request names another user, through id_token_hint or
+// the sub claim, the response is a login_required error instead (OpenID
+// Connect Core 1.0, sections 3.1.2.1 and 5.5.1), and the new session stays.
 //
 // Wrong credentials return ErrInvalidCredentials and leave the request in
 // place for another attempt; a request completed in the meantime returns
@@ -450,7 +487,7 @@ func CompletePasswordLogin(ctx context.Context, d Deps, h PasswordHasher, t Auth
 	login := Login{SessionToken: token, SessionExpiresAt: session.ExpiresAt}
 	if r.HintSubject != uuid.Nil() && r.HintSubject != u.ID {
 		login.RedirectURI = errorResponseURI(r.RedirectURI, t.Issuer, r.State, &oauth.Error{
-			Code: oauth.ErrorLoginRequired, Description: "the user who signed in is not the user of id_token_hint"})
+			Code: oauth.ErrorLoginRequired, Description: "the user who signed in is not the user the request names"})
 		return login, nil
 	}
 	if login.RedirectURI, err = issueCode(ctx, d, t, r, session); err != nil {

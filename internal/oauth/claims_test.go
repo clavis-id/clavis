@@ -27,7 +27,7 @@ func TestParseClaimsRequest(t *testing.T) {
 				},
 				IDToken: map[string]ClaimRequest{
 					"auth_time": {Essential: true},
-					"acr":       {Values: []string{"urn:a", "urn:b"}},
+					"acr":       {ValueRequested: true, Values: []string{"urn:a", "urn:b"}},
 				},
 			},
 		},
@@ -35,9 +35,14 @@ func TestParseClaimsRequest(t *testing.T) {
 			"value and values together, keeping only strings",
 			`{"id_token":{"acr":{"value":"urn:a","values":["urn:b",1,null,{"x":"y"}]},"age":{"value":18}}}`,
 			ClaimsRequest{IDToken: map[string]ClaimRequest{
-				"acr": {Values: []string{"urn:a", "urn:b"}},
-				"age": {},
+				"acr": {ValueRequested: true, Values: []string{"urn:a", "urn:b"}},
+				"age": {ValueRequested: true},
 			}},
+		},
+		{
+			"null value and empty values request no value",
+			`{"id_token":{"sub":{"value":null},"acr":{"values":[]}}}`,
+			ClaimsRequest{IDToken: map[string]ClaimRequest{"sub": {}, "acr": {}}},
 		},
 		{
 			"unknown members and claims are kept for the caller to ignore",

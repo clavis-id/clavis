@@ -20,6 +20,9 @@ type ClaimsRequest struct {
 // Core 1.0, section 5.5.1).
 type ClaimRequest struct {
 	Essential bool
+	// ValueRequested reports whether the request names a value for the
+	// claim, with a non-null value member or a non-empty values member.
+	ValueRequested bool
 	// Values holds the string values of the value and values members.
 	// Values of other JSON types are left out.
 	Values []string
@@ -62,6 +65,7 @@ func claimRequests(raw map[string]*claimRequestJSON) map[string]ClaimRequest {
 		var c ClaimRequest
 		if r != nil {
 			c.Essential = r.Essential
+			c.ValueRequested = len(r.Value) > 0 && r.Value.Kind() != 'n' || len(r.Values) > 0
 			for _, v := range append([]jsontext.Value{r.Value}, r.Values...) {
 				var s string
 				if v.Kind() == '"' && json.Unmarshal(v, &s) == nil {

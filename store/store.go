@@ -348,9 +348,9 @@ type AuthorizationRequest struct {
 	// LoginHint is the email address to suggest on the sign-in form, or
 	// empty.
 	LoginHint string
-	// HintSubject is the user that the request's id_token_hint names, who
-	// must be the one to sign in, or the zero UUID. It is not a reference:
-	// the user may have been deleted since.
+	// HintSubject is the user who alone may answer the request, named by its
+	// id_token_hint or by the sub claim it requests with a value, or the zero
+	// UUID. It is not a reference: the user may have been deleted since.
 	HintSubject uuid.UUID
 	// UserInfoClaims and IDTokenClaims name the claims that the request asks
 	// for individually, for the userinfo response and the ID token.

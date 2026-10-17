@@ -492,3 +492,71 @@ func TestSingleSignOnReportsStoreFailures(t *testing.T) {
 		}
 	}
 }
+
+func TestRequestedSubject(t *testing.T) {
+	t.Parallel()
+	f := newAuthzFixture(t)
+	grace, err := CreateUser(t.Context(), f.d, f.tenant.ID, UserSpec{Email: "grace@example.com"})
+	if err != nil {
+		t.Fatalf("CreateUser() unexpected error: %v", err)
+	}
+	adaToken, sessionHash := f.idTokenFor(t, webRequest())
+	ada := f.user.ID.String()
+	subClaims := func(member string) string { return `{"id_token":{"sub":` + member + `}}` }
+
+	tests := []struct {
+		name   string
+		claims string
+		hint   bool
+		// code is the expected error, or "" for an answer from ada's session.
+		code string
+	}{
+		// OpenID Connect Core 1.0, section 5.5.1: tokens of another user,
+		// even one with a session, are never an answer.
+		{"another user", subClaims(`{"value":"` + grace.ID.String() + `"}`), false, oauth.ErrorLoginRequired},
+		{"the signed-in user", subClaims(`{"value":"` + ada + `","essential":true}`), false, ""},
+		{"the signed-in user among values", subClaims(`{"values":["` + ada + `"]}`), false, ""},
+		{"not a user ID", subClaims(`{"value":"ada"}`), false, oauth.ErrorLoginRequired},
+		{"a user ID in upper case", subClaims(`{"value":"` + strings.ToUpper(ada) + `"}`), false, oauth.ErrorLoginRequired},
+		{"a number", subClaims(`{"value":42}`), false, oauth.ErrorLoginRequired},
+		{"two users", subClaims(`{"values":["` + ada + `","` + grace.ID.String() + `"]}`), false, oauth.ErrorInvalidRequest},
+		{"the hinted user", subClaims(`{"value":"` + ada + `"}`), true, ""},
+		{"a user other than the hinted one", subClaims(`{"value":"` + grace.ID.String() + `"}`), true, oauth.ErrorLoginRequired},
+		{"no value", subClaims(`{"essential":true}`), false, ""},
+		{"a null value", subClaims(`{"value":null}`), false, ""},
+		{"in the userinfo member", `{"userinfo":{"sub":{"value":"` + grace.ID.String() + `"}}}`, false, ""},
+	}
+	for _, tt := range tests {
+		params := with(with(webRequest(), "prompt", "none"), "claims", tt.claims)
+		if tt.hint {
+			params.Set("id_token_hint", adaToken)
+		}
+		a, err := f.startWith(t, params, sessionHash)
+		var redirect *RedirectError
+		switch {
+		case tt.code == "" && (err != nil || a.RedirectURI == ""):
+			t.Errorf("%s: StartAuthorization() = %+v, %v; want an answer from the session", tt.name, a, err)
+		case tt.code != "" && (!errors.As(err, &redirect) || redirect.Err.Code != tt.code):
+			t.Errorf("%s: StartAuthorization() = %+v, %v; want %s", tt.name, a, err, tt.code)
+		}
+	}
+
+	// Without prompt=none, the request waits for a sign-in, and only grace's
+	// sign-in can answer it.
+	a, err := f.startWith(t, with(webRequest(), "claims", subClaims(`{"value":"`+grace.ID.String()+`"}`)), sessionHash)
+	if err != nil || a.RequestID == "" {
+		t.Fatalf("StartAuthorization() = %+v, %v; want a stored request", a, err)
+	}
+	p, err := FindAuthorizationRequest(t.Context(), f.d, f.tenant.ID, a.RequestID, testBinding)
+	if err != nil || p.Request.HintSubject != grace.ID {
+		t.Fatalf("stored request = %+v, %v; want grace as the required user", p.Request, err)
+	}
+	login, err := CompletePasswordLogin(t.Context(), f.d, f.h, f.tenant, p, "ada@example.com", "correct horse", sessionHash)
+	if err != nil {
+		t.Fatalf("CompletePasswordLogin() unexpected error: %v", err)
+	}
+	u, _ := url.Parse(login.RedirectURI)
+	if q := u.Query(); q.Get("error") != oauth.ErrorLoginRequired || q.Has("code") {
+		t.Errorf("CompletePasswordLogin() as ada = %q, want login_required", login.RedirectURI)
+	}
+}
