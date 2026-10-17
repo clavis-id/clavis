@@ -38,6 +38,7 @@ type Metadata struct {
 	IDTokenSigningAlgValuesSupported  []string `json:"id_token_signing_alg_values_supported"`
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
 	ClaimsSupported                   []string `json:"claims_supported"`
+	ACRValuesSupported                []string `json:"acr_values_supported"`
 	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
 	// AuthorizationResponseIssParameterSupported announces the iss parameter
 	// in authorization responses (RFC 9207, section 3).
@@ -49,7 +50,7 @@ type Metadata struct {
 
 // NewMetadata returns the metadata of the tenant whose issuer is issuer.
 func NewMetadata(issuer string) Metadata {
-	claims := []string{"sub", "iss", "aud", "exp", "iat", "auth_time", "nonce", "amr", "at_hash"}
+	claims := []string{"sub", "iss", "aud", "exp", "iat", "auth_time", "nonce", "acr", "amr", "at_hash"}
 	for _, scope := range []string{ScopeProfile, ScopeEmail, ScopeAddress, ScopePhone} {
 		claims = append(claims, ScopeClaims(scope)...)
 	}
@@ -72,9 +73,12 @@ func NewMetadata(issuer string) Metadata {
 		// OpenID Connect Core 1.0, section 9; none is for public clients.
 		TokenEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post", "none"},
 		ClaimsSupported:                   claims,
+		// The values Clavis can produce (ADR 0019).
+		ACRValuesSupported: []string{ACRPassword},
 		// RFC 8414, section 2: without this field, clients cannot tell that
 		// PKCE is supported. Only S256 is (ADR 0018).
 		CodeChallengeMethodsSupported:              []string{"S256"},
 		AuthorizationResponseIssParameterSupported: true,
+		ClaimsParameterSupported:                   true,
 	}
 }

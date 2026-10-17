@@ -40,6 +40,7 @@
     "iat",
     "auth_time",
     "nonce",
+    "acr",
     "amr",
     "at_hash",
     "name",
@@ -62,11 +63,14 @@
     "phone_number",
     "phone_number_verified"
   ],
+  "acr_values_supported": [
+    "https://clavisid.org/acr/password"
+  ],
   "code_challenge_methods_supported": [
     "S256"
   ],
   "authorization_response_iss_parameter_supported": true,
-  "claims_parameter_supported": false,
+  "claims_parameter_supported": true,
   "request_parameter_supported": false,
   "request_uri_parameter_supported": false
 }

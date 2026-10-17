@@ -4,8 +4,10 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
+	"encoding/json/v2"
 	"fmt"
 	"hash"
+	"slices"
 )
 
 // Media types of the typ header of Clavis tokens. Access tokens follow RFC
@@ -20,6 +22,10 @@ const (
 // keys of other algorithms are published.
 const IDTokenSigningAlgorithm = "RS256"
 
+// ACRPassword is the authentication context class reference of a sign-in
+// with a password alone (ADR 0019).
+const ACRPassword = "https://clavisid.org/acr/password" //nolint:gosec // G101: a class identifier, not a credential.
+
 // IDTokenClaims are the claims of an ID token (OpenID Connect Core 1.0,
 // section 2). Times are seconds since the Unix epoch.
 type IDTokenClaims struct {
@@ -33,6 +39,34 @@ type IDTokenClaims struct {
 	ACR             string   `json:"acr,omitzero"`
 	AMR             []string `json:"amr,omitzero"`
 	AccessTokenHash string   `json:"at_hash,omitzero"`
+}
+
+// IDTokenPayload returns the JSON payload of an ID token: claims, plus the
+// claims about the user that the claims parameter asked for in the ID token
+// (section 5.5). A user claim must not repeat the name of a claim in claims.
+func IDTokenPayload(claims IDTokenClaims, userClaims map[string]any) ([]byte, error) {
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		return nil, fmt.Errorf("oidc: encoding ID token claims: %w", err)
+	}
+	if len(userClaims) == 0 {
+		return payload, nil
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(payload, &doc); err != nil {
+		return nil, fmt.Errorf("oidc: decoding ID token claims: %w", err)
+	}
+	for name, value := range userClaims {
+		if _, ok := doc[name]; ok {
+			return nil, fmt.Errorf("oidc: the user claim %q repeats an ID token claim", name)
+		}
+		doc[name] = value
+	}
+	payload, err = json.Marshal(doc, json.Deterministic(true))
+	if err != nil {
+		return nil, fmt.Errorf("oidc: encoding ID token claims: %w", err)
+	}
+	return payload, nil
 }
 
 // AccessTokenClaims are the claims of a JWT access token (RFC 9068, section
@@ -99,6 +133,17 @@ func ScopeClaims(scope string) []string {
 	default:
 		return nil
 	}
+}
+
+// ClaimScope returns the scope that requests claim (OpenID Connect Core
+// 1.0, section 5.4), or "" for a claim that no scope requests.
+func ClaimScope(claim string) string {
+	for _, scope := range []string{ScopeProfile, ScopeEmail, ScopeAddress, ScopePhone} {
+		if slices.Contains(ScopeClaims(scope), claim) {
+			return scope
+		}
+	}
+	return ""
 }
 
 // ScopeOfflineAccess requests a refresh token (OpenID Connect Core 1.0,
