@@ -250,6 +250,19 @@ func utcOrZero(t *time.Time) time.Time {
 	return t.UTC()
 }
 
+func (r authorizationCodes) DeleteByUserAndClient(ctx context.Context, tenantID, userID, clientID uuid.UUID,
+) (int64, error) {
+	n, err := r.q.DeleteAuthorizationCodesByUserAndClient(ctx, db.DeleteAuthorizationCodesByUserAndClientParams{
+		TenantID: tenantID,
+		UserID:   userID,
+		ClientID: clientID,
+	})
+	if err != nil {
+		return 0, mapError("deleting authorization codes", err)
+	}
+	return n, nil
+}
+
 func (r authorizationCodes) DeleteExpired(ctx context.Context, before time.Time) (int64, error) {
 	n, err := r.q.DeleteExpiredAuthorizationCodes(ctx, before)
 	if err != nil {
