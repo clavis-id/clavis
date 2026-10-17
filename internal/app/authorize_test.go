@@ -40,12 +40,16 @@ func newAuthzFixture(t *testing.T) authzFixture {
 	f.d = d
 	tn := newTenantForClients(t, d)
 	f.tenant = AuthorizationTenant{ID: tn.ID, Issuer: testIssuer}
+	// The clients skip consent, which only the tests of consent need; the
+	// partner client asks for it (ADR 0020).
 	for _, spec := range []ClientSpec{
-		{ClientID: "web", Name: "Web app", Type: store.ClientConfidential,
+		{ClientID: "web", Name: "Web app", Type: store.ClientConfidential, SkipConsent: true,
 			RedirectURIs: []string{"https://app.example.com/callback", "https://app.example.com/other?x=1"}},
-		{ClientID: "spa", Type: store.ClientPublic, RedirectURIs: []string{"http://127.0.0.1/callback"}},
-		{ClientID: "legacy", Type: store.ClientConfidential, PKCEExempt: true,
+		{ClientID: "spa", Type: store.ClientPublic, SkipConsent: true, RedirectURIs: []string{"http://127.0.0.1/callback"}},
+		{ClientID: "legacy", Type: store.ClientConfidential, PKCEExempt: true, SkipConsent: true,
 			RedirectURIs: []string{"https://legacy.example.com/callback"}},
+		{ClientID: "partner", Name: "Partner app", Type: store.ClientConfidential,
+			RedirectURIs: []string{"https://partner.example.com/callback"}},
 		{ClientID: "service", Type: store.ClientConfidential, GrantTypes: []string{oauth.GrantTypeClientCredentials},
 			Scopes: []string{"api:read"}},
 	} {

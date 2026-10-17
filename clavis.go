@@ -350,6 +350,8 @@ func (s *Server) routes() http.Handler {
 	s.handleTenant(mux, http.MethodOptions, oidc.UserinfoPath, handlePreflight("GET, POST"))
 	s.handleTenant(mux, http.MethodGet, loginPath, s.handleLoginPage)
 	s.handleTenant(mux, http.MethodPost, loginPath, s.handleLogin)
+	s.handleTenant(mux, http.MethodGet, consentPath, s.handleConsentPage)
+	s.handleTenant(mux, http.MethodPost, consentPath, s.handleConsent)
 	// Assets are the same for every tenant and are not instrumented, like
 	// the probes.
 	mux.HandleFunc(http.MethodGet+" "+assetsPath+"{name}", s.handleAsset)

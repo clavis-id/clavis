@@ -64,18 +64,21 @@ type AuthorizationTenant struct {
 
 // Authorization is the outcome of a valid authorization request. When the
 // browser's session answers the request, RedirectURI is the authorization
-// response. Otherwise the request is stored, and RequestID identifies it
-// until the user signs in.
+// response. Otherwise the request is stored under RequestID: it waits for
+// the user to sign in or, when Consent is true, for the consent of the
+// session's user.
 type Authorization struct {
 	RedirectURI string
 	RequestID   string
+	Consent     bool
 }
 
 // StartAuthorization validates an authorization request (ADR 0013). When the
-// session whose cookie hashes to sessionHash satisfies the request, it issues
-// an authorization code at once: that is single sign-on. Otherwise it stores
-// the request for the sign-in that follows, bound to the browser whose
-// binding cookie hashes to bindingHash. signer verifies an id_token_hint.
+// session whose cookie hashes to sessionHash satisfies the request, and the
+// request needs no consent (ADR 0020), it issues an authorization code at
+// once: that is single sign-on. Otherwise it stores the request for the
+// sign-in or the consent that follows, bound to the browser whose binding
+// cookie hashes to bindingHash. signer verifies an id_token_hint.
 //
 // A request whose client or redirect URI is unusable returns an error that
 // wraps oauth.ErrInvalidAuthorizationTarget, which must be shown to the user;
@@ -155,6 +158,7 @@ func StartAuthorization(ctx context.Context, d Deps, signer TokenSigner, t Autho
 		State:               r.State,
 		Nonce:               r.Nonce,
 		HintSubject:         subject,
+		ForceConsent:        r.HasPrompt(oauth.PromptConsent),
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(AuthorizationRequestLifetime),
 	}
@@ -173,6 +177,21 @@ func StartAuthorization(ctx context.Context, d Deps, signer TokenSigner, t Autho
 	case err != nil:
 		return Authorization{}, err
 	case ok:
+		consent, err := needsConsent(ctx, d, client, session.UserID, stored)
+		switch {
+		case err != nil:
+			return Authorization{}, err
+		case consent && r.HasPrompt(oauth.PromptNone):
+			// OpenID Connect Core 1.0, section 3.1.2.6.
+			return Authorization{}, fail(&oauth.Error{Code: oauth.ErrorConsentRequired,
+				Description: "the user must allow the client"}, r.State)
+		case consent:
+			stored.SessionID = session.ID
+			if err := d.Store.AuthorizationRequests().Create(ctx, stored); err != nil {
+				return Authorization{}, fmt.Errorf("storing the authorization request: %w", err)
+			}
+			return Authorization{RequestID: stored.ID, Consent: true}, nil
+		}
 		uri, err := issueCode(ctx, d, t, stored, session)
 		if err != nil {
 			return Authorization{}, err
@@ -287,11 +306,9 @@ func grantableClaims(requested map[string]oauth.ClaimRequest, client store.Clien
 func resumeSession(ctx context.Context, d Deps, tenantID uuid.UUID, tokenHash []byte, r oauth.AuthorizationRequest,
 	subject uuid.UUID,
 ) (store.Session, bool, error) {
-	// Until the consent page (work item 2.2) and account selection exist,
-	// the sign-in form answers prompt=consent and prompt=select_account: it
-	// names the client and lets the user choose the account.
-	if tokenHash == nil || r.HasPrompt(oauth.PromptLogin) || r.HasPrompt(oauth.PromptConsent) ||
-		r.HasPrompt(oauth.PromptSelectAccount) {
+	// Until account selection exists, the sign-in form answers
+	// prompt=select_account: it lets the user choose the account.
+	if tokenHash == nil || r.HasPrompt(oauth.PromptLogin) || r.HasPrompt(oauth.PromptSelectAccount) {
 		return store.Session{}, false, nil
 	}
 	s, err := d.Store.Sessions().GetByTokenHash(ctx, tenantID, tokenHash)
@@ -419,8 +436,11 @@ func FindAuthorizationRequest(ctx context.Context, d Deps, tenantID uuid.UUID, i
 
 // Login is a completed sign-in.
 type Login struct {
-	// RedirectURI is the authorization response to send the browser to.
+	// RedirectURI is the authorization response to send the browser to. It
+	// is empty when Consent is true: the request then waits for the user's
+	// consent.
 	RedirectURI string
+	Consent     bool
 	// SessionToken is the value of the new session cookie, which expires at
 	// SessionExpiresAt.
 	SessionToken     string
@@ -434,6 +454,8 @@ type Login struct {
 // (ADR 0014). When the request names another user, through id_token_hint or
 // the sub claim, the response is a login_required error instead (OpenID
 // Connect Core 1.0, sections 3.1.2.1 and 5.5.1), and the new session stays.
+// When the request needs the user's consent (ADR 0020), it keeps waiting,
+// with the new session, and Login.Consent is true.
 //
 // Wrong credentials return ErrInvalidCredentials and leave the request in
 // place for another attempt; a request completed in the meantime returns
@@ -442,14 +464,31 @@ func CompletePasswordLogin(ctx context.Context, d Deps, h PasswordHasher, t Auth
 	p PendingAuthorization, email, pw string, previousSession []byte,
 ) (Login, error) {
 	r := p.Request
+	if r.SessionID != uuid.Nil() {
+		// A user signed in for the request already; it waits for consent.
+		return Login{}, ErrAuthorizationRequestNotFound
+	}
 	u, err := AuthenticatePassword(ctx, d, h, t.ID, email, pw)
 	if err != nil {
 		return Login{}, err
 	}
-	// Deleting the request first makes it single use: of two concurrent
-	// sign-ins, only one gets a code.
-	switch err := d.Store.AuthorizationRequests().Delete(ctx, t.ID, r.ID); {
-	case errors.Is(err, store.ErrNotFound):
+	otherUser := r.HintSubject != uuid.Nil() && r.HintSubject != u.ID
+	consent := false
+	if !otherUser {
+		if consent, err = needsConsent(ctx, d, p.Client, u.ID, r); err != nil {
+			return Login{}, err
+		}
+	}
+	// Claiming the request first makes it single use: of two concurrent
+	// sign-ins, only one gets a code or the consent page. A request that
+	// waits for consent keeps the session of this sign-in.
+	sessionID := d.NewID()
+	claim := func() error { return d.Store.AuthorizationRequests().Delete(ctx, t.ID, r.ID) }
+	if consent {
+		claim = func() error { return d.Store.AuthorizationRequests().SetSession(ctx, t.ID, r.ID, sessionID) }
+	}
+	switch err := claim(); {
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrConflict):
 		return Login{}, ErrAuthorizationRequestNotFound
 	case err != nil:
 		return Login{}, fmt.Errorf("completing the authorization request: %w", err)
@@ -463,7 +502,7 @@ func CompletePasswordLogin(ctx context.Context, d Deps, h PasswordHasher, t Auth
 	now := d.Now()
 	token := oauth.NewToken()
 	session := store.Session{
-		ID:            d.NewID(),
+		ID:            sessionID,
 		TenantID:      t.ID,
 		TokenHash:     oauth.HashToken(token),
 		UserID:        u.ID,
@@ -484,14 +523,15 @@ func CompletePasswordLogin(ctx context.Context, d Deps, h PasswordHasher, t Auth
 		slog.String("client_id", p.Client.ClientID),
 		slog.String("session_id", session.ID.String()))
 
-	login := Login{SessionToken: token, SessionExpiresAt: session.ExpiresAt}
-	if r.HintSubject != uuid.Nil() && r.HintSubject != u.ID {
+	login := Login{SessionToken: token, SessionExpiresAt: session.ExpiresAt, Consent: consent}
+	switch {
+	case otherUser:
 		login.RedirectURI = errorResponseURI(r.RedirectURI, t.Issuer, r.State, &oauth.Error{
 			Code: oauth.ErrorLoginRequired, Description: "the user who signed in is not the user the request names"})
-		return login, nil
-	}
-	if login.RedirectURI, err = issueCode(ctx, d, t, r, session); err != nil {
-		return Login{}, err
+	case !consent:
+		if login.RedirectURI, err = issueCode(ctx, d, t, r, session); err != nil {
+			return Login{}, err
+		}
 	}
 	return login, nil
 }
