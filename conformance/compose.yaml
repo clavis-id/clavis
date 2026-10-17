@@ -7,6 +7,8 @@ name: clavis-conformance
 
 services:
   mongodb:
+    # The version the suite's own docker-compose.yml uses at the pinned
+    # release. Dependabot ignores this image: move it only with the suite.
     image: mongo:6.0.13@sha256:b415b12f638e2685d06c58ab7fb5943577c50fadec6d9340ef67d21aeac72070
     tmpfs:
       - /data/db

@@ -28,6 +28,12 @@ updates:
     groups:
       conformance-images:
         patterns: ["*"]
+    ignore:
+      # MongoDB moves with the suite release pinned in compose.yaml, whose own
+      # compose file uses 6.0.13 at release-v5.3.3. A newer version may not
+      # work with the suite or the runner: MongoDB 8.3 refuses to start on
+      # Linux 6.19 and newer kernels.
+      - dependency-name: mongo
 
   - package-ecosystem: pip
     directory: "/conformance"

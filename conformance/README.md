@@ -79,8 +79,8 @@ Plans are added as the plan for Phase 1 lands their features (see
 ## Updating
 
 - **Suite:** move the image tags and digests in `compose.yaml`, `SUITE_COMMIT` and the runner
-  script digests in `run.sh` to the same release, then review the changes in the expected
-  results.
+  script digests in `run.sh` to the same release. Set the MongoDB image to the version in that
+  release's `docker-compose.yml`. Then review the changes in the expected results.
 - **Python dependencies:** edit `requirements.in` and compile `requirements.txt` in the pinned
   runner image:
 
@@ -91,4 +91,5 @@ Plans are added as the plan for Phase 1 lands their features (see
              -o requirements.txt requirements.in'
   ```
 
-Dependabot proposes updates for the images and the Python dependencies.
+Dependabot proposes updates for the images, except MongoDB, which moves with the suite, and
+for the Python dependencies.
