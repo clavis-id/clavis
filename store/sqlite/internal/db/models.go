@@ -113,6 +113,34 @@ type Password struct {
 	SetAt    int64
 }
 
+type RefreshToken struct {
+	Hash      []byte
+	TenantID  string
+	FamilyID  string
+	IssuedAt  int64
+	ExpiresAt int64
+	RotatedAt sql.NullInt64
+}
+
+type RefreshTokenFamily struct {
+	ID             string
+	TenantID       string
+	ClientID       string
+	UserID         string
+	SessionID      sql.NullString
+	CodeHash       []byte
+	Scopes         string
+	AuthTime       int64
+	Amr            string
+	Acr            string
+	UserinfoClaims string
+	IDTokenClaims  string
+	CreatedAt      int64
+	IdleExpiresAt  int64
+	ExpiresAt      int64
+	RevokedAt      sql.NullInt64
+}
+
 type Session struct {
 	ID            string
 	TenantID      string

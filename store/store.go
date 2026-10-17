@@ -59,6 +59,8 @@ type Store interface {
 	AuthorizationCodes() AuthorizationCodes
 	// AccessTokens returns the access token repository.
 	AccessTokens() AccessTokens
+	// RefreshTokens returns the refresh token repository.
+	RefreshTokens() RefreshTokens
 	// APIResources returns the API resource repository.
 	APIResources() APIResources
 	// Grants returns the grant repository.
@@ -504,8 +506,8 @@ type AccessToken struct {
 	ClientID uuid.UUID
 	// UserID is the zero UUID for a token that a client obtained for itself.
 	UserID uuid.UUID
-	// CodeHash is the hash of the authorization code the token was issued
-	// for, or nil.
+	// CodeHash is the hash of the authorization code that the token derives
+	// from, directly or through refresh tokens, or nil.
 	CodeHash []byte
 	Scopes   []string
 	// UserInfoClaims names the claims that the authorization request asked
@@ -537,6 +539,93 @@ type AccessTokens interface {
 	RevokeByUserAndClient(ctx context.Context, tenantID, userID, clientID uuid.UUID, at time.Time) (int64, error)
 	// DeleteExpired removes the tokens of every tenant whose ExpiresAt is not
 	// after now, and returns how many were removed.
+	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
+}
+
+// RefreshTokenFamily is the chain of refresh tokens that one authorization
+// grant yields (ADR 0014, ADR 0021). Each refresh replaces the current token
+// of the family with a successor; presenting a replaced token revokes the
+// whole family. The family keeps what its tokens grant.
+type RefreshTokenFamily struct {
+	// ID is a version 7 UUID assigned on creation.
+	ID       uuid.UUID
+	TenantID uuid.UUID
+	// ClientID is the ID of the client record.
+	ClientID uuid.UUID
+	UserID   uuid.UUID
+	// SessionID is the session in which the user authenticated, or the zero
+	// UUID. It is not a reference: the family can outlive the session.
+	SessionID uuid.UUID
+	// CodeHash is the hash of the authorization code that the family was
+	// issued for, or nil.
+	CodeHash []byte
+	Scopes   []string
+	AuthTime time.Time
+	AMR      []string
+	ACR      string
+	// UserInfoClaims and IDTokenClaims are those of the authorization
+	// request.
+	UserInfoClaims []string
+	IDTokenClaims  []string
+	CreatedAt      time.Time
+	// IdleExpiresAt is when the family ends unless its current token is
+	// used, and ExpiresAt is when it ends regardless.
+	IdleExpiresAt time.Time
+	ExpiresAt     time.Time
+	// RevokedAt is when the family was revoked, or zero. Create ignores it.
+	RevokedAt time.Time
+}
+
+// RefreshToken is a refresh token of a family. The token itself is never
+// stored.
+type RefreshToken struct {
+	// Hash is the SHA-256 hash of the token, which identifies it.
+	Hash      []byte
+	TenantID  uuid.UUID
+	FamilyID  uuid.UUID
+	IssuedAt  time.Time
+	ExpiresAt time.Time
+	// RotatedAt is when the token was replaced by its successor, or zero.
+	// Create and Rotate ignore it for the tokens they insert.
+	RotatedAt time.Time
+}
+
+// RefreshTokens stores refresh tokens and their families. Every method works
+// within one tenant, except DeleteExpired.
+type RefreshTokens interface {
+	// Create inserts the family f with its first token t, which must belong
+	// to f. It returns ErrConflict when the ID of f or the hash of t is in
+	// use, ErrNotFound when the client or the user does not exist in the
+	// tenant, and ErrInvalidArgument when t does not belong to f.
+	Create(ctx context.Context, f RefreshTokenFamily, t RefreshToken) error
+	// Get returns the token of a tenant with the given hash and its family,
+	// or ErrNotFound. It returns rotated, expired and revoked tokens too;
+	// callers check RotatedAt and the times of the token and the family.
+	Get(ctx context.Context, tenantID uuid.UUID, hash []byte) (RefreshToken, RefreshTokenFamily, error)
+	// Rotate replaces the token of a tenant with the given hash by next,
+	// which must belong to the same family. In one transaction it marks the
+	// token as rotated at next.IssuedAt, moves the IdleExpiresAt of the
+	// family to next.ExpiresAt and inserts next. It returns ErrConflict when
+	// the token was rotated already, so of several concurrent callers exactly
+	// one succeeds, or when the family was revoked, and ErrNotFound when the
+	// family of next has no token with that hash.
+	Rotate(ctx context.Context, tenantID uuid.UUID, hash []byte, next RefreshToken) error
+	// RevokeFamily revokes the family of a tenant with the given ID at the
+	// given time, or returns ErrNotFound. A revoked family keeps the time of
+	// its first revocation.
+	RevokeFamily(ctx context.Context, tenantID, id uuid.UUID, at time.Time) error
+	// RevokeByCode revokes, at the given time, the families of a tenant that
+	// were issued for the code with the given hash and are not revoked yet,
+	// and returns how many it revoked.
+	RevokeByCode(ctx context.Context, tenantID uuid.UUID, codeHash []byte, at time.Time) (int64, error)
+	// RevokeByUserAndClient revokes, at the given time, the families of a
+	// tenant that were issued to the client for the user and are not revoked
+	// yet, and returns how many it revoked.
+	RevokeByUserAndClient(ctx context.Context, tenantID, userID, clientID uuid.UUID, at time.Time) (int64, error)
+	// DeleteExpired removes the tokens of every tenant whose ExpiresAt is not
+	// after now, then the families whose ExpiresAt or IdleExpiresAt is not
+	// after now, with any tokens they still have. It returns how many
+	// families were removed.
 	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
 }
 

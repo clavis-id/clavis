@@ -72,6 +72,10 @@ func Run(t *testing.T, open OpenFunc) {
 		t.Parallel()
 		runAccessTokens(t, open)
 	})
+	t.Run("RefreshTokens", func(t *testing.T) {
+		t.Parallel()
+		runRefreshTokens(t, open)
+	})
 	t.Run("APIResources", func(t *testing.T) {
 		t.Parallel()
 		runAPIResources(t, open)
