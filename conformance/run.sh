@@ -151,6 +151,10 @@ create_client() {
 fetch_runner
 build_clavis
 rm -rf results
+# Created here so the caller owns it. The runner container runs as root, and on
+# Linux a directory it creates belongs to root, so cleanup could not write the
+# service logs into it.
+mkdir results
 export CLAVIS_KEYS_ENCRYPTION_KEY
 CLAVIS_KEYS_ENCRYPTION_KEY=$(openssl rand -base64 32)
 
