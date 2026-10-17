@@ -490,6 +490,37 @@ func runAuthorizationCodes(t *testing.T, open OpenFunc) {
 		}
 	})
 
+	t.Run("DeleteByUserAndClient", func(t *testing.T) {
+		t.Parallel()
+		f := newAuthorizationFixture(t, open)
+		other := newClient(f.a.ID, "other")
+		mustCreateClient(t, f.s.Clients(), other)
+		grace := newUser(f.a.ID, "grace@example.com")
+		mustCreateUser(t, f.s.Users(), grace)
+		a, b := newAuthorizationCode(f.client, f.user), newAuthorizationCode(f.client, f.user)
+		kept := []store.AuthorizationCode{newAuthorizationCode(other, f.user), newAuthorizationCode(f.client, grace)}
+		for _, c := range append([]store.AuthorizationCode{a, b}, kept...) {
+			mustCreateAuthorizationCode(t, f.s, c)
+		}
+		codes := f.s.AuthorizationCodes()
+		if n, err := codes.DeleteByUserAndClient(t.Context(), f.b.ID, f.user.ID, f.client.ID); err != nil || n != 0 {
+			t.Errorf("DeleteByUserAndClient() through another tenant = %d, %v; want 0", n, err)
+		}
+		if n, err := codes.DeleteByUserAndClient(t.Context(), f.a.ID, f.user.ID, f.client.ID); err != nil || n != 2 {
+			t.Errorf("DeleteByUserAndClient() = %d, %v; want 2", n, err)
+		}
+		for _, c := range []store.AuthorizationCode{a, b} {
+			if _, err := get(t, f, c.Hash); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("Get() of a deleted code = %v, want ErrNotFound", err)
+			}
+		}
+		for _, c := range kept {
+			if _, err := get(t, f, c.Hash); err != nil {
+				t.Errorf("Get() of a code of another user or client = %v, want nil", err)
+			}
+		}
+	})
+
 	t.Run("DeleteExpired", func(t *testing.T) {
 		t.Parallel()
 		f := newAuthorizationFixture(t, open)

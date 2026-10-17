@@ -169,6 +169,25 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 	return err
 }
 
+const deleteAuthorizationCodesByUserAndClient = `-- name: DeleteAuthorizationCodesByUserAndClient :execrows
+DELETE FROM authorization_codes
+WHERE tenant_id = ?1 AND user_id = ?2 AND client_id = ?3
+`
+
+type DeleteAuthorizationCodesByUserAndClientParams struct {
+	TenantID string
+	UserID   string
+	ClientID string
+}
+
+func (q *Queries) DeleteAuthorizationCodesByUserAndClient(ctx context.Context, arg DeleteAuthorizationCodesByUserAndClientParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteAuthorizationCodesByUserAndClient, arg.TenantID, arg.UserID, arg.ClientID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteAuthorizationRequest = `-- name: DeleteAuthorizationRequest :execrows
 DELETE FROM authorization_requests
 WHERE tenant_id = ?1 AND id = ?2

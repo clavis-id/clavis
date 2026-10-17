@@ -80,6 +80,10 @@ WHERE tenant_id = sqlc.arg(tenant_id) AND hash = sqlc.arg(hash);
 DELETE FROM authorization_codes
 WHERE expires_at <= $1;
 
+-- name: DeleteAuthorizationCodesByUserAndClient :execrows
+DELETE FROM authorization_codes
+WHERE tenant_id = sqlc.arg(tenant_id) AND user_id = sqlc.arg(user_id) AND client_id = sqlc.arg(client_id);
+
 -- name: RedeemAuthorizationCode :execrows
 UPDATE authorization_codes
 SET redeemed_at = sqlc.arg(redeemed_at)
