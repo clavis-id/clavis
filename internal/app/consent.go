@@ -137,6 +137,11 @@ func CompleteConsent(ctx context.Context, d Deps, t AuthorizationTenant, c Pendi
 			Description: "the user denied the request"}), nil
 	}
 
+	// Two consents of the same user for the same client that complete at
+	// the same moment can each read the grant before the other writes it,
+	// and the later write then drops the scopes of the earlier one. The
+	// next request asks for them again, so the race costs a page, not
+	// access; it does not justify a transaction.
 	g, err := d.Store.Grants().Get(ctx, t.ID, c.User.ID, c.Client.ID)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return "", fmt.Errorf("looking up the grant: %w", err)
