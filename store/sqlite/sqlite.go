@@ -144,6 +144,12 @@ func createPrivate(path string) error {
 
 // Migrate applies every pending schema migration.
 func (s *Store) Migrate(ctx context.Context) error {
+	return s.migrateTo(ctx, -1)
+}
+
+// migrateTo applies the pending migrations up to and including version, or
+// all of them when version is negative.
+func (s *Store) migrateTo(ctx context.Context, version int64) error {
 	fsys, err := fs.Sub(migrationFiles, "migrations")
 	if err != nil {
 		return fmt.Errorf("sqlite: loading migrations: %w", err)
@@ -152,7 +158,12 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("sqlite: preparing migrations: %w", err)
 	}
-	if _, err := p.Up(ctx); err != nil {
+	if version < 0 {
+		_, err = p.Up(ctx)
+	} else {
+		_, err = p.UpTo(ctx, version)
+	}
+	if err != nil {
 		return fmt.Errorf("sqlite: applying migrations: %w", err)
 	}
 	return nil
