@@ -281,7 +281,8 @@ year.
   - The decision must come from the browser that started the request, with the session that
     authenticated it; the form is protected like the sign-in form.
   - `clavis grants list|revoke` lists and revokes the grants of a user. Revoking a grant
-    revokes the client's access tokens for the user, and the next request asks again.
+    revokes the client's access tokens for the user and deletes its unexchanged codes, and
+    the next request asks again.
 - **Hosted pages:** rendered on the server with templ, without scripts. They send a Content
   Security Policy that allows only same-origin stylesheets and images, forbids framing, and
   lets forms submit only to Clavis and, on the login page, to the origin of the client's

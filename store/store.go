@@ -485,6 +485,9 @@ type AuthorizationCodes interface {
 	// already, so of several concurrent callers exactly one succeeds, and
 	// ErrNotFound when there is no such code.
 	Redeem(ctx context.Context, tenantID uuid.UUID, hash []byte, at time.Time) error
+	// DeleteByUserAndClient removes the codes of a tenant that were issued to
+	// the client for the user, and returns how many were removed.
+	DeleteByUserAndClient(ctx context.Context, tenantID, userID, clientID uuid.UUID) (int64, error)
 	// DeleteExpired removes the codes of every tenant whose ExpiresAt is not
 	// after before, and returns how many were removed. Callers keep expired
 	// codes for a while by passing a time in the past.

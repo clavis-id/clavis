@@ -341,6 +341,26 @@ func TestRevokeGrant(t *testing.T) {
 	}
 }
 
+func TestRevokeGrantStopsIssuedCodes(t *testing.T) {
+	t.Parallel()
+	f := newAuthzFixture(t)
+	var logs bytes.Buffer
+	f.d.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	p, sessionHash := f.loginForConsent(t, partnerRequest())
+	q := f.consent(t, p.Request.ID, sessionHash, true)
+	if err := RevokeGrant(t.Context(), f.d, f.tenant.ID, "ada@example.com", "partner"); err != nil {
+		t.Fatalf("RevokeGrant() unexpected error: %v", err)
+	}
+	// A code issued before the revocation yields no tokens after it.
+	r := codeRequest(q.Get("code"))
+	r.RedirectURI = "https://partner.example.com/callback"
+	_, err := ExchangeCode(t.Context(), f.d, fakeSigner{}, f.tenant, f.client(t, "partner"), r)
+	wantOAuthError(t, "code of a revoked grant", err, oauth.ErrorInvalidGrant)
+	if !strings.Contains(logs.String(), "deleted_authorization_codes=1") {
+		t.Errorf("logs do not report the deleted code:\n%s", logs.String())
+	}
+}
+
 // failingGrantStore fails to read or write grants.
 type failingGrantStore struct{ store.Store }
 

@@ -47,7 +47,9 @@ func ListGrants(ctx context.Context, d Deps, tenantID uuid.UUID, email string) (
 
 // RevokeGrant deletes the grant of the user of a tenant with the given email
 // address for the client with the given client ID, and revokes the tokens
-// issued to the client for the user (ADR 0020). The next authorization
+// issued to the client for the user (ADR 0020). It also deletes the
+// authorization codes issued to the client for the user, so a code issued
+// before the revocation cannot yield tokens after it. The next authorization
 // request of the client asks the user again.
 func RevokeGrant(ctx context.Context, d Deps, tenantID uuid.UUID, email, clientID string) error {
 	u, err := FindUser(ctx, d, tenantID, email)
@@ -64,7 +66,11 @@ func RevokeGrant(ctx context.Context, d Deps, tenantID uuid.UUID, email, clientI
 	case err != nil:
 		return fmt.Errorf("deleting the grant: %w", err)
 	}
-	n, err := d.Store.AccessTokens().RevokeByUserAndClient(ctx, tenantID, u.ID, c.ID, d.Now())
+	codes, err := d.Store.AuthorizationCodes().DeleteByUserAndClient(ctx, tenantID, u.ID, c.ID)
+	if err != nil {
+		return fmt.Errorf("deleting the codes of the grant: %w", err)
+	}
+	tokens, err := d.Store.AccessTokens().RevokeByUserAndClient(ctx, tenantID, u.ID, c.ID, d.Now())
 	if err != nil {
 		return fmt.Errorf("revoking the tokens of the grant: %w", err)
 	}
@@ -72,6 +78,7 @@ func RevokeGrant(ctx context.Context, d Deps, tenantID uuid.UUID, email, clientI
 		slog.String("tenant_id", tenantID.String()),
 		slog.String("user_id", u.ID.String()),
 		slog.String("client_id", c.ClientID),
-		slog.Int64("revoked_access_tokens", n))
+		slog.Int64("deleted_authorization_codes", codes),
+		slog.Int64("revoked_access_tokens", tokens))
 	return nil
 }
