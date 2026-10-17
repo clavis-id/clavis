@@ -207,8 +207,14 @@ year.
     default. Their `aud` lists the API resources whose scopes they grant, plus the issuer when
     they grant OpenID Connect scopes, because the issuer serves userinfo. Each token is
     recorded by its `jti`, so it can be revoked before it expires.
-  - ID tokens are RS256 JWTs with `auth_time`, `amr`, `nonce` and `at_hash`; the profile claims
-    come from userinfo (OpenID Connect Core 1.0, section 5.4).
+  - ID tokens are RS256 JWTs with `auth_time`, `acr`, `amr`, `nonce` and `at_hash`; the profile
+    claims come from userinfo (OpenID Connect Core 1.0, section 5.4).
+  - The `claims` parameter adds individual claims about the user to the ID token or the
+    userinfo response (section 5.5), only from scopes the client may request.
+  - `acr` values are URIs under `https://clavisid.org/acr/`, with the EAP values `phr` and
+    `phrh` for phishing-resistant methods (ADR 0019). A password sign-in has
+    `https://clavisid.org/acr/password`. `acr_values` is a voluntary request; an essential
+    `acr` that Clavis cannot produce fails with `access_denied`.
   - A code is redeemed once. Presenting it again fails and revokes the access tokens issued
     for it. The token request must name the code's redirect URI when the authorization request
     did, and must carry `code_verifier` exactly when the authorization request carried a
@@ -241,6 +247,9 @@ year.
     finished in another. A request is single use.
   - Requests that use the request object, `request_uri`, dynamic registration or a response
     type other than `code` are rejected with the matching error.
+  - `id_token_hint` must be an ID token that the tenant issued to the client; it may have
+    expired. Only that user's session or sign-in answers the request. A `login_hint` that is
+    an email address fills in the sign-in form.
 - **Authorization codes:** 256 random bits, stored as a SHA-256 hash, valid for 60 seconds,
   bound to the client, the redirect URI, the PKCE challenge, the nonce, the scopes and the
   session (ADR 0014).
@@ -253,6 +262,12 @@ year.
   a session. Sessions end after 24 hours without use or 14 days in all, and a new sign-in
   replaces the browser's previous session. Every Clavis cookie is `Secure`, `HttpOnly` and
   `SameSite=Lax`, with `Path=/`.
+  - Single sign-on: a session answers the authorization requests of every client of its
+    tenant without the login page, while its user is active. Each use moves its idle expiry.
+  - A new sign-in is needed for `prompt=login`, `max_age=0`, an authentication older than
+    `max_age`, or an `id_token_hint` of another user. Until the consent page and account
+    selection exist, `prompt=consent` and `prompt=select_account` show the sign-in form too.
+    With `prompt=none`, a request that needs a sign-in fails with `login_required`.
 - **Hosted pages:** rendered on the server with templ, without scripts. They send a Content
   Security Policy that allows only same-origin stylesheets and images, forbids framing, and
   lets forms submit only to Clavis and, on the login page, to the origin of the client's
