@@ -45,6 +45,18 @@
                     ]
                 },
                 {
+                    "task": "Consent",
+                    "optional": true,
+                    "match": "https://clavis.test/consent*",
+                    "commands": [
+                        [
+                            "click",
+                            "id",
+                            "allow"
+                        ]
+                    ]
+                },
+                {
                     "task": "Verify Complete",
                     "match": "*/test/*/callback*",
                     "commands": [
@@ -99,6 +111,18 @@
                             ]
                         },
                         {
+                            "task": "Consent",
+                            "optional": true,
+                            "match": "https://clavis.test/consent*",
+                            "commands": [
+                                [
+                                    "click",
+                                    "id",
+                                    "allow"
+                                ]
+                            ]
+                        },
+                        {
                             "task": "Verify Complete",
                             "match": "*/test/*/callback*",
                             "commands": [
@@ -149,6 +173,18 @@
                                     "click",
                                     "id",
                                     "submit"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Consent",
+                            "optional": true,
+                            "match": "https://clavis.test/consent*",
+                            "commands": [
+                                [
+                                    "click",
+                                    "id",
+                                    "allow"
                                 ]
                             ]
                         },
