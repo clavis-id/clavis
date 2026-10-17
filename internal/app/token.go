@@ -133,15 +133,22 @@ func ExchangeCode(ctx context.Context, d Deps, signer TokenSigner, t Authorizati
 	case err != nil:
 		return TokenResponse{}, fmt.Errorf("looking up the user: %w", err)
 	}
-	return issueTokens(ctx, d, signer, t, client, grant{
-		userID:   u.ID,
-		scopes:   code.Scopes,
-		codeHash: hash,
-		authTime: code.AuthTime,
-		amr:      code.AMR,
-		acr:      code.ACR,
-		nonce:    code.Nonce,
-	})
+	g := grant{
+		userID:         u.ID,
+		scopes:         code.Scopes,
+		codeHash:       hash,
+		authTime:       code.AuthTime,
+		amr:            code.AMR,
+		acr:            code.ACR,
+		nonce:          code.Nonce,
+		userInfoClaims: code.UserInfoClaims,
+	}
+	if len(code.IDTokenClaims) > 0 {
+		g.idTokenClaims = userClaims(u, nil, code.IDTokenClaims)
+		// The ID token has its own sub.
+		delete(g.idTokenClaims, "sub")
+	}
+	return issueTokens(ctx, d, signer, t, client, g)
 }
 
 // codeReused revokes the tokens issued for a code that is presented again
@@ -204,6 +211,11 @@ type grant struct {
 	amr      []string
 	acr      string
 	nonce    string
+	// userInfoClaims names the claims the userinfo response adds, and
+	// idTokenClaims holds the claims about the user that the ID token adds
+	// (OpenID Connect Core 1.0, section 5.5).
+	userInfoClaims []string
+	idTokenClaims  map[string]any
 }
 
 // issueTokens signs and records an access token for g, and an ID token when
@@ -247,14 +259,15 @@ func issueTokens(ctx context.Context, d Deps, signer TokenSigner, t Authorizatio
 		return TokenResponse{}, err
 	}
 	if err := d.Store.AccessTokens().Create(ctx, store.AccessToken{
-		ID:        claims.JWTID,
-		TenantID:  t.ID,
-		ClientID:  client.ID,
-		UserID:    g.userID,
-		CodeHash:  g.codeHash,
-		Scopes:    scopes,
-		IssuedAt:  now,
-		ExpiresAt: now.Add(lifetime),
+		ID:             claims.JWTID,
+		TenantID:       t.ID,
+		ClientID:       client.ID,
+		UserID:         g.userID,
+		CodeHash:       g.codeHash,
+		Scopes:         scopes,
+		UserInfoClaims: g.userInfoClaims,
+		IssuedAt:       now,
+		ExpiresAt:      now.Add(lifetime),
 	}); err != nil {
 		return TokenResponse{}, fmt.Errorf("recording the access token: %w", err)
 	}
@@ -272,7 +285,7 @@ func issueTokens(ctx context.Context, d Deps, signer TokenSigner, t Authorizatio
 		}
 		// OpenID Connect Core 1.0, section 2. auth_time is always present,
 		// which also answers requests that sent max_age.
-		resp.IDToken, err = sign(ctx, signer, t.ID, oidc.IDTokenSigningAlgorithm, oidc.IDTokenType, oidc.IDTokenClaims{
+		payload, err := oidc.IDTokenPayload(oidc.IDTokenClaims{
 			Issuer:          t.Issuer,
 			Subject:         g.userID.String(),
 			Audience:        client.ClientID,
@@ -283,9 +296,12 @@ func issueTokens(ctx context.Context, d Deps, signer TokenSigner, t Authorizatio
 			ACR:             g.acr,
 			AMR:             g.amr,
 			AccessTokenHash: atHash,
-		})
+		}, g.idTokenClaims)
 		if err != nil {
-			return TokenResponse{}, err
+			return TokenResponse{}, fmt.Errorf("encoding the ID token: %w", err)
+		}
+		if resp.IDToken, err = signer.Sign(ctx, t.ID, oidc.IDTokenSigningAlgorithm, oidc.IDTokenType, payload); err != nil {
+			return TokenResponse{}, fmt.Errorf("signing a token: %w", err)
 		}
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "issued tokens",
@@ -372,40 +388,41 @@ func UserInfo(ctx context.Context, d Deps, signer TokenSigner, t AuthorizationTe
 	case err != nil:
 		return nil, fmt.Errorf("looking up the user: %w", err)
 	}
-	return userClaims(u, record.Scopes), nil
+	return userClaims(u, record.Scopes, record.UserInfoClaims), nil
 }
 
-// userClaims returns the claims of u that scopes request (OpenID Connect
-// Core 1.0, sections 5.1 and 5.4). Empty claims are left out.
-func userClaims(u store.User, scopes []string) map[string]any {
-	claims := map[string]any{"sub": u.ID.String()}
-	set := func(name string, value string) {
+// userClaims returns sub and the claims of u that scopes request (OpenID
+// Connect Core 1.0, sections 5.1 and 5.4) or that names lists (section 5.5).
+// Empty claims are left out.
+func userClaims(u store.User, scopes, names []string) map[string]any {
+	p := u.Profile
+	available := map[string]any{
+		"updated_at":     u.UpdatedAt.Unix(),
+		"email":          u.Email,
+		"email_verified": u.EmailVerified,
+	}
+	for name, value := range map[string]string{
+		"name": p.Name, "family_name": p.FamilyName, "given_name": p.GivenName, "middle_name": p.MiddleName,
+		"nickname": p.Nickname, "preferred_username": p.PreferredUsername, "profile": p.ProfileURL,
+		"picture": p.Picture, "website": p.Website, "gender": p.Gender, "birthdate": p.Birthdate,
+		"zoneinfo": p.Zoneinfo, "locale": p.Locale,
+	} {
 		if value != "" {
+			available[name] = value
+		}
+	}
+	if p.Address != (store.Address{}) {
+		available["address"] = p.Address
+	}
+	if p.PhoneNumber != "" {
+		available["phone_number"] = p.PhoneNumber
+		available["phone_number_verified"] = p.PhoneNumberVerified
+	}
+	claims := map[string]any{"sub": u.ID.String()}
+	for name, value := range available {
+		if slices.Contains(scopes, oidc.ClaimScope(name)) || slices.Contains(names, name) {
 			claims[name] = value
 		}
-	}
-	p := u.Profile
-	if slices.Contains(scopes, oidc.ScopeProfile) {
-		for name, value := range map[string]string{
-			"name": p.Name, "family_name": p.FamilyName, "given_name": p.GivenName, "middle_name": p.MiddleName,
-			"nickname": p.Nickname, "preferred_username": p.PreferredUsername, "profile": p.ProfileURL,
-			"picture": p.Picture, "website": p.Website, "gender": p.Gender, "birthdate": p.Birthdate,
-			"zoneinfo": p.Zoneinfo, "locale": p.Locale,
-		} {
-			set(name, value)
-		}
-		claims["updated_at"] = u.UpdatedAt.Unix()
-	}
-	if slices.Contains(scopes, oidc.ScopeEmail) {
-		claims["email"] = u.Email
-		claims["email_verified"] = u.EmailVerified
-	}
-	if slices.Contains(scopes, oidc.ScopeAddress) && p.Address != (store.Address{}) {
-		claims["address"] = p.Address
-	}
-	if slices.Contains(scopes, oidc.ScopePhone) && p.PhoneNumber != "" {
-		claims["phone_number"] = p.PhoneNumber
-		claims["phone_number_verified"] = p.PhoneNumberVerified
 	}
 	return claims
 }

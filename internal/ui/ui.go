@@ -173,7 +173,8 @@ type LoginPage struct {
 	Action string
 	// RequestID identifies the stored authorization request.
 	RequestID string
-	// Email fills the email field again after a failed attempt.
+	// Email fills the email field: with the login hint of the request, or
+	// again after a failed attempt.
 	Email string
 	// Error explains why the previous attempt failed.
 	Error string
