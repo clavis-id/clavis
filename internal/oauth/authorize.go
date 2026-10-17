@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Error codes of authorization error responses (RFC 6749, section 4.1.2.1;
@@ -14,6 +16,7 @@ import (
 const (
 	ErrorInvalidRequest           = "invalid_request"
 	ErrorUnauthorizedClient       = "unauthorized_client"
+	ErrorAccessDenied             = "access_denied"
 	ErrorUnsupportedResponseType  = "unsupported_response_type"
 	ErrorInvalidScope             = "invalid_scope"
 	ErrorLoginRequired            = "login_required"
@@ -47,8 +50,13 @@ const (
 // Bounds of authorization request parameters, in bytes. They limit what one
 // request can make Clavis store and send back.
 const (
-	MaxStateLength = 4096
-	MaxNonceLength = 4096
+	MaxStateLength     = 4096
+	MaxNonceLength     = 4096
+	MaxLoginHintLength = 1024
+	// MaxIDTokenHintLength leaves ample room for the ID tokens Clavis
+	// issues, which hold a few claims.
+	MaxIDTokenHintLength = 16 << 10
+	MaxClaimsLength      = 4096
 	// maxMaxAge keeps max_age within a 32-bit integer: about 68 years.
 	maxMaxAge = 1<<31 - 1
 )
@@ -80,6 +88,15 @@ type AuthorizationRequest struct {
 	Prompt        []string
 	// MaxAge is the max_age parameter in seconds, or -1 when it is absent.
 	MaxAge int
+	// LoginHint is the login_hint parameter. Its only check is that it is
+	// text of bounded length; its meaning is up to the caller.
+	LoginHint string
+	// IDTokenHint is the id_token_hint parameter, which has the syntax of a
+	// compact JWS. The caller verifies it.
+	IDTokenHint string
+	// Claims holds the claims parameter (OpenID Connect Core 1.0, section
+	// 5.5).
+	Claims ClaimsRequest
 }
 
 // OpenID reports whether r is an OpenID Connect request, which is one whose
@@ -197,8 +214,25 @@ func ParseAuthorizationRequest(params url.Values) (AuthorizationRequest, error) 
 	if err := r.parsePrompt(params); err != nil {
 		return r, err
 	}
-	err := r.parseMaxAge(params)
-	return r, err
+	if err := r.parseMaxAge(params); err != nil {
+		return r, err
+	}
+	if err := r.parseHints(params); err != nil {
+		return r, err
+	}
+	claims, ok := single(params, "claims")
+	switch {
+	case !ok:
+		return r, invalidRequest("claims is repeated")
+	case len(claims) > MaxClaimsLength:
+		return r, invalidRequest("claims is too long")
+	case claims != "":
+		var err error
+		if r.Claims, err = ParseClaimsRequest(claims); err != nil {
+			return r, invalidRequest("claims must be a JSON object as defined in OpenID Connect Core 1.0, section 5.5")
+		}
+	}
+	return r, nil
 }
 
 // parsePKCE reads code_challenge and code_challenge_method (RFC 7636,
@@ -273,6 +307,52 @@ func (r *AuthorizationRequest) parseMaxAge(params url.Values) error {
 	}
 	r.MaxAge = n
 	return nil
+}
+
+// parseHints reads login_hint and id_token_hint (OpenID Connect Core 1.0,
+// section 3.1.2.1).
+func (r *AuthorizationRequest) parseHints(params url.Values) error {
+	hint, ok := single(params, "login_hint")
+	switch {
+	case !ok:
+		return invalidRequest("login_hint is repeated")
+	case len(hint) > MaxLoginHintLength || !printableText(hint):
+		return invalidRequest("login_hint must be text of at most 1024 bytes")
+	}
+	r.LoginHint = hint
+	hint, ok = single(params, "id_token_hint")
+	switch {
+	case !ok:
+		return invalidRequest("id_token_hint is repeated")
+	case len(hint) > MaxIDTokenHintLength || !compactJWS(hint):
+		return invalidRequest("id_token_hint must be an ID token")
+	}
+	r.IDTokenHint = hint
+	return nil
+}
+
+// printableText reports whether s is valid UTF-8 without control
+// characters.
+func printableText(s string) bool {
+	return utf8.ValidString(s) && !strings.ContainsFunc(s, unicode.IsControl)
+}
+
+// compactJWS reports whether s is empty or has the syntax of a compact JWS:
+// three base64url parts separated by dots (RFC 7515, section 7.1).
+func compactJWS(s string) bool {
+	if s == "" {
+		return true
+	}
+	parts := strings.Split(s, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" || strings.Trim(part, base64URLAlphabet) != "" {
+			return false
+		}
+	}
+	return true
 }
 
 // single returns the value of a parameter that must not repeat (RFC 6749,
