@@ -52,6 +52,7 @@ type Store struct {
 	codes       authorizationCodes
 	tokens      accessTokens
 	resources   apiResources
+	grants      grants
 }
 
 var _ store.Store = (*Store)(nil)
@@ -105,6 +106,7 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		codes:       authorizationCodes{q: q},
 		tokens:      accessTokens{q: q},
 		resources:   apiResources{q: q},
+		grants:      grants{q: q},
 	}
 
 	if err := s.Ping(ctx); err != nil {
@@ -214,6 +216,9 @@ func (s *Store) AccessTokens() store.AccessTokens { return s.tokens }
 
 // APIResources returns the API resource repository.
 func (s *Store) APIResources() store.APIResources { return s.resources }
+
+// Grants returns the grant repository.
+func (s *Store) Grants() store.Grants { return s.grants }
 
 type tenants struct {
 	q *db.Queries

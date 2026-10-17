@@ -1,21 +1,27 @@
 -- name: CreateAuthorizationRequest :exec
 INSERT INTO authorization_requests (
     id, tenant_id, client_id, binding_hash, redirect_uri, redirect_uri_provided, scopes, state, nonce,
-    code_challenge, code_challenge_method, login_hint, hint_subject, userinfo_claims, id_token_claims, created_at,
-    expires_at
+    code_challenge, code_challenge_method, login_hint, hint_subject, userinfo_claims, id_token_claims, force_consent,
+    session_id, created_at, expires_at
 ) VALUES (
     sqlc.arg(id), sqlc.arg(tenant_id), sqlc.arg(client_id), sqlc.arg(binding_hash), sqlc.arg(redirect_uri),
     sqlc.arg(redirect_uri_provided), sqlc.arg(scopes), sqlc.arg(state), sqlc.arg(nonce), sqlc.arg(code_challenge),
     sqlc.arg(code_challenge_method), sqlc.arg(login_hint), sqlc.narg(hint_subject), sqlc.arg(userinfo_claims),
-    sqlc.arg(id_token_claims), sqlc.arg(created_at), sqlc.arg(expires_at)
+    sqlc.arg(id_token_claims), sqlc.arg(force_consent), sqlc.narg(session_id), sqlc.arg(created_at),
+    sqlc.arg(expires_at)
 );
 
 -- name: GetAuthorizationRequest :one
 SELECT id, tenant_id, client_id, binding_hash, redirect_uri, redirect_uri_provided, scopes, state, nonce,
-    code_challenge, code_challenge_method, login_hint, hint_subject, userinfo_claims, id_token_claims, created_at,
-    expires_at
+    code_challenge, code_challenge_method, login_hint, hint_subject, userinfo_claims, id_token_claims, force_consent,
+    session_id, created_at, expires_at
 FROM authorization_requests
 WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id);
+
+-- name: SetAuthorizationRequestSession :execrows
+UPDATE authorization_requests
+SET session_id = sqlc.arg(session_id)
+WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id) AND session_id IS NULL;
 
 -- name: DeleteAuthorizationRequest :execrows
 DELETE FROM authorization_requests

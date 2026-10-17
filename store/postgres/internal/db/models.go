@@ -73,6 +73,8 @@ type AuthorizationRequest struct {
 	HintSubject         *uuid.UUID
 	UserinfoClaims      []string
 	IDTokenClaims       []string
+	ForceConsent        bool
+	SessionID           *uuid.UUID
 }
 
 type Client struct {
@@ -94,6 +96,16 @@ type Client struct {
 	PkceExempt                          bool
 	CreatedAt                           time.Time
 	UpdatedAt                           time.Time
+}
+
+type Grant struct {
+	ID        uuid.UUID
+	TenantID  uuid.UUID
+	UserID    uuid.UUID
+	ClientID  uuid.UUID
+	Scopes    []string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type Password struct {
