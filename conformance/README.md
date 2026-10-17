@@ -85,9 +85,9 @@ Plans are added as the plan for Phase 1 lands their features (see
   runner image:
 
   ```
-  docker run --rm -v "$PWD/conformance:/w" -w /w python:3.13-slim@<digest from compose.yaml> \
+  docker run --rm -v "$PWD/conformance:/w" -w /w python:3.14-slim@<digest from compose.yaml> \
     sh -c 'pip install --root-user-action=ignore -q pip-tools &&
-           pip-compile --quiet --generate-hashes --strip-extras --allow-unsafe --no-header \
+           pip-compile --quiet --generate-hashes --strip-extras --allow-unsafe \
              -o requirements.txt requirements.in'
   ```
 
