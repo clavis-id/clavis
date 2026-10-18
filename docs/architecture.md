@@ -278,7 +278,8 @@ year.
     needs a sign-in fails with `login_required`.
 - **Consent:** see ADR 0020. A grant records the scopes a user allowed a client.
   - After the user authenticates, a request needs consent when it asks for a scope that the
-    grant lacks (a claim requested individually counts as its scope) or carries
+    grant lacks (a claim requested individually counts as its scope, and `offline_access`
+    counts exactly when the client gets a refresh token, ADR 0021) or carries
     `prompt=consent`. Clients that skip consent by policy, for first-party applications,
     need it only for `prompt=consent`. With `prompt=none`, a request that needs consent
     fails with `consent_required`.
