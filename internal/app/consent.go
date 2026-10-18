@@ -32,22 +32,36 @@ type PendingConsent struct {
 	Scopes []ConsentScope
 }
 
-// consentScopes returns the scopes that r asks the user to allow: its
-// scopes, then the scopes that carry the claims it requests individually
-// (ADR 0020), without duplicates.
-func consentScopes(r store.AuthorizationRequest) []string {
-	scopes := slices.Clone(r.Scopes)
+// consentScopes returns the scopes that r asks the user to allow for
+// client: its scopes, then the scopes that carry the claims it requests
+// individually (ADR 0020), without duplicates. offline_access is in the list
+// exactly when the client gets a refresh token for r (ADR 0021), so the user
+// sees long-term access: an OAuth request gets a refresh token by client
+// policy without asking for one, and a client that may not use the refresh
+// token grant gets none.
+func consentScopes(r store.AuthorizationRequest, client store.Client) []string {
+	refresh := issuesRefreshToken(client, r.Scopes)
+	scopes := make([]string, 0, len(r.Scopes)+1)
+	for _, scope := range r.Scopes {
+		if scope != oauth.ScopeOfflineAccess || refresh {
+			scopes = append(scopes, scope)
+		}
+	}
 	for _, claim := range slices.Concat(r.UserInfoClaims, r.IDTokenClaims) {
 		if scope := oidc.ClaimScope(claim); scope != "" && !slices.Contains(scopes, scope) {
 			scopes = append(scopes, scope)
 		}
+	}
+	if refresh && !slices.Contains(scopes, oauth.ScopeOfflineAccess) {
+		scopes = append(scopes, oauth.ScopeOfflineAccess)
 	}
 	return scopes
 }
 
 // needsConsent reports whether r needs the consent of the user before client
 // gets a code (ADR 0020): r carries prompt=consent, or the client does not
-// skip consent and r asks for a scope that the user's grant lacks.
+// skip consent and the grant of the user lacks a scope that consentScopes
+// lists.
 func needsConsent(ctx context.Context, d Deps, client store.Client, userID uuid.UUID, r store.AuthorizationRequest,
 ) (bool, error) {
 	switch {
@@ -60,7 +74,7 @@ func needsConsent(ctx context.Context, d Deps, client store.Client, userID uuid.
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return false, fmt.Errorf("looking up the grant: %w", err)
 	}
-	for _, scope := range consentScopes(r) {
+	for _, scope := range consentScopes(r, client) {
 		if !slices.Contains(g.Scopes, scope) {
 			return true, nil
 		}
@@ -105,17 +119,17 @@ func FindConsent(ctx context.Context, d Deps, tenantID uuid.UUID, id string, bin
 		return PendingConsent{}, err
 	}
 	c := PendingConsent{PendingAuthorization: p, Session: s, User: u}
-	for _, scope := range consentScopes(p.Request) {
+	for _, scope := range consentScopes(p.Request, p.Client) {
 		c.Scopes = append(c.Scopes, ConsentScope{Scope: scope, Resource: owners[scope].Name})
 	}
 	return c, nil
 }
 
 // CompleteConsent answers the authorization request of c, which FindConsent
-// returned, with the user's decision (ADR 0020). Allowing adds the scopes of
-// the request to the user's grant for the client and issues a code;
-// denying ends the request with access_denied. It returns the authorization
-// response. A request answered in the meantime returns
+// returned, with the user's decision (ADR 0020). Allowing adds the scopes
+// that consentScopes lists to the user's grant for the client and issues a
+// code; denying ends the request with access_denied. It returns the
+// authorization response. A request answered in the meantime returns
 // ErrAuthorizationRequestNotFound.
 func CompleteConsent(ctx context.Context, d Deps, t AuthorizationTenant, c PendingConsent, allow bool) (string, error) {
 	r := c.Request
@@ -148,7 +162,7 @@ func CompleteConsent(ctx context.Context, d Deps, t AuthorizationTenant, c Pendi
 	}
 	now := d.Now()
 	scopes := g.Scopes
-	for _, scope := range consentScopes(r) {
+	for _, scope := range consentScopes(r, c.Client) {
 		if !slices.Contains(scopes, scope) {
 			scopes = append(scopes, scope)
 		}

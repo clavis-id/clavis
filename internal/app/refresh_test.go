@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -108,6 +109,68 @@ func TestOfflineAccessNeedsConsent(t *testing.T) {
 	resp, err := ExchangeCode(t.Context(), f.d, fakeSigner{}, f.tenant, f.client(t, "partner"), r)
 	if err != nil || resp.RefreshToken == "" || resp.Scope != "openid profile offline_access" {
 		t.Errorf("ExchangeCode() after consent = %+v, %v; want a refresh token", resp, err)
+	}
+}
+
+// TestConsentShowsOfflineAccessWhenTheClientGetsIt checks that the consent
+// page lists offline access exactly when the client gets a refresh token
+// (ADR 0021).
+func TestConsentShowsOfflineAccessWhenTheClientGetsIt(t *testing.T) {
+	t.Parallel()
+	f := newAuthzFixture(t)
+	if _, _, err := CreateClient(t.Context(), f.d, f.tenant.ID, ClientSpec{
+		ClientID: "online", Type: store.ClientConfidential,
+		RedirectURIs: []string{"https://partner.example.com/callback"},
+		GrantTypes:   []string{oauth.GrantTypeAuthorizationCode},
+		Scopes:       []string{"openid", "profile", "offline_access"},
+	}); err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	oauthRequest := with(partnerRequest(), "scope", "profile")
+	oauthRequest.Del("nonce")
+	for _, tt := range []struct {
+		name    string
+		params  url.Values
+		consent []string
+		refresh bool
+	}{
+		// ADR 0014: an OAuth request gets a refresh token by client policy.
+		{"OAuth request", oauthRequest, []string{"profile", "offline_access"}, true},
+		{"OpenID request with offline_access", with(partnerRequest(), "scope", "offline_access openid"),
+			[]string{"offline_access", "openid"}, true},
+		{"client without the refresh token grant", with(with(partnerRequest(), "client_id", "online"),
+			"scope", "openid offline_access"), []string{"openid"}, false},
+	} {
+		p, sessionHash := f.loginForConsent(t, tt.params)
+		c, err := FindConsent(t.Context(), f.d, f.tenant.ID, p.Request.ID, testBinding, sessionHash)
+		if err != nil {
+			t.Fatalf("%s: FindConsent() unexpected error: %v", tt.name, err)
+		}
+		var scopes []string
+		for _, s := range c.Scopes {
+			scopes = append(scopes, s.Scope)
+		}
+		if !slices.Equal(scopes, tt.consent) {
+			t.Errorf("%s: consent page scopes = %q, want %q", tt.name, scopes, tt.consent)
+		}
+		q := f.consent(t, p.Request.ID, sessionHash, true)
+		r := codeRequest(q.Get("code"))
+		r.RedirectURI = "https://partner.example.com/callback"
+		resp, err := ExchangeCode(t.Context(), f.d, fakeSigner{}, f.tenant, p.Client, r)
+		if err != nil || (resp.RefreshToken != "") != tt.refresh {
+			t.Errorf("%s: ExchangeCode() = %+v, %v; want refresh token %v", tt.name, resp, err, tt.refresh)
+		}
+		if tt.name != "OAuth request" {
+			continue
+		}
+		// The grant records offline access, so the same request needs no
+		// consent the next time.
+		if g, err := f.partnerGrant(t); err != nil || !slices.Contains(g.Scopes, "offline_access") {
+			t.Errorf("grant after an OAuth request = %+v, %v; want offline_access", g, err)
+		}
+		if a, err := f.startWith(t, oauthRequest, sessionHash); err != nil || a.RedirectURI == "" {
+			t.Errorf("StartAuthorization() of the same OAuth request = %+v, %v; want a code", a, err)
+		}
 	}
 }
 
