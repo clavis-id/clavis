@@ -29,3 +29,4 @@ request. Status values: Proposed, Accepted, Superseded by NNNN, Deprecated.
 | [0018](0018-pkce-exemption-is-a-client-setting.md) | PKCE exemption is a client setting | Accepted |
 | [0019](0019-authentication-context-class-references.md) | Authentication context class references | Accepted |
 | [0020](0020-consent-and-grants.md) | Consent and grants | Accepted |
+| [0021](0021-refresh-token-rotation.md) | Refresh token rotation | Accepted |

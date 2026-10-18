@@ -116,10 +116,15 @@ func TestParseTokenRequest(t *testing.T) {
 	if got, err := ParseTokenRequest(url.Values{"grant_type": {"client_credentials"}}); err != nil || len(got.Scopes) != 0 {
 		t.Errorf("ParseTokenRequest() without scope = %+v, %v", got, err)
 	}
+	got, err = ParseTokenRequest(url.Values{"grant_type": {"refresh_token"}, "refresh_token": {"r"}, "scope": {"openid"}})
+	if err != nil || got.GrantType != "refresh_token" || got.RefreshToken != "r" || !slices.Equal(got.Scopes, []string{"openid"}) {
+		t.Errorf("ParseTokenRequest() of a refresh = %+v, %v", got, err)
+	}
 	for name, form := range map[string]url.Values{
 		"missing grant_type":  {"code": {"c"}},
 		"repeated grant_type": {"grant_type": {"a", "a"}},
 		"repeated code":       {"grant_type": {"authorization_code"}, "code": {"a", "b"}},
+		"repeated refresh":    {"grant_type": {"refresh_token"}, "refresh_token": {"a", "b"}},
 		"repeated scope":      {"grant_type": {"client_credentials"}, "scope": {"a", "b"}},
 		"short verifier":      {"grant_type": {"authorization_code"}, "code_verifier": {verifier[1:]}},
 		"long verifier":       {"grant_type": {"authorization_code"}, "code_verifier": {strings.Repeat("a", 129)}},
@@ -167,6 +172,39 @@ func FuzzParseClientCredentials(f *testing.F) {
 		}
 		if ValidateClientID(got.ClientID) != nil || (got.Method == AuthMethodNone) != (got.Secret == "") {
 			t.Errorf("ParseClientCredentials(%q, %q) = %+v", authorization, query, got)
+		}
+	})
+}
+
+// FuzzParseTokenRequest checks that any form either fails with an *Error or
+// yields a grant type, a verifier of the PKCE syntax and valid, distinct
+// scopes.
+func FuzzParseTokenRequest(f *testing.F) {
+	f.Add("grant_type=authorization_code&code=c&redirect_uri=https%3A%2F%2Fa.example%2Fcb&code_verifier=" + verifier)
+	f.Add("grant_type=refresh_token&refresh_token=r&scope=openid+offline_access")
+	f.Add("grant_type=client_credentials&scope=+a++b+a")
+	f.Add("grant_type=x&scope=%22")
+	f.Fuzz(func(t *testing.T, query string) {
+		form, err := url.ParseQuery(query)
+		if err != nil {
+			return
+		}
+		got, err := ParseTokenRequest(form)
+		if err != nil {
+			var oauthErr *Error
+			if !errors.As(err, &oauthErr) || !validDescription(oauthErr.Description) {
+				t.Fatalf("ParseTokenRequest(%q) = %v, want an *Error", query, err)
+			}
+			return
+		}
+		if got.GrantType == "" ||
+			got.CodeVerifier != "" && (len(got.CodeVerifier) < minVerifierLength || len(got.CodeVerifier) > maxVerifierLength) {
+			t.Errorf("ParseTokenRequest(%q) = %+v", query, got)
+		}
+		for i, s := range got.Scopes {
+			if ValidateScope(s) != nil || slices.Contains(got.Scopes[:i], s) {
+				t.Errorf("ParseTokenRequest(%q) scopes = %q", query, got.Scopes)
+			}
 		}
 	})
 }

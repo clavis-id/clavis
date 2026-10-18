@@ -115,6 +115,34 @@ type Password struct {
 	SetAt    time.Time
 }
 
+type RefreshToken struct {
+	Hash      []byte
+	TenantID  uuid.UUID
+	FamilyID  uuid.UUID
+	IssuedAt  time.Time
+	ExpiresAt time.Time
+	RotatedAt *time.Time
+}
+
+type RefreshTokenFamily struct {
+	ID             uuid.UUID
+	TenantID       uuid.UUID
+	ClientID       uuid.UUID
+	UserID         uuid.UUID
+	SessionID      *uuid.UUID
+	CodeHash       []byte
+	Scopes         []string
+	AuthTime       time.Time
+	Amr            []string
+	Acr            string
+	UserinfoClaims []string
+	IDTokenClaims  []string
+	CreatedAt      time.Time
+	IdleExpiresAt  time.Time
+	ExpiresAt      time.Time
+	RevokedAt      *time.Time
+}
+
 type Session struct {
 	ID            uuid.UUID
 	TenantID      uuid.UUID

@@ -54,6 +54,8 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request, t tenant) {
 	switch req.GrantType {
 	case oauth.GrantTypeAuthorizationCode:
 		resp, err = app.ExchangeCode(r.Context(), s.deps, s.signer, at, client, req)
+	case oauth.GrantTypeRefreshToken:
+		resp, err = app.RefreshToken(r.Context(), s.deps, s.signer, at, client, req)
 	case oauth.GrantTypeClientCredentials:
 		resp, err = app.ClientCredentialsToken(r.Context(), s.deps, s.signer, at, client, req)
 	default:

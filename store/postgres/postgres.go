@@ -52,6 +52,7 @@ type Store struct {
 	sessions    sessions
 	codes       authorizationCodes
 	tokens      accessTokens
+	refresh     refreshTokens
 	resources   apiResources
 	grants      grants
 }
@@ -109,6 +110,7 @@ func New(ctx context.Context, pool *pgxpool.Pool, opts ...Option) (*Store, error
 		sessions:    sessions{q: q},
 		codes:       authorizationCodes{q: q},
 		tokens:      accessTokens{q: q},
+		refresh:     refreshTokens{pool: pool, q: q},
 		resources:   apiResources{q: q},
 		grants:      grants{q: q},
 	}
@@ -198,6 +200,9 @@ func (s *Store) AuthorizationCodes() store.AuthorizationCodes { return s.codes }
 
 // AccessTokens returns the access token repository.
 func (s *Store) AccessTokens() store.AccessTokens { return s.tokens }
+
+// RefreshTokens returns the refresh token repository.
+func (s *Store) RefreshTokens() store.RefreshTokens { return s.refresh }
 
 // APIResources returns the API resource repository.
 func (s *Store) APIResources() store.APIResources { return s.resources }

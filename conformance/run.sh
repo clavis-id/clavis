@@ -125,7 +125,8 @@ setup_clavis() {
 # create_client registers a confidential client and prints its secret.
 create_client() {
 	clavis clients create --client-id "$1" --name "Conformance $1" --redirect-uri "$REDIRECT_URI" \
-		--scope openid --scope profile --scope email --scope address --scope phone --pkce-exempt |
+		--scope openid --scope profile --scope email --scope address --scope phone --scope offline_access \
+		--pkce-exempt |
 		sed -n 's/^Client secret: //p'
 }
 

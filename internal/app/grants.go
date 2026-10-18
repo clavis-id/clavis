@@ -46,11 +46,11 @@ func ListGrants(ctx context.Context, d Deps, tenantID uuid.UUID, email string) (
 }
 
 // RevokeGrant deletes the grant of the user of a tenant with the given email
-// address for the client with the given client ID, and revokes the tokens
-// issued to the client for the user (ADR 0020). It also deletes the
-// authorization codes issued to the client for the user, so a code issued
-// before the revocation cannot yield tokens after it. The next authorization
-// request of the client asks the user again.
+// address for the client with the given client ID, and revokes the refresh
+// and access tokens issued to the client for the user (ADR 0020). It also
+// deletes the authorization codes issued to the client for the user, so a
+// code issued before the revocation cannot yield tokens after it. The next
+// authorization request of the client asks the user again.
 func RevokeGrant(ctx context.Context, d Deps, tenantID uuid.UUID, email, clientID string) error {
 	u, err := FindUser(ctx, d, tenantID, email)
 	if err != nil {
@@ -70,15 +70,25 @@ func RevokeGrant(ctx context.Context, d Deps, tenantID uuid.UUID, email, clientI
 	if err != nil {
 		return fmt.Errorf("deleting the codes of the grant: %w", err)
 	}
-	tokens, err := d.Store.AccessTokens().RevokeByUserAndClient(ctx, tenantID, u.ID, c.ID, d.Now())
+	// Refresh token families come before access tokens: a refresh records
+	// its access token before it rotates the refresh token, so it either
+	// fails on the revoked family or its access token is revoked below
+	// (ADR 0021).
+	now := d.Now()
+	families, err := d.Store.RefreshTokens().RevokeByUserAndClient(ctx, tenantID, u.ID, c.ID, now)
 	if err != nil {
-		return fmt.Errorf("revoking the tokens of the grant: %w", err)
+		return fmt.Errorf("revoking the refresh tokens of the grant: %w", err)
+	}
+	tokens, err := d.Store.AccessTokens().RevokeByUserAndClient(ctx, tenantID, u.ID, c.ID, now)
+	if err != nil {
+		return fmt.Errorf("revoking the access tokens of the grant: %w", err)
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "revoked grant",
 		slog.String("tenant_id", tenantID.String()),
 		slog.String("user_id", u.ID.String()),
 		slog.String("client_id", c.ClientID),
 		slog.Int64("deleted_authorization_codes", codes),
+		slog.Int64("revoked_refresh_token_families", families),
 		slog.Int64("revoked_access_tokens", tokens))
 	return nil
 }

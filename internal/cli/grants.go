@@ -63,14 +63,14 @@ func newGrantsCommand(environ []string) *cobra.Command {
 	revoke := &cobra.Command{
 		Use:   "revoke CLIENT_ID",
 		Short: "Revoke the grant of a user for a client",
-		Long: "Revoke the grant of a user for a client, and the access tokens issued to the client for\n" +
-			"the user. The next sign-in to the client asks the user for consent again. Pass --yes to\n" +
-			"confirm.",
+		Long: "Revoke the grant of a user for a client, and the refresh and access tokens issued to the\n" +
+			"client for the user. The next sign-in to the client asks the user for consent again. Pass\n" +
+			"--yes to confirm.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !confirmed {
-				return fmt.Errorf("revoking the grant of %s for %q also revokes the client's access tokens for "+
-					"the user; run the command again with --yes to confirm", email, args[0])
+				return fmt.Errorf("revoking the grant of %s for %q also revokes the client's refresh and access "+
+					"tokens for the user; run the command again with --yes to confirm", email, args[0])
 			}
 			return run(cmd, func(ctx context.Context, d app.Deps, t store.Tenant, out io.Writer) error {
 				if err := app.RevokeGrant(ctx, d, t.ID, email, args[0]); err != nil {
