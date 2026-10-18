@@ -22,10 +22,12 @@ questions that ADR 0014 does not answer:
 
 - **Issuance.** The code exchange issues a refresh token when the client may use the
   `refresh_token` grant and either the request is an OAuth request without `openid`, or it was
-  granted `offline_access`. Consent (ADR 0020) treats `offline_access` like any other scope and
-  describes it as keeping access while the user is signed out. A grant that includes it, or a
-  client that skips consent by operator policy, is the condition that permits offline access,
-  so `prompt=consent` is not required. Without a refresh token, `offline_access` is left out of
+  granted `offline_access`. Consent (ADR 0020) lists `offline_access` exactly when the client
+  gets a refresh token: also for an OAuth request, which gets one without asking, and never for
+  a client that may not use the `refresh_token` grant. The page describes it as keeping access
+  while the user is signed out, and the grant records it. A grant that includes it, or a client
+  that skips consent by operator policy, is the condition that permits offline access, so
+  `prompt=consent` is not required. Without a refresh token, `offline_access` is left out of
   the granted scope. The client credentials grant never issues refresh tokens (RFC 6749,
   section 4.4.3).
 - **Families.** Each code exchange starts a family. The family keeps what the grant gave: the
@@ -63,6 +65,7 @@ questions that ADR 0014 does not answer:
   token it already used loses the family, and the user must sign in again.
 - A stolen refresh token works only until the legitimate client refreshes again; whichever of
   the two comes second revokes the family.
-- Revoked families stay until they expire, so reuse of their tokens is still recognized and
-  logged.
+- A replaced token stays stored until it would have expired, also in a revoked family, so
+  presenting it again until then is recognized as reuse and logged. Afterwards it is unknown
+  and refused like any invalid token.
 - Revocation and introspection (work item 2.4) can act on a refresh token through its family.

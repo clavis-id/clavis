@@ -58,9 +58,10 @@ func (f authzFixture) consent(t *testing.T, id string, sessionHash []byte, allow
 	return u.Query()
 }
 
-func (f authzFixture) grant(t *testing.T, clientID string) (store.Grant, error) {
+// partnerGrant returns the grant of ada for the partner client.
+func (f authzFixture) partnerGrant(t *testing.T) (store.Grant, error) {
 	t.Helper()
-	return f.d.Store.Grants().Get(t.Context(), f.tenant.ID, f.user.ID, f.client(t, clientID).ID)
+	return f.d.Store.Grants().Get(t.Context(), f.tenant.ID, f.user.ID, f.client(t, "partner").ID)
 }
 
 func TestConsentAfterSignIn(t *testing.T) {
@@ -86,7 +87,7 @@ func TestConsentAfterSignIn(t *testing.T) {
 	if err != nil || code.SessionID != c.Session.ID || code.UserID != f.user.ID || !slices.Equal(code.Scopes, []string{"openid", "profile"}) {
 		t.Errorf("issued code = %+v, %v", code, err)
 	}
-	g, err := f.grant(t, "partner")
+	g, err := f.partnerGrant(t)
 	if err != nil || !slices.Equal(g.Scopes, []string{"openid", "profile"}) || !g.CreatedAt.Equal(*f.now) {
 		t.Errorf("grant = %+v, %v", g, err)
 	}
@@ -127,7 +128,7 @@ func TestConsentForNewScopes(t *testing.T) {
 		t.Fatalf("FindConsent() = %+v, %v", c.Scopes, err)
 	}
 	f.consent(t, a.RequestID, sessionHash, true)
-	if g, err := f.grant(t, "partner"); err != nil || !slices.Equal(g.Scopes, []string{"openid", "profile", "email"}) {
+	if g, err := f.partnerGrant(t); err != nil || !slices.Equal(g.Scopes, []string{"openid", "profile", "email"}) {
 		t.Errorf("grant = %+v, %v; want the scopes of both requests", g, err)
 	}
 
@@ -146,7 +147,7 @@ func TestConsentDenied(t *testing.T) {
 		q.Get("iss") != testIssuer {
 		t.Errorf("authorization response = %v, want access_denied", q)
 	}
-	if _, err := f.grant(t, "partner"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := f.partnerGrant(t); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("grant after a denial = %v, want none", err)
 	}
 	// The session stays, and the next request asks again.

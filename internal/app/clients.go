@@ -244,9 +244,12 @@ func validateLifetimes(l store.TokenLifetimes) error {
 			return fmt.Errorf("%w: %s must be a whole number of seconds", ErrInvalidClientMetadata, b.name)
 		}
 	}
-	if l.RefreshTokenIdle != 0 && l.RefreshTokenAbsolute != 0 && l.RefreshTokenIdle > l.RefreshTokenAbsolute {
-		return fmt.Errorf("%w: the refresh token idle lifetime must not exceed the absolute lifetime",
-			ErrInvalidClientMetadata)
+	// An idle lifetime may not exceed the absolute lifetime that applies,
+	// the default one included. A default idle lifetime above a short
+	// absolute lifetime is capped when tokens are issued.
+	if l.RefreshTokenIdle > orDefault(l.RefreshTokenAbsolute, DefaultRefreshTokenAbsoluteLifetime) {
+		return fmt.Errorf("%w: the refresh token idle lifetime must not exceed the absolute lifetime, "+
+			"which is 30 days by default", ErrInvalidClientMetadata)
 	}
 	return nil
 }
