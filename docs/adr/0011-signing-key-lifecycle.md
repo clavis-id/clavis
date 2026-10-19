@@ -1,6 +1,6 @@
 # 0011. Signing key lifecycle and encryption at rest
 
-- Status: Accepted
+- Status: Accepted; the retention default is superseded by [0023](0023-logout-and-form-post.md)
 - Date: 2026-10-13
 
 ## Context

@@ -30,6 +30,7 @@ The design decisions this plan relies on are recorded as ADRs:
 | [0020](../adr/0020-consent-and-grants.md) | Grants per user and client; consent when a scope is new or `prompt=consent`; revoking a grant revokes its tokens |
 | [0021](../adr/0021-refresh-token-rotation.md) | Refresh tokens with `offline_access` or for OAuth requests; one family per code exchange; concurrent refreshes count as reuse; tokens recorded before the step that validates them |
 | [0022](../adr/0022-revocation-and-introspection.md) | Revoking a refresh token revokes its family; clients introspect their own tokens, and resource server clients the access tokens for their API resources |
+| [0023](../adr/0023-logout-and-form-post.md) | Logout asks for confirmation and ends the session's online access; post-logout redirects need an `id_token_hint`; retired keys stay published 15 days; form post responses |
 
 ## Rules for every work item
 

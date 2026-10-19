@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"embed"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -110,6 +111,22 @@ func SetPageHeaders(h http.Header, csp string) {
 // to; FormTarget converts one. Without any form target and without
 // allowSelf, the page cannot submit forms at all.
 func ContentSecurityPolicy(allowSelf bool, formTargets ...string) string {
+	return contentSecurityPolicy("", allowSelf, formTargets)
+}
+
+// FormPostContentSecurityPolicy returns the policy of the page that FormPost
+// renders: the policy of ContentSecurityPolicy for a form that submits only
+// to formTarget, which FormTarget returns for the redirect URI, plus the one
+// script that submits the form, allowed by its hash.
+func FormPostContentSecurityPolicy(formTarget string) string {
+	var targets []string
+	if formTarget != "" {
+		targets = append(targets, formTarget)
+	}
+	return contentSecurityPolicy("script-src '"+formPostScriptHash+"'; ", false, targets)
+}
+
+func contentSecurityPolicy(scripts string, allowSelf bool, formTargets []string) string {
 	var sources []string
 	if allowSelf {
 		sources = append(sources, "'self'")
@@ -118,9 +135,19 @@ func ContentSecurityPolicy(allowSelf bool, formTargets ...string) string {
 	if len(sources) == 0 {
 		sources = []string{"'none'"}
 	}
-	return "default-src 'none'; style-src 'self'; img-src 'self'; form-action " + strings.Join(sources, " ") +
-		"; frame-ancestors 'none'; base-uri 'none'"
+	return "default-src 'none'; " + scripts + "style-src 'self'; img-src 'self'; form-action " +
+		strings.Join(sources, " ") + "; frame-ancestors 'none'; base-uri 'none'"
 }
+
+// formPostScript submits the form of the FormPost page as soon as the page
+// loads, and formPostScriptHash is its hash as a Content Security Policy
+// hash source.
+const formPostScript = `document.getElementById("response").submit();`
+
+var formPostScriptHash = func() string {
+	sum := sha256.Sum256([]byte(formPostScript))
+	return "sha256-" + base64.StdEncoding.EncodeToString(sum[:])
+}()
 
 // FormTarget returns the Content Security Policy source expression that
 // allows a form submission to redirect to redirectURI: its origin for an
@@ -193,6 +220,48 @@ type ConsentPage struct {
 	Action string
 	// RequestID identifies the stored authorization request.
 	RequestID string
+}
+
+// FormPostPage posts an authorization response to the client (OAuth 2.0
+// Form Post Response Mode, section 2).
+type FormPostPage struct {
+	Layout
+	// Action is the client's redirect URI.
+	Action string
+	// Fields are the parameters of the response.
+	Fields []Field
+}
+
+// LogoutPage asks the user to confirm signing out (OpenID Connect
+// RP-Initiated Logout 1.0, section 2).
+type LogoutPage struct {
+	Layout
+	// Account is the email address of the signed-in user, or empty.
+	Account string
+	// ClientName names the application that asks for the logout, or is
+	// empty when the request does not show which one.
+	ClientName string
+	// Problem explains why the browser will stay at Clavis after signing
+	// out instead of returning to the application, or is empty.
+	Problem string
+	// Action is the URL the form posts to, and Fields carry the logout
+	// request to it.
+	Action string
+	Fields []Field
+}
+
+// SignedOutPage tells the user that the session ended.
+type SignedOutPage struct {
+	Layout
+	// Problem explains why the browser did not return to the application,
+	// or is empty.
+	Problem string
+}
+
+// Field is a hidden form field.
+type Field struct {
+	Name  string
+	Value string
 }
 
 // ScopeDescription describes, for the consent page, what a scope lets an

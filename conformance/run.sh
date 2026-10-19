@@ -26,10 +26,14 @@ RUNNER_SCRIPTS=(
 PLANS=(
 	"oidcc-config-certification-test-plan .cache/clavis-oidcc.json"
 	"oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client] .cache/clavis-oidcc.json"
+	"oidcc-formpost-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client] .cache/clavis-oidcc.json"
+	"oidcc-rp-initiated-logout-certification-test-plan[response_type=code][client_registration=static_client] .cache/clavis-oidcc.json"
 )
 
-# Redirect URI of the suite's clients for the alias in the configuration.
+# Redirect URI and post-logout redirect URI of the suite's clients for the
+# alias in the configuration.
 REDIRECT_URI=https://localhost.emobix.co.uk:8443/test/a/clavis/callback
+POST_LOGOUT_REDIRECT_URI=https://localhost.emobix.co.uk:8443/test/a/clavis/post_logout_redirect
 
 compose() {
 	docker compose --file compose.yaml --profile runner "$@"
@@ -125,6 +129,7 @@ setup_clavis() {
 # create_client registers a confidential client and prints its secret.
 create_client() {
 	clavis clients create --client-id "$1" --name "Conformance $1" --redirect-uri "$REDIRECT_URI" \
+		--post-logout-redirect-uri "$POST_LOGOUT_REDIRECT_URI" \
 		--scope openid --scope profile --scope email --scope address --scope phone --scope offline_access \
 		--pkce-exempt |
 		sed -n 's/^Client secret: //p'

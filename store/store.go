@@ -371,8 +371,11 @@ type AuthorizationRequest struct {
 	// request, which waits for the user's consent, or the zero UUID until
 	// then. It is not a reference: the session may have ended since.
 	SessionID uuid.UUID
-	CreatedAt time.Time
-	ExpiresAt time.Time
+	// ResponseMode is how the response goes back to the client: query or
+	// form_post (OAuth 2.0 Form Post Response Mode).
+	ResponseMode string
+	CreatedAt    time.Time
+	ExpiresAt    time.Time
 }
 
 // AuthorizationRequests stores authorization requests. Every method works
@@ -494,6 +497,10 @@ type AuthorizationCodes interface {
 	// DeleteByUserAndClient removes the codes of a tenant that were issued to
 	// the client for the user, and returns how many were removed.
 	DeleteByUserAndClient(ctx context.Context, tenantID, userID, clientID uuid.UUID) (int64, error)
+	// DeleteBySession removes the codes of a tenant that were issued in the
+	// session with the given ID and not redeemed yet, and returns how many
+	// were removed. Redeemed codes stay, so that replays are still detected.
+	DeleteBySession(ctx context.Context, tenantID, sessionID uuid.UUID) (int64, error)
 	// DeleteExpired removes the codes of every tenant whose ExpiresAt is not
 	// after before, and returns how many were removed. Callers keep expired
 	// codes for a while by passing a time in the past.
@@ -537,6 +544,13 @@ type AccessTokens interface {
 	// time, or returns ErrNotFound. A revoked token keeps the time of its
 	// first revocation.
 	Revoke(ctx context.Context, tenantID uuid.UUID, id string, at time.Time) error
+	// RevokeBySession revokes, at the given time, the tokens of a tenant
+	// that are not revoked yet and derive from a code issued in the session
+	// with the given ID that started no refresh token family, and returns
+	// how many it revoked. These are the session's online access: tokens of
+	// a refresh token family are offline access, which outlives the session
+	// (ADR 0021). Codes that were deleted are not found.
+	RevokeBySession(ctx context.Context, tenantID, sessionID uuid.UUID, at time.Time) (int64, error)
 	// RevokeByCode revokes, at the given time, the tokens of a tenant that
 	// were issued for the code with the given hash and are not revoked yet,
 	// and returns how many it revoked.

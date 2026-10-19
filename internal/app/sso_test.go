@@ -26,9 +26,9 @@ func (f authzFixture) signIn(t *testing.T, params url.Values) (sessionHash []byt
 	if err != nil {
 		t.Fatalf("CompletePasswordLogin() unexpected error: %v", err)
 	}
-	u, err := url.Parse(login.RedirectURI)
+	u, err := url.Parse(login.Response.URI())
 	if err != nil {
-		t.Fatalf("parsing %q: %v", login.RedirectURI, err)
+		t.Fatalf("parsing %q: %v", login.Response.URI(), err)
 	}
 	return oauth.HashToken(login.SessionToken), u.Query()
 }
@@ -69,14 +69,14 @@ func TestSingleSignOn(t *testing.T) {
 	params.Set("redirect_uri", "http://127.0.0.1:51004/callback")
 	params.Set("prompt", "none")
 	a, err := f.startWith(t, params, sessionHash)
-	if err != nil || a.RequestID != "" || !strings.HasPrefix(a.RedirectURI, "http://127.0.0.1:51004/callback?") {
+	if err != nil || a.RequestID != "" || !strings.HasPrefix(a.Response.URI(), "http://127.0.0.1:51004/callback?") {
 		t.Fatalf("StartAuthorization() with a session = %+v, %v; want an authorization response", a, err)
 	}
-	u, _ := url.Parse(a.RedirectURI)
+	u, _ := url.Parse(a.Response.URI())
 	if q := u.Query(); q.Get("state") != "af0ifjsldkj" || q.Get("iss") != testIssuer || len(q) != 3 {
 		t.Errorf("response parameters = %v", q)
 	}
-	code := f.codeOf(t, a.RedirectURI)
+	code := f.codeOf(t, a.Response.URI())
 	session, err := f.d.Store.Sessions().GetByTokenHash(t.Context(), f.tenant.ID, sessionHash)
 	if err != nil {
 		t.Fatalf("looking up the session: %v", err)
@@ -101,7 +101,7 @@ func TestSingleSignOn(t *testing.T) {
 		t.Fatalf("Touch() unexpected error: %v", err)
 	}
 	*f.now = end.Add(-time.Hour)
-	if a, err := f.startWith(t, webRequest(), sessionHash); err != nil || a.RedirectURI == "" {
+	if a, err := f.startWith(t, webRequest(), sessionHash); err != nil || a.Response.RedirectURI == "" {
 		t.Fatalf("StartAuthorization() near the end of the session = %+v, %v", a, err)
 	}
 	session, _ = f.d.Store.Sessions().GetByTokenHash(t.Context(), f.tenant.ID, sessionHash)
@@ -198,7 +198,7 @@ func TestSingleSignOnNeedsAUsableSession(t *testing.T) {
 			}
 			a, err := StartAuthorization(t.Context(), f.d, fakeSigner{}, f.tenant, params, testBinding, sessionHash)
 			if !promptNone {
-				if err != nil || a.RequestID == "" || a.RedirectURI != "" {
+				if err != nil || a.RequestID == "" || a.Response.RedirectURI != "" {
 					t.Errorf("%s: StartAuthorization() = %+v, %v; want a stored request for a sign-in", tt.name, a, err)
 				}
 				continue
@@ -216,7 +216,7 @@ func TestSingleSignOnWithinMaxAge(t *testing.T) {
 	f := newAuthzFixture(t)
 	sessionHash, _ := f.signIn(t, webRequest())
 	*f.now = f.now.Add(60 * time.Second)
-	if a, err := f.startWith(t, with(webRequest(), "max_age", "60"), sessionHash); err != nil || a.RedirectURI == "" {
+	if a, err := f.startWith(t, with(webRequest(), "max_age", "60"), sessionHash); err != nil || a.Response.RedirectURI == "" {
 		t.Errorf("StartAuthorization() within max_age = %+v, %v; want an authorization response", a, err)
 	}
 }
@@ -250,7 +250,7 @@ func TestIDTokenHint(t *testing.T) {
 	// with prompt=none answers at once, even after the ID token expired.
 	*f.now = f.now.Add(DefaultIDTokenLifetime + time.Hour)
 	params := with(with(webRequest(), "prompt", "none"), "id_token_hint", idToken)
-	if a, err := f.startWith(t, params, sessionHash); err != nil || a.RedirectURI == "" {
+	if a, err := f.startWith(t, params, sessionHash); err != nil || a.Response.RedirectURI == "" {
 		t.Errorf("StartAuthorization() with the user's id_token_hint = %+v, %v; want a response", a, err)
 	}
 
@@ -265,7 +265,7 @@ func TestIDTokenHint(t *testing.T) {
 		t.Fatalf("stored request = %+v, %v; want the hinted user", p.Request, err)
 	}
 	if login, err := CompletePasswordLogin(t.Context(), f.d, f.h, f.tenant, p, "ada@example.com", "correct horse", nil); err != nil ||
-		!strings.Contains(login.RedirectURI, "code=") {
+		!strings.Contains(login.Response.URI(), "code=") {
 		t.Errorf("CompletePasswordLogin() as the hinted user = %+v, %v; want a code", login, err)
 	}
 }
@@ -310,7 +310,7 @@ func TestIDTokenHintOfAnotherUser(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompletePasswordLogin() unexpected error: %v", err)
 	}
-	u, _ := url.Parse(login.RedirectURI)
+	u, _ := url.Parse(login.Response.URI())
 	if q := u.Query(); q.Get("error") != oauth.ErrorLoginRequired || q.Has("code") || q.Get("state") != "af0ifjsldkj" ||
 		q.Get("iss") != testIssuer || login.SessionToken == "" {
 		t.Errorf("CompletePasswordLogin() as another user = %+v; want login_required and a session", login)
@@ -401,11 +401,11 @@ func TestClaimsParameter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompletePasswordLogin() unexpected error: %v", err)
 	}
-	code := f.codeOf(t, login.RedirectURI)
+	code := f.codeOf(t, login.Response.URI())
 	if !slices.Equal(code.UserInfoClaims, []string{"email"}) || !slices.Equal(code.IDTokenClaims, []string{"email_verified"}) {
 		t.Fatalf("code claims = %v and %v", code.UserInfoClaims, code.IDTokenClaims)
 	}
-	u, _ := url.Parse(login.RedirectURI)
+	u, _ := url.Parse(login.Response.URI())
 	resp, err := ExchangeCode(t.Context(), f.d, fakeSigner{}, f.tenant, p.Client, codeRequest(u.Query().Get("code")))
 	if err != nil {
 		t.Fatalf("ExchangeCode() unexpected error: %v", err)
@@ -530,7 +530,7 @@ func TestRequestedSubject(t *testing.T) {
 		a, err := f.startWith(t, params, sessionHash)
 		var redirect *RedirectError
 		switch {
-		case tt.code == "" && (err != nil || a.RedirectURI == ""):
+		case tt.code == "" && (err != nil || a.Response.RedirectURI == ""):
 			t.Errorf("%s: StartAuthorization() = %+v, %v; want an answer from the session", tt.name, a, err)
 		case tt.code != "" && (!errors.As(err, &redirect) || redirect.Err.Code != tt.code):
 			t.Errorf("%s: StartAuthorization() = %+v, %v; want %s", tt.name, a, err, tt.code)
@@ -551,8 +551,8 @@ func TestRequestedSubject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompletePasswordLogin() unexpected error: %v", err)
 	}
-	u, _ := url.Parse(login.RedirectURI)
+	u, _ := url.Parse(login.Response.URI())
 	if q := u.Query(); q.Get("error") != oauth.ErrorLoginRequired || q.Has("code") {
-		t.Errorf("CompletePasswordLogin() as ada = %q, want login_required", login.RedirectURI)
+		t.Errorf("CompletePasswordLogin() as ada = %q, want login_required", login.Response.URI())
 	}
 }

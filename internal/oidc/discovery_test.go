@@ -60,7 +60,7 @@ func TestMetadataOverridesMisleadingDefaults(t *testing.T) {
 	}
 	for field, want := range map[string][]any{
 		// Defaults include fragment and implicit.
-		"response_modes_supported": {"query"},
+		"response_modes_supported": {"query", "form_post"},
 		"grant_types_supported":    {"authorization_code", "refresh_token", "client_credentials"},
 	} {
 		if values, ok := doc[field].([]any); !ok || !slices.Equal(values, want) {

@@ -75,6 +75,7 @@ type AuthorizationRequest struct {
 	IDTokenClaims       []string
 	ForceConsent        bool
 	SessionID           *uuid.UUID
+	ResponseMode        string
 }
 
 type Client struct {

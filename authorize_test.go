@@ -37,11 +37,12 @@ func newLoginServer(t testing.TB, issuer, slug string) (*Server, store.Tenant) {
 		}
 	}
 	if _, _, err := app.CreateClient(t.Context(), s.deps, tn.ID, app.ClientSpec{
-		ClientID:     "web",
-		Name:         "Web App",
-		Type:         store.ClientConfidential,
-		RedirectURIs: []string{"https://app.example.com/callback"},
-		SkipConsent:  true,
+		ClientID:               "web",
+		Name:                   "Web App",
+		Type:                   store.ClientConfidential,
+		RedirectURIs:           []string{"https://app.example.com/callback"},
+		PostLogoutRedirectURIs: []string{"https://app.example.com/signed-out"},
+		SkipConsent:            true,
 	}); err != nil {
 		t.Fatalf("CreateClient() unexpected error: %v", err)
 	}
@@ -645,4 +646,44 @@ func TestAuthorizeRejectsHEAD(t *testing.T) {
 	if n, err := s.store.AuthorizationRequests().DeleteExpired(t.Context(), time.Now().Add(time.Hour)); err != nil || n != 0 {
 		t.Errorf("stored requests after HEAD = %d, %v; want none", n, err)
 	}
+}
+
+// OAuth 2.0 Form Post Response Mode, section 2: the browser posts the
+// response to the redirect URI from a page that submits itself.
+func TestFormPostResponseMode(t *testing.T) {
+	t.Parallel()
+	const issuer = "https://auth.example.com"
+	s, _ := newLoginServer(t, issuer, "")
+	b := newBrowser(t, s.Handler())
+	query := authorizeQuery()
+	query.Set("response_mode", "form_post")
+	id := b.startLogin(issuer, query)
+
+	checkFormPost := func(name string, res response, page, field string) {
+		t.Helper()
+		if res.StatusCode != http.StatusOK || res.Header.Get("Location") != "" ||
+			!strings.Contains(page, `<form id="response" method="post" action="https://app.example.com/callback">`) ||
+			!strings.Contains(page, `name="`+field+`"`) || !strings.Contains(page, `name="state" value="af0ifjsldkj"`) ||
+			!strings.Contains(page, `name="iss" value="`+issuer+`"`) {
+			t.Fatalf("%s = %d %v:\n%s", name, res.StatusCode, res.Header, page)
+		}
+		csp := res.Header.Get("Content-Security-Policy")
+		for _, want := range []string{"script-src 'sha256-", "form-action https://app.example.com;", "default-src 'none'"} {
+			if !strings.Contains(csp, want) {
+				t.Errorf("%s: Content-Security-Policy = %q, want %q", name, csp, want)
+			}
+		}
+		if res.Header.Get("Cache-Control") != "no-store" || res.Header.Get("Referrer-Policy") != "no-referrer" {
+			t.Errorf("%s: headers = %v", name, res.Header)
+		}
+	}
+	res, page := b.post(issuer+"/login", loginForm(id, testPassword), "same-origin")
+	checkFormPost("login", res, page, "code")
+
+	// With the session, the response comes at once, and errors too.
+	res, page = b.get(issuer + "/oauth2/authorize?" + query.Encode())
+	checkFormPost("single sign-on", res, page, "code")
+	query.Set("prompt", "login none")
+	res, page = b.get(issuer + "/oauth2/authorize?" + query.Encode())
+	checkFormPost("error", res, page, "error")
 }

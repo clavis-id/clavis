@@ -100,6 +100,18 @@ func (r accessTokens) Revoke(ctx context.Context, tenantID uuid.UUID, id string,
 	return nil
 }
 
+func (r accessTokens) RevokeBySession(ctx context.Context, tenantID, sessionID uuid.UUID, at time.Time) (int64, error) {
+	n, err := r.q.RevokeAccessTokensBySession(ctx, db.RevokeAccessTokensBySessionParams{
+		RevokedAt: &at,
+		TenantID:  tenantID,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		return 0, mapError("revoking the access tokens of a session", err)
+	}
+	return n, nil
+}
+
 func (r accessTokens) RevokeByCode(ctx context.Context, tenantID uuid.UUID, codeHash []byte, at time.Time) (int64, error) {
 	n, err := r.q.RevokeAccessTokensByCode(ctx, db.RevokeAccessTokensByCodeParams{
 		RevokedAt: &at,

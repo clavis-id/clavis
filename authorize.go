@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"uuid"
 
@@ -66,7 +68,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request, t tenan
 	var redirect *app.RedirectError
 	switch {
 	case errors.As(err, &redirect):
-		seeOther(w, redirect.URI)
+		s.respond(w, r, redirect.Response)
 	case errors.Is(err, oauth.ErrInvalidAuthorizationTarget):
 		// The message holds only fixed text, never request input.
 		s.errorPage(w, r, http.StatusBadRequest, "Invalid sign-in request",
@@ -74,8 +76,8 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request, t tenan
 				"). Return to the application and try again.")
 	case err != nil:
 		s.internalError(w, r, "starting the authorization", err)
-	case a.RedirectURI != "":
-		seeOther(w, a.RedirectURI)
+	case a.Response.RedirectURI != "":
+		s.respond(w, r, a.Response)
 	case a.Consent:
 		seeOther(w, pageURL(t, consentPath, a.RequestID))
 	default:
@@ -170,7 +172,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, t tenant) {
 		seeOther(w, pageURL(t, consentPath, p.Request.ID))
 		return
 	}
-	seeOther(w, login.RedirectURI)
+	s.respond(w, r, login.Response)
 }
 
 // handleConsentPage asks the signed-in user to allow or deny the client of
@@ -223,12 +225,35 @@ func (s *Server) handleConsent(w http.ResponseWriter, r *http.Request, t tenant)
 		s.authorizationRequestError(w, r, err)
 		return
 	}
-	uri, err := app.CompleteConsent(r.Context(), s.deps, t.authorizationTenant(), c, decision == "allow")
+	resp, err := app.CompleteConsent(r.Context(), s.deps, t.authorizationTenant(), c, decision == "allow")
 	if err != nil {
 		s.authorizationRequestError(w, r, err)
 		return
 	}
-	seeOther(w, uri)
+	s.respond(w, r, resp)
+}
+
+// respond sends the browser back to the client with an authorization
+// response: a redirect in the query response mode, or a page that posts the
+// response in the form_post response mode (OAuth 2.0 Form Post Response
+// Mode, section 2).
+func (s *Server) respond(w http.ResponseWriter, r *http.Request, resp app.AuthorizationResponse) {
+	if !resp.FormPost {
+		seeOther(w, resp.URI())
+		return
+	}
+	fields := make([]ui.Field, 0, len(resp.Params))
+	for _, name := range slices.Sorted(maps.Keys(resp.Params)) {
+		for _, value := range resp.Params[name] {
+			fields = append(fields, ui.Field{Name: name, Value: value})
+		}
+	}
+	ui.SetPageHeaders(w.Header(), ui.FormPostContentSecurityPolicy(ui.FormTarget(resp.RedirectURI)))
+	s.render(w, r, http.StatusOK, ui.FormPost(ui.FormPostPage{
+		Layout: s.layout(),
+		Action: resp.RedirectURI,
+		Fields: fields,
+	}))
 }
 
 // loginPage renders the sign-in form. Its policy lets the form submission

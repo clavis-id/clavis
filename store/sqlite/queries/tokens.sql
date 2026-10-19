@@ -30,3 +30,18 @@ WHERE expires_at <= sqlc.arg(now);
 UPDATE access_tokens
 SET revoked_at = sqlc.arg(revoked_at)
 WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id) AND revoked_at IS NULL;
+
+-- name: RevokeAccessTokensBySession :execrows
+UPDATE access_tokens
+SET revoked_at = sqlc.arg(revoked_at)
+WHERE access_tokens.tenant_id = sqlc.arg(tenant_id) AND access_tokens.revoked_at IS NULL
+    AND access_tokens.code_hash IN (
+        SELECT c.hash
+        FROM authorization_codes c
+        WHERE c.tenant_id = sqlc.arg(tenant_id) AND c.session_id = sqlc.arg(session_id)
+            AND NOT EXISTS (
+                SELECT 1
+                FROM refresh_token_families f
+                WHERE f.tenant_id = c.tenant_id AND f.code_hash = c.hash
+            )
+    );

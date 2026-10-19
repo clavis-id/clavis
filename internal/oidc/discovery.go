@@ -9,6 +9,7 @@ const (
 	JWKSPath          = "/oauth2/jwks"
 	RevocationPath    = "/oauth2/revoke"
 	IntrospectionPath = "/oauth2/introspect"
+	EndSessionPath    = "/oauth2/logout"
 
 	// DiscoveryPath is where OpenID Connect Discovery 1.0, section 4, places
 	// the provider metadata: appended to the issuer.
@@ -45,9 +46,12 @@ type Metadata struct {
 	RevocationEndpointAuthMethodsSupported    []string `json:"revocation_endpoint_auth_methods_supported"`
 	IntrospectionEndpoint                     string   `json:"introspection_endpoint"`
 	IntrospectionEndpointAuthMethodsSupported []string `json:"introspection_endpoint_auth_methods_supported"`
-	ClaimsSupported                           []string `json:"claims_supported"`
-	ACRValuesSupported                        []string `json:"acr_values_supported"`
-	CodeChallengeMethodsSupported             []string `json:"code_challenge_methods_supported"`
+	// EndSessionEndpoint comes from OpenID Connect RP-Initiated Logout 1.0,
+	// section 2.1.
+	EndSessionEndpoint            string   `json:"end_session_endpoint"`
+	ClaimsSupported               []string `json:"claims_supported"`
+	ACRValuesSupported            []string `json:"acr_values_supported"`
+	CodeChallengeMethodsSupported []string `json:"code_challenge_methods_supported"`
 	// AuthorizationResponseIssParameterSupported announces the iss parameter
 	// in authorization responses (RFC 9207, section 3).
 	AuthorizationResponseIssParameterSupported bool `json:"authorization_response_iss_parameter_supported"`
@@ -73,7 +77,7 @@ func NewMetadata(issuer string) Metadata {
 		ResponseTypesSupported: []string{"code"},
 		// The default is query and fragment; fragment serves implicit flows,
 		// which Clavis does not support.
-		ResponseModesSupported: []string{"query"},
+		ResponseModesSupported: []string{"query", "form_post"},
 		// The default is authorization_code and implicit.
 		GrantTypesSupported:              []string{"authorization_code", "refresh_token", "client_credentials"},
 		SubjectTypesSupported:            []string{"public"},
@@ -86,7 +90,8 @@ func NewMetadata(issuer string) Metadata {
 		IntrospectionEndpoint:                  issuer + IntrospectionPath,
 		// ADR 0022: only confidential clients introspect.
 		IntrospectionEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post"},
-		ClaimsSupported: claims,
+		EndSessionEndpoint:                        issuer + EndSessionPath,
+		ClaimsSupported:                           claims,
 		// The values Clavis can produce (ADR 0019).
 		ACRValuesSupported: []string{ACRPassword},
 		// RFC 8414, section 2: without this field, clients cannot tell that

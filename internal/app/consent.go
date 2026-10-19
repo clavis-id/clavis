@@ -131,13 +131,14 @@ func FindConsent(ctx context.Context, d Deps, tenantID uuid.UUID, id string, bin
 // code; denying ends the request with access_denied. It returns the
 // authorization response. A request answered in the meantime returns
 // ErrAuthorizationRequestNotFound.
-func CompleteConsent(ctx context.Context, d Deps, t AuthorizationTenant, c PendingConsent, allow bool) (string, error) {
+func CompleteConsent(ctx context.Context, d Deps, t AuthorizationTenant, c PendingConsent, allow bool,
+) (AuthorizationResponse, error) {
 	r := c.Request
 	switch err := d.Store.AuthorizationRequests().Delete(ctx, t.ID, r.ID); {
 	case errors.Is(err, store.ErrNotFound):
-		return "", ErrAuthorizationRequestNotFound
+		return AuthorizationResponse{}, ErrAuthorizationRequestNotFound
 	case err != nil:
-		return "", fmt.Errorf("completing the authorization request: %w", err)
+		return AuthorizationResponse{}, fmt.Errorf("completing the authorization request: %w", err)
 	}
 	attrs := []slog.Attr{
 		slog.String("tenant_id", t.ID.String()),
@@ -147,8 +148,8 @@ func CompleteConsent(ctx context.Context, d Deps, t AuthorizationTenant, c Pendi
 	if !allow {
 		d.Logger.LogAttrs(ctx, slog.LevelInfo, "user denied a client", attrs...)
 		// RFC 6749, section 4.1.2.1.
-		return errorResponseURI(r.RedirectURI, t.Issuer, r.State, &oauth.Error{Code: oauth.ErrorAccessDenied,
-			Description: "the user denied the request"}), nil
+		return errorResponse(r.RedirectURI, r.ResponseMode, t.Issuer, r.State, &oauth.Error{
+			Code: oauth.ErrorAccessDenied, Description: "the user denied the request"}), nil
 	}
 
 	// Two consents of the same user for the same client that complete at
@@ -158,7 +159,7 @@ func CompleteConsent(ctx context.Context, d Deps, t AuthorizationTenant, c Pendi
 	// access; it does not justify a transaction.
 	g, err := d.Store.Grants().Get(ctx, t.ID, c.User.ID, c.Client.ID)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return "", fmt.Errorf("looking up the grant: %w", err)
+		return AuthorizationResponse{}, fmt.Errorf("looking up the grant: %w", err)
 	}
 	now := d.Now()
 	scopes := g.Scopes
@@ -177,7 +178,7 @@ func CompleteConsent(ctx context.Context, d Deps, t AuthorizationTenant, c Pendi
 		CreatedAt: now,
 		UpdatedAt: now,
 	}); err != nil {
-		return "", fmt.Errorf("storing the grant: %w", err)
+		return AuthorizationResponse{}, fmt.Errorf("storing the grant: %w", err)
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "user allowed a client", attrs...)
 	return issueCode(ctx, d, t, r, c.Session)

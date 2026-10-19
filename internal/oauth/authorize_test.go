@@ -59,6 +59,7 @@ func TestParseAuthorizationRequest(t *testing.T) {
 		!slices.Equal(got.Scopes, []string{"openid", "profile"}) || got.State != "af0ifjsldkj" ||
 		got.Nonce != "n-0S6_WzA2Mj" || got.CodeChallenge != challenge || len(got.Prompt) != 0 ||
 		got.MaxAge != -1 || !got.OpenID() || got.LoginHint != "" || got.IDTokenHint != "" ||
+		got.ResponseMode != ResponseModeQuery ||
 		got.Claims.UserInfo != nil || got.Claims.IDToken != nil {
 		t.Errorf("ParseAuthorizationRequest() = %+v", got)
 	}
@@ -80,7 +81,10 @@ func TestParseAuthorizationRequest(t *testing.T) {
 			func(r AuthorizationRequest) bool { return r.State == `a b~!"#\` }},
 		{"longest state", func(p url.Values) { p.Set("state", strings.Repeat("s", MaxStateLength)) },
 			func(r AuthorizationRequest) bool { return len(r.State) == MaxStateLength }},
-		{"response_mode query", func(p url.Values) { p.Set("response_mode", "query") }, nil},
+		{"response_mode query", func(p url.Values) { p.Set("response_mode", "query") },
+			func(r AuthorizationRequest) bool { return r.ResponseMode == ResponseModeQuery }},
+		{"response_mode form_post", func(p url.Values) { p.Set("response_mode", "form_post") },
+			func(r AuthorizationRequest) bool { return r.ResponseMode == ResponseModeFormPost }},
 		{"prompt values", func(p url.Values) { p.Set("prompt", "login consent login") },
 			func(r AuthorizationRequest) bool {
 				return slices.Equal(r.Prompt, []string{"login", "consent"}) && r.HasPrompt(PromptLogin)
@@ -212,6 +216,32 @@ func TestParseAuthorizationRequestErrors(t *testing.T) {
 		}
 		if !validDescription(oauthErr.Description) || oauthErr.Error() != oauthErr.Code+": "+oauthErr.Description {
 			t.Errorf("%s: description %q is not a valid error_description", tt.name, oauthErr.Description)
+		}
+	}
+}
+
+// An error after the response mode goes back in that mode; an error about the
+// response mode itself goes back in the default one.
+func TestParseAuthorizationRequestErrorsKeepTheResponseMode(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name string
+		edit func(url.Values)
+		want string
+	}{
+		{"form_post", func(p url.Values) { p.Set("response_mode", "form_post"); p.Del("scope") }, ResponseModeFormPost},
+		{"invalid response mode", func(p url.Values) { p.Set("response_mode", "fragment") }, ""},
+		{"error before the response mode", func(p url.Values) {
+			p.Set("response_mode", "form_post")
+			p["state"] = []string{"a", "b"}
+		}, ""},
+	} {
+		params := validParams()
+		tt.edit(params)
+		got, err := ParseAuthorizationRequest(params)
+		if err == nil || got.ResponseMode != tt.want {
+			t.Errorf("%s: ParseAuthorizationRequest() = %q, %v; want response mode %q and an error", tt.name,
+				got.ResponseMode, err, tt.want)
 		}
 	}
 }

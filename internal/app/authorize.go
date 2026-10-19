@@ -23,9 +23,10 @@ const (
 	AuthorizationRequestLifetime = 10 * time.Minute
 	AuthorizationCodeLifetime    = 60 * time.Second
 	// AuthorizationCodeRetention keeps an expired code in the store this
-	// long, so a replay soon after expiry is still recognized (RFC 6749,
-	// section 4.1.2).
-	AuthorizationCodeRetention = time.Hour
+	// long, so a replay of it is still recognized (RFC 6749, section 4.1.2)
+	// and ending its session still finds the access tokens issued from it,
+	// which live a day at most (ADR 0023).
+	AuthorizationCodeRetention = maxTokenLifetime + time.Hour
 	// SessionIdleTimeout ends a session that is not used for this long, and
 	// SessionLifetime ends it regardless. Both become tenant settings later.
 	SessionIdleTimeout = 24 * time.Hour
@@ -43,12 +44,34 @@ const amrPassword = "pwd"
 var ErrAuthorizationRequestNotFound = errors.New("the sign-in request has expired, was completed already, " +
 	"or was started in another browser")
 
+// AuthorizationResponse is a response to an authorization request that goes
+// back to the client through its redirect URI, with a code or an error (RFC
+// 6749, section 4.1.2). Without FormPost the browser goes to URI(); with it
+// the browser posts Params to RedirectURI (OAuth 2.0 Form Post Response
+// Mode, section 2).
+type AuthorizationResponse struct {
+	RedirectURI string
+	Params      url.Values
+	FormPost    bool
+}
+
+// URI returns RedirectURI with the response parameters added to its query.
+func (r AuthorizationResponse) URI() string {
+	return oauth.AuthorizationResponseURI(r.RedirectURI, r.Params)
+}
+
+// authorizationResponse returns the response that sends params to
+// redirectURI in the given response mode.
+func authorizationResponse(redirectURI, responseMode string, params url.Values) AuthorizationResponse {
+	return AuthorizationResponse{RedirectURI: redirectURI, Params: params,
+		FormPost: responseMode == oauth.ResponseModeFormPost}
+}
+
 // RedirectError is an authorization error that goes back to the client
 // through its redirect URI (RFC 6749, section 4.1.2.1).
 type RedirectError struct {
-	Err *oauth.Error
-	// URI is the redirect URI with the error response.
-	URI string
+	Err      *oauth.Error
+	Response AuthorizationResponse
 }
 
 func (e *RedirectError) Error() string { return "authorization error: " + e.Err.Error() }
@@ -63,14 +86,14 @@ type AuthorizationTenant struct {
 }
 
 // Authorization is the outcome of a valid authorization request. When the
-// browser's session answers the request, RedirectURI is the authorization
-// response. Otherwise the request is stored under RequestID: it waits for
-// the user to sign in or, when Consent is true, for the consent of the
-// session's user.
+// browser's session answers the request, Response is the authorization
+// response. Otherwise its RedirectURI is empty, and the request is stored
+// under RequestID: it waits for the user to sign in or, when Consent is
+// true, for the consent of the session's user.
 type Authorization struct {
-	RedirectURI string
-	RequestID   string
-	Consent     bool
+	Response  AuthorizationResponse
+	RequestID string
+	Consent   bool
 }
 
 // StartAuthorization validates an authorization request (ADR 0013). When the
@@ -90,11 +113,10 @@ func StartAuthorization(ctx context.Context, d Deps, signer TokenSigner, t Autho
 	if err != nil {
 		return Authorization{}, err
 	}
-	fail := func(e *oauth.Error, state string) error {
-		return &RedirectError{Err: e, URI: errorResponseURI(redirectURI, t.Issuer, state, e)}
-	}
-
 	r, err := oauth.ParseAuthorizationRequest(params)
+	fail := func(e *oauth.Error, state string) error {
+		return &RedirectError{Err: e, Response: errorResponse(redirectURI, r.ResponseMode, t.Issuer, state, e)}
+	}
 	if err != nil {
 		var oauthErr *oauth.Error
 		if !errors.As(err, &oauthErr) {
@@ -158,6 +180,7 @@ func StartAuthorization(ctx context.Context, d Deps, signer TokenSigner, t Autho
 		State:               r.State,
 		Nonce:               r.Nonce,
 		HintSubject:         subject,
+		ResponseMode:        r.ResponseMode,
 		ForceConsent:        r.HasPrompt(oauth.PromptConsent),
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(AuthorizationRequestLifetime),
@@ -192,7 +215,7 @@ func StartAuthorization(ctx context.Context, d Deps, signer TokenSigner, t Autho
 			}
 			return Authorization{RequestID: stored.ID, Consent: true}, nil
 		}
-		uri, err := issueCode(ctx, d, t, stored, session)
+		resp, err := issueCode(ctx, d, t, stored, session)
 		if err != nil {
 			return Authorization{}, err
 		}
@@ -201,7 +224,7 @@ func StartAuthorization(ctx context.Context, d Deps, signer TokenSigner, t Autho
 			slog.String("user_id", session.UserID.String()),
 			slog.String("client_id", client.ClientID),
 			slog.String("session_id", session.ID.String()))
-		return Authorization{RedirectURI: uri}, nil
+		return Authorization{Response: resp}, nil
 	case r.HasPrompt(oauth.PromptNone):
 		// OpenID Connect Core 1.0, section 3.1.2.6: the request forbids the
 		// sign-in it needs.
@@ -388,14 +411,14 @@ func authorizationTarget(ctx context.Context, d Deps, tenantID uuid.UUID, params
 	return client, client.RedirectURIs[0], false, nil
 }
 
-// errorResponseURI returns the error response of an authorization request
+// errorResponse returns the error response of an authorization request
 // (RFC 6749, section 4.1.2.1), with the issuer (RFC 9207, section 2).
-func errorResponseURI(redirectURI, issuer, state string, e *oauth.Error) string {
+func errorResponse(redirectURI, responseMode, issuer, state string, e *oauth.Error) AuthorizationResponse {
 	params := url.Values{"error": {e.Code}, "error_description": {e.Description}, "iss": {issuer}}
 	if state != "" {
 		params.Set("state", state)
 	}
-	return oauth.AuthorizationResponseURI(redirectURI, params)
+	return authorizationResponse(redirectURI, responseMode, params)
 }
 
 // PendingAuthorization is a stored authorization request that waits for
@@ -436,11 +459,10 @@ func FindAuthorizationRequest(ctx context.Context, d Deps, tenantID uuid.UUID, i
 
 // Login is a completed sign-in.
 type Login struct {
-	// RedirectURI is the authorization response to send the browser to. It
-	// is empty when Consent is true: the request then waits for the user's
-	// consent.
-	RedirectURI string
-	Consent     bool
+	// Response is the authorization response. Its RedirectURI is empty when
+	// Consent is true: the request then waits for the user's consent.
+	Response AuthorizationResponse
+	Consent  bool
 	// SessionToken is the value of the new session cookie, which expires at
 	// SessionExpiresAt.
 	SessionToken     string
@@ -526,10 +548,10 @@ func CompletePasswordLogin(ctx context.Context, d Deps, h PasswordHasher, t Auth
 	login := Login{SessionToken: token, SessionExpiresAt: session.ExpiresAt, Consent: consent}
 	switch {
 	case otherUser:
-		login.RedirectURI = errorResponseURI(r.RedirectURI, t.Issuer, r.State, &oauth.Error{
+		login.Response = errorResponse(r.RedirectURI, r.ResponseMode, t.Issuer, r.State, &oauth.Error{
 			Code: oauth.ErrorLoginRequired, Description: "the user who signed in is not the user the request names"})
 	case !consent:
-		if login.RedirectURI, err = issueCode(ctx, d, t, r, session); err != nil {
+		if login.Response, err = issueCode(ctx, d, t, r, session); err != nil {
 			return Login{}, err
 		}
 	}
@@ -539,7 +561,7 @@ func CompletePasswordLogin(ctx context.Context, d Deps, h PasswordHasher, t Auth
 // issueCode issues an authorization code that answers r for the user of
 // session (ADR 0014) and returns the authorization response.
 func issueCode(ctx context.Context, d Deps, t AuthorizationTenant, r store.AuthorizationRequest, session store.Session,
-) (string, error) {
+) (AuthorizationResponse, error) {
 	now := d.Now()
 	code := oauth.NewToken()
 	if err := d.Store.AuthorizationCodes().Create(ctx, store.AuthorizationCode{
@@ -562,14 +584,14 @@ func issueCode(ctx context.Context, d Deps, t AuthorizationTenant, r store.Autho
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(AuthorizationCodeLifetime),
 	}); err != nil {
-		return "", fmt.Errorf("storing the authorization code: %w", err)
+		return AuthorizationResponse{}, fmt.Errorf("storing the authorization code: %w", err)
 	}
 	// RFC 6749, section 4.1.2, and RFC 9207, section 2.
 	params := url.Values{"code": {code}, "iss": {t.Issuer}}
 	if r.State != "" {
 		params.Set("state", r.State)
 	}
-	return oauth.AuthorizationResponseURI(r.RedirectURI, params), nil
+	return authorizationResponse(r.RedirectURI, r.ResponseMode, params), nil
 }
 
 // endSession deletes the session of a tenant whose token hashes to

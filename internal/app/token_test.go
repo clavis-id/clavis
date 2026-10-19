@@ -77,9 +77,9 @@ func (f authzFixture) codeFor(t *testing.T, params url.Values) (string, store.Cl
 	if err != nil {
 		t.Fatalf("CompletePasswordLogin() unexpected error: %v", err)
 	}
-	u, err := url.Parse(login.RedirectURI)
+	u, err := url.Parse(login.Response.URI())
 	if err != nil {
-		t.Fatalf("parsing %q: %v", login.RedirectURI, err)
+		t.Fatalf("parsing %q: %v", login.Response.URI(), err)
 	}
 	return u.Query().Get("code"), p.Client
 }

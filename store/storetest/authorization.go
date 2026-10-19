@@ -76,7 +76,7 @@ func runAuthorizationRequests(t *testing.T, open OpenFunc) {
 		want := newAuthorizationRequest(f.client)
 		want.Scopes, want.State, want.Nonce, want.CodeChallenge, want.CodeChallengeMethod = nil, "", "", "", ""
 		want.LoginHint, want.HintSubject, want.UserInfoClaims, want.IDTokenClaims = "", uuid.Nil(), nil, nil
-		want.SessionID, want.ForceConsent = uuid.Nil(), false
+		want.SessionID, want.ForceConsent, want.ResponseMode = uuid.Nil(), false, ""
 		want.RedirectURIProvided = false
 		want.ExpiresAt = want.CreatedAt.Add(-time.Second)
 		mustCreateAuthorizationRequest(t, f.s, want)
@@ -521,6 +521,37 @@ func runAuthorizationCodes(t *testing.T, open OpenFunc) {
 		}
 	})
 
+	t.Run("DeleteBySession", func(t *testing.T) {
+		t.Parallel()
+		f := newAuthorizationFixture(t, open)
+		pending, redeemed, other := newAuthorizationCode(f.client, f.user), newAuthorizationCode(f.client, f.user),
+			newAuthorizationCode(f.client, f.user)
+		redeemed.SessionID = pending.SessionID
+		for _, c := range []store.AuthorizationCode{pending, redeemed, other} {
+			mustCreateAuthorizationCode(t, f.s, c)
+		}
+		codes := f.s.AuthorizationCodes()
+		if err := codes.Redeem(t.Context(), f.a.ID, redeemed.Hash, redeemed.CreatedAt); err != nil {
+			t.Fatalf("Redeem() unexpected error: %v", err)
+		}
+		if n, err := codes.DeleteBySession(t.Context(), f.b.ID, pending.SessionID); err != nil || n != 0 {
+			t.Errorf("DeleteBySession() through another tenant = %d, %v; want 0", n, err)
+		}
+		if n, err := codes.DeleteBySession(t.Context(), f.a.ID, pending.SessionID); err != nil || n != 1 {
+			t.Errorf("DeleteBySession() = %d, %v; want 1", n, err)
+		}
+		if _, err := get(t, f, pending.Hash); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Get() of a deleted code = %v, want ErrNotFound", err)
+		}
+		// A redeemed code stays for replay detection, and so do the codes of
+		// other sessions.
+		for _, c := range []store.AuthorizationCode{redeemed, other} {
+			if _, err := get(t, f, c.Hash); err != nil {
+				t.Errorf("Get() of a code that DeleteBySession() keeps = %v, want nil", err)
+			}
+		}
+	})
+
 	t.Run("DeleteExpired", func(t *testing.T) {
 		t.Parallel()
 		f := newAuthorizationFixture(t, open)
@@ -578,9 +609,10 @@ func newAuthorizationRequest(c store.Client) store.AuthorizationRequest {
 		IDTokenClaims:  []string{"email"},
 		ForceConsent:   true,
 		// Not a reference either.
-		SessionID: uuid.NewV7(),
-		CreatedAt: created,
-		ExpiresAt: created.Add(10 * time.Minute),
+		SessionID:    uuid.NewV7(),
+		ResponseMode: "form_post",
+		CreatedAt:    created,
+		ExpiresAt:    created.Add(10 * time.Minute),
 	}
 }
 

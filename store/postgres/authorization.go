@@ -33,6 +33,7 @@ func (r authorizationRequests) Create(ctx context.Context, a store.Authorization
 		IDTokenClaims:       orEmpty(a.IDTokenClaims),
 		ForceConsent:        a.ForceConsent,
 		SessionID:           optionalID(a.SessionID),
+		ResponseMode:        a.ResponseMode,
 		CreatedAt:           a.CreatedAt,
 		ExpiresAt:           a.ExpiresAt,
 	})
@@ -60,6 +61,7 @@ func (r authorizationRequests) Get(ctx context.Context, tenantID uuid.UUID, id s
 		UserInfoClaims:      row.UserinfoClaims,
 		IDTokenClaims:       row.IDTokenClaims,
 		ForceConsent:        row.ForceConsent,
+		ResponseMode:        row.ResponseMode,
 		CreatedAt:           row.CreatedAt.UTC(),
 		ExpiresAt:           row.ExpiresAt.UTC(),
 	}
@@ -259,6 +261,17 @@ func (r authorizationCodes) DeleteByUserAndClient(ctx context.Context, tenantID,
 	})
 	if err != nil {
 		return 0, mapError("deleting authorization codes", err)
+	}
+	return n, nil
+}
+
+func (r authorizationCodes) DeleteBySession(ctx context.Context, tenantID, sessionID uuid.UUID) (int64, error) {
+	n, err := r.q.DeleteUnredeemedAuthorizationCodesBySession(ctx, db.DeleteUnredeemedAuthorizationCodesBySessionParams{
+		TenantID:  tenantID,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		return 0, mapError("deleting the authorization codes of a session", err)
 	}
 	return n, nil
 }
