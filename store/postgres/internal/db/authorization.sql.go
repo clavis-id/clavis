@@ -441,6 +441,26 @@ func (q *Queries) GetSessionByTokenHash(ctx context.Context, arg GetSessionByTok
 	return i, err
 }
 
+const moveAuthorizationCodesToSession = `-- name: MoveAuthorizationCodesToSession :execrows
+UPDATE authorization_codes
+SET session_id = $1
+WHERE tenant_id = $2 AND session_id = $3
+`
+
+type MoveAuthorizationCodesToSessionParams struct {
+	ToSessionID   uuid.UUID
+	TenantID      uuid.UUID
+	FromSessionID uuid.UUID
+}
+
+func (q *Queries) MoveAuthorizationCodesToSession(ctx context.Context, arg MoveAuthorizationCodesToSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, moveAuthorizationCodesToSession, arg.ToSessionID, arg.TenantID, arg.FromSessionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const redeemAuthorizationCode = `-- name: RedeemAuthorizationCode :execrows
 UPDATE authorization_codes
 SET redeemed_at = $1

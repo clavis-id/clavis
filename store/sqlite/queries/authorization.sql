@@ -92,3 +92,8 @@ WHERE tenant_id = sqlc.arg(tenant_id) AND hash = sqlc.arg(hash) AND redeemed_at 
 -- name: DeleteUnredeemedAuthorizationCodesBySession :execrows
 DELETE FROM authorization_codes
 WHERE tenant_id = sqlc.arg(tenant_id) AND session_id = sqlc.arg(session_id) AND redeemed_at IS NULL;
+
+-- name: MoveAuthorizationCodesToSession :execrows
+UPDATE authorization_codes
+SET session_id = sqlc.arg(to_session_id)
+WHERE tenant_id = sqlc.arg(tenant_id) AND session_id = sqlc.arg(from_session_id);

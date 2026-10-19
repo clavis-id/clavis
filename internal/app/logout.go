@@ -141,6 +141,27 @@ func logoutHintClient(ctx context.Context, d Deps, signer TokenSigner, t Authori
 	return client, nil
 }
 
+// endSession ends the session s of a tenant and its online access (ADR
+// 0023): it deletes s and its codes that were not exchanged, and revokes the
+// access tokens of its codes that started no refresh token family. It
+// returns how many codes it deleted and how many access tokens it revoked.
+func endSession(ctx context.Context, d Deps, tenantID uuid.UUID, s store.Session) (codes, tokens int64, err error) {
+	// The session goes first, so no new code comes from it. Deleting its
+	// pending codes then makes an exchange in progress fail when it redeems
+	// the code. An exchange that redeemed its code already recorded its
+	// tokens and its family, which the revocation then sees.
+	if err := d.Store.Sessions().Delete(ctx, tenantID, s.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
+		return 0, 0, fmt.Errorf("ending the session: %w", err)
+	}
+	if codes, err = d.Store.AuthorizationCodes().DeleteBySession(ctx, tenantID, s.ID); err != nil {
+		return 0, 0, fmt.Errorf("deleting the codes of the session: %w", err)
+	}
+	if tokens, err = d.Store.AccessTokens().RevokeBySession(ctx, tenantID, s.ID, d.Now()); err != nil {
+		return 0, 0, fmt.Errorf("revoking the access tokens of the session: %w", err)
+	}
+	return codes, tokens, nil
+}
+
 // activeSession returns the session of a tenant whose token hashes to
 // tokenHash, provided that it has not expired.
 func activeSession(ctx context.Context, d Deps, tenantID uuid.UUID, tokenHash []byte) (store.Session, bool, error) {
@@ -177,20 +198,9 @@ func CompleteLogout(ctx context.Context, d Deps, signer TokenSigner, t Authoriza
 	case err != nil:
 		return Logout{}, fmt.Errorf("looking up the session: %w", err)
 	}
-	// The session goes first, so no new code comes from it. Deleting its
-	// pending codes then makes an exchange in progress fail when it redeems
-	// the code. An exchange that redeemed its code already recorded its
-	// tokens and its family, which the revocation then sees.
-	if err := d.Store.Sessions().Delete(ctx, t.ID, s.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
-		return Logout{}, fmt.Errorf("ending the session: %w", err)
-	}
-	codes, err := d.Store.AuthorizationCodes().DeleteBySession(ctx, t.ID, s.ID)
+	codes, tokens, err := endSession(ctx, d, t.ID, s)
 	if err != nil {
-		return Logout{}, fmt.Errorf("deleting the codes of the session: %w", err)
-	}
-	tokens, err := d.Store.AccessTokens().RevokeBySession(ctx, t.ID, s.ID, d.Now())
-	if err != nil {
-		return Logout{}, fmt.Errorf("revoking the access tokens of the session: %w", err)
+		return Logout{}, err
 	}
 	attrs := []slog.Attr{
 		slog.String("tenant_id", t.ID.String()),

@@ -501,6 +501,10 @@ type AuthorizationCodes interface {
 	// session with the given ID and not redeemed yet, and returns how many
 	// were removed. Redeemed codes stay, so that replays are still detected.
 	DeleteBySession(ctx context.Context, tenantID, sessionID uuid.UUID) (int64, error)
+	// MoveSession moves the codes of a tenant that were issued in the session
+	// with the ID from to the session with the ID to, and returns how many it
+	// moved.
+	MoveSession(ctx context.Context, tenantID, from, to uuid.UUID) (int64, error)
 	// DeleteExpired removes the codes of every tenant whose ExpiresAt is not
 	// after before, and returns how many were removed. Callers keep expired
 	// codes for a while by passing a time in the past.
