@@ -94,6 +94,7 @@ type Client struct {
 	PkceExempt                          int64
 	CreatedAt                           int64
 	UpdatedAt                           int64
+	ResourceServerFor                   string
 }
 
 type Grant struct {

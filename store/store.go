@@ -182,8 +182,12 @@ type Client struct {
 	// PKCEExempt lets a confidential client send authorization requests
 	// without PKCE.
 	PKCEExempt bool
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	// ResourceServerFor lists the identifiers of the API resources whose
+	// server the client is. It may introspect the access tokens issued for
+	// them (ADR 0022).
+	ResourceServerFor []string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // TokenLifetimes holds the lifetimes of the tokens issued to a client. A zero
@@ -529,6 +533,10 @@ type AccessTokens interface {
 	// Get returns the token of a tenant with the given ID, or ErrNotFound.
 	// It returns expired and revoked tokens too.
 	Get(ctx context.Context, tenantID uuid.UUID, id string) (AccessToken, error)
+	// Revoke revokes the token of a tenant with the given ID at the given
+	// time, or returns ErrNotFound. A revoked token keeps the time of its
+	// first revocation.
+	Revoke(ctx context.Context, tenantID uuid.UUID, id string, at time.Time) error
 	// RevokeByCode revokes, at the given time, the tokens of a tenant that
 	// were issued for the code with the given hash and are not revoked yet,
 	// and returns how many it revoked.
