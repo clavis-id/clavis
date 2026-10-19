@@ -34,6 +34,17 @@
     "client_secret_post",
     "none"
   ],
+  "revocation_endpoint": "http://localhost:8080/oauth2/revoke",
+  "revocation_endpoint_auth_methods_supported": [
+    "client_secret_basic",
+    "client_secret_post",
+    "none"
+  ],
+  "introspection_endpoint": "http://localhost:8080/oauth2/introspect",
+  "introspection_endpoint_auth_methods_supported": [
+    "client_secret_basic",
+    "client_secret_post"
+  ],
   "claims_supported": [
     "sub",
     "iss",

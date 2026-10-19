@@ -7,6 +7,8 @@ const (
 	TokenPath         = "/oauth2/token" //nolint:gosec // G101: a URL path, not a credential.
 	UserinfoPath      = "/oauth2/userinfo"
 	JWKSPath          = "/oauth2/jwks"
+	RevocationPath    = "/oauth2/revoke"
+	IntrospectionPath = "/oauth2/introspect"
 
 	// DiscoveryPath is where OpenID Connect Discovery 1.0, section 4, places
 	// the provider metadata: appended to the issuer.
@@ -37,9 +39,15 @@ type Metadata struct {
 	SubjectTypesSupported             []string `json:"subject_types_supported"`
 	IDTokenSigningAlgValuesSupported  []string `json:"id_token_signing_alg_values_supported"`
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
-	ClaimsSupported                   []string `json:"claims_supported"`
-	ACRValuesSupported                []string `json:"acr_values_supported"`
-	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
+	// RevocationEndpoint and IntrospectionEndpoint come from RFC 8414,
+	// section 2, which the OpenID Connect metadata may carry too.
+	RevocationEndpoint                        string   `json:"revocation_endpoint"`
+	RevocationEndpointAuthMethodsSupported    []string `json:"revocation_endpoint_auth_methods_supported"`
+	IntrospectionEndpoint                     string   `json:"introspection_endpoint"`
+	IntrospectionEndpointAuthMethodsSupported []string `json:"introspection_endpoint_auth_methods_supported"`
+	ClaimsSupported                           []string `json:"claims_supported"`
+	ACRValuesSupported                        []string `json:"acr_values_supported"`
+	CodeChallengeMethodsSupported             []string `json:"code_challenge_methods_supported"`
 	// AuthorizationResponseIssParameterSupported announces the iss parameter
 	// in authorization responses (RFC 9207, section 3).
 	AuthorizationResponseIssParameterSupported bool `json:"authorization_response_iss_parameter_supported"`
@@ -72,7 +80,13 @@ func NewMetadata(issuer string) Metadata {
 		IDTokenSigningAlgValuesSupported: []string{IDTokenSigningAlgorithm},
 		// OpenID Connect Core 1.0, section 9; none is for public clients.
 		TokenEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post", "none"},
-		ClaimsSupported:                   claims,
+		RevocationEndpoint:                issuer + RevocationPath,
+		// RFC 7009, section 2.1: public clients revoke their tokens too.
+		RevocationEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post", "none"},
+		IntrospectionEndpoint:                  issuer + IntrospectionPath,
+		// ADR 0022: only confidential clients introspect.
+		IntrospectionEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post"},
+		ClaimsSupported: claims,
 		// The values Clavis can produce (ADR 0019).
 		ACRValuesSupported: []string{ACRPassword},
 		// RFC 8414, section 2: without this field, clients cannot tell that
