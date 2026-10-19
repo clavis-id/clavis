@@ -193,6 +193,25 @@ func ParseTokenRequest(form url.Values) (TokenRequest, error) {
 	return r, nil
 }
 
+// ParseTokenReference reads the token that a revocation request (RFC 7009,
+// section 2.1) or an introspection request (RFC 7662, section 2.1) names.
+// The request may send token_type_hint once; Clavis tells token types apart
+// by their form and ignores the hint, as both specifications allow. Errors
+// are *Error values with the code invalid_request.
+func ParseTokenReference(form url.Values) (string, error) {
+	token, ok := single(form, "token")
+	switch {
+	case !ok:
+		return "", invalidRequest("token is repeated")
+	case token == "":
+		return "", invalidRequest("token is missing")
+	}
+	if _, ok := single(form, "token_type_hint"); !ok {
+		return "", invalidRequest("token_type_hint is repeated")
+	}
+	return token, nil
+}
+
 // VerifyPKCE reports whether verifier matches an S256 code challenge (RFC
 // 7636, section 4.6). The comparison takes constant time.
 func VerifyPKCE(challenge, verifier string) bool {

@@ -138,6 +138,32 @@ func TestParseTokenRequest(t *testing.T) {
 	}
 }
 
+func TestParseTokenReference(t *testing.T) {
+	t.Parallel()
+	for _, form := range []url.Values{
+		{"token": {"t"}},
+		{"token": {"t"}, "token_type_hint": {"refresh_token"}},
+		// An unknown hint is ignored (RFC 7009, section 2.1).
+		{"token": {"t"}, "token_type_hint": {"other"}},
+	} {
+		if got, err := ParseTokenReference(form); err != nil || got != "t" {
+			t.Errorf("ParseTokenReference(%v) = %q, %v; want t", form, got, err)
+		}
+	}
+	for name, form := range map[string]url.Values{
+		"missing token":  {"token_type_hint": {"access_token"}},
+		"empty token":    {"token": {""}},
+		"repeated token": {"token": {"a", "b"}},
+		"repeated hint":  {"token": {"t"}, "token_type_hint": {"access_token", "refresh_token"}},
+	} {
+		var oauthErr *Error
+		if _, err := ParseTokenReference(form); !errors.As(err, &oauthErr) || oauthErr.Code != ErrorInvalidRequest ||
+			!validDescription(oauthErr.Description) {
+			t.Errorf("%s: ParseTokenReference() = %v, want invalid_request", name, err)
+		}
+	}
+}
+
 func TestVerifyPKCE(t *testing.T) {
 	t.Parallel()
 	if !VerifyPKCE(challenge, verifier) {
@@ -205,6 +231,31 @@ func FuzzParseTokenRequest(f *testing.F) {
 			if ValidateScope(s) != nil || slices.Contains(got.Scopes[:i], s) {
 				t.Errorf("ParseTokenRequest(%q) scopes = %q", query, got.Scopes)
 			}
+		}
+	})
+}
+
+// FuzzParseTokenReference checks that any form either fails with an *Error
+// or yields the single token it sends.
+func FuzzParseTokenReference(f *testing.F) {
+	f.Add("token=t&token_type_hint=refresh_token")
+	f.Add("token=a&token=b")
+	f.Add("token_type_hint=access_token")
+	f.Fuzz(func(t *testing.T, query string) {
+		form, err := url.ParseQuery(query)
+		if err != nil {
+			return
+		}
+		got, err := ParseTokenReference(form)
+		if err != nil {
+			var oauthErr *Error
+			if !errors.As(err, &oauthErr) || !validDescription(oauthErr.Description) {
+				t.Fatalf("ParseTokenReference(%q) = %v, want an *Error", query, err)
+			}
+			return
+		}
+		if got == "" || len(form["token"]) != 1 || form["token"][0] != got {
+			t.Errorf("ParseTokenReference(%q) = %q", query, got)
 		}
 	})
 }
