@@ -19,7 +19,8 @@ var logoutParams = []string{"id_token_hint", "client_id", "post_logout_redirect_
 // handleEndSession serves the end session endpoint (OpenID Connect
 // RP-Initiated Logout 1.0, section 2), with GET or POST. A browser with an
 // active session gets a page where the user confirms signing out (ADR
-// 0023); any other browser is signed out at once.
+// 0023), and so does a POST without the session cookie; any other browser
+// is signed out at once.
 func (s *Server) handleEndSession(w http.ResponseWriter, r *http.Request, t tenant) {
 	if r.Method == http.MethodHead {
 		w.Header().Set("Allow", "GET, POST")
@@ -37,7 +38,10 @@ func (s *Server) handleEndSession(w http.ResponseWriter, r *http.Request, t tena
 		s.internalError(w, r, "starting a logout", err)
 		return
 	}
-	if !l.Confirm {
+	// A browser does not send SameSite=Lax cookies with a cross-site POST, so
+	// a POST without the session cookie may come from a signed-in browser.
+	// The confirmation, which Clavis itself submits, carries the cookie.
+	if !l.Confirm && (r.Method != http.MethodPost || sessionHash(r, t.ID) != nil) {
 		s.logout(w, r, t, params)
 		return
 	}
