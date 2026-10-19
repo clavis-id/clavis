@@ -48,7 +48,9 @@ considered for that policy:
   - A client may be registered as the server of API resources, by their identifiers
     (`clavis clients create --resource-server`). It may then introspect the access tokens
     whose audience includes one of those resources, and the response shows only those
-    audiences and the scopes those resources define (RFC 7662, section 4).
+    audiences and the scopes those resources define (RFC 7662, section 4). The issuer, the
+    audience of tokens for userinfo, never counts as one of those resources, even when an API
+    resource was registered under its identifier.
   - Refresh tokens can be introspected only by their client.
   - Every other token gets the response of an inactive token, so the response does not reveal
     whether it exists.

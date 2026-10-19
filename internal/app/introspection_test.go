@@ -196,6 +196,34 @@ func TestIntrospectAccessToken(t *testing.T) {
 	}
 }
 
+// An API resource registered under the issuer's identifier does not make
+// its server the server of userinfo, whose audience is the issuer.
+func TestIntrospectionIgnoresTheIssuerAudience(t *testing.T) {
+	t.Parallel()
+	f, _ := introspectionFixture(t)
+	if _, err := CreateAPIResource(t.Context(), f.d, f.tenant.ID, APIResourceSpec{
+		Identifier: testIssuer, Scopes: []string{"profile:read"},
+	}); err != nil {
+		t.Fatalf("CreateAPIResource() unexpected error: %v", err)
+	}
+	if _, _, err := CreateClient(t.Context(), f.d, f.tenant.ID, ClientSpec{
+		ClientID: "issuer-api", Type: store.ClientConfidential, GrantTypes: []string{oauth.GrantTypeClientCredentials},
+		ResourceServerFor: []string{testIssuer, "https://api.example.com/orders"},
+	}); err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	openID, _ := f.refreshTokenFor(t, with(with(webRequest(), "client_id", "shop"), "scope", "openid offline_access"))
+	wantInactive(t, "token for userinfo", f.introspect(t, "issuer-api", openID.AccessToken))
+
+	both, _ := f.refreshTokenFor(t, with(with(webRequest(), "client_id", "shop"),
+		"scope", "openid orders:read offline_access"))
+	got := f.introspect(t, "issuer-api", both.AccessToken)
+	if !got.Active || !slices.Equal(got.Audience, []string{"https://api.example.com/orders"}) ||
+		got.Scope != "orders:read" {
+		t.Errorf("introspection of a token for userinfo and the orders API = %+v, want the orders API only", got)
+	}
+}
+
 func equalIntrospection(a, b Introspection) bool {
 	return a.Active == b.Active && a.Scope == b.Scope && a.ClientID == b.ClientID && a.TokenType == b.TokenType &&
 		a.Expiry == b.Expiry && a.IssuedAt == b.IssuedAt && a.Subject == b.Subject &&
