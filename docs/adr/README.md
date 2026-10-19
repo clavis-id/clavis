@@ -30,3 +30,4 @@ request. Status values: Proposed, Accepted, Superseded by NNNN, Deprecated.
 | [0019](0019-authentication-context-class-references.md) | Authentication context class references | Accepted |
 | [0020](0020-consent-and-grants.md) | Consent and grants | Accepted |
 | [0021](0021-refresh-token-rotation.md) | Refresh token rotation | Accepted |
+| [0022](0022-revocation-and-introspection.md) | Revocation and introspection | Accepted |
