@@ -686,6 +686,20 @@ func TestResourcesCommands(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "IDENTIFIER") || !strings.Contains(out, "Orders") {
 		t.Errorf("resources list = %d, %q", code, out)
 	}
+	// A client can be the server of a registered resource only.
+	if _, errOut, code := run("clients", "create", "--client-id", "orders-api", "--grant-type", "client_credentials",
+		"--resource-server", "https://api.example.com/orders"); code != 0 {
+		t.Fatalf("clients create --resource-server = %d, %q", code, errOut)
+	}
+	if out, _, code := run("clients", "show", "orders-api"); code != 0 ||
+		!strings.Contains(out, "Resource server for:") || !strings.Contains(out, "https://api.example.com/orders") {
+		t.Errorf("clients show of a resource server = %d, %q", code, out)
+	}
+	if _, errOut, code := run("clients", "create", "--client-id", "other-api", "--grant-type", "client_credentials",
+		"--resource-server", "https://api.example.com/unknown"); code == 0 ||
+		!strings.Contains(errOut, "is not a registered API resource") {
+		t.Errorf("clients create for an unknown resource = %d, %q", code, errOut)
+	}
 	if _, errOut, code := run("resources", "delete", "https://api.example.com/orders"); code == 0 ||
 		!strings.Contains(errOut, "--yes") {
 		t.Errorf("resources delete without --yes = %d, %q", code, errOut)

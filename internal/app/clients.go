@@ -17,6 +17,7 @@ import (
 const (
 	MaxRedirectURIs = 100
 	MaxScopes       = 100
+	MaxResources    = 100
 )
 
 // Bounds of the token lifetimes a client can override. ADR 0014 sets the
@@ -60,6 +61,11 @@ type ClientSpec struct {
 	SkipConsent bool
 	// PKCEExempt turns off PKCE for a confidential client (ADR 0018).
 	PKCEExempt bool
+	// ResourceServerFor names, by identifier, the API resources whose server
+	// the client is, which lets it introspect the access tokens issued for
+	// them (ADR 0022). Only a confidential client can be a resource server,
+	// and the resources must be registered.
+	ResourceServerFor []string
 }
 
 // CreateClient registers a client with a tenant. Clavis generates the secret
@@ -69,6 +75,15 @@ func CreateClient(ctx context.Context, d Deps, tenantID uuid.UUID, spec ClientSp
 	c, err := spec.client()
 	if err != nil {
 		return store.Client{}, "", err
+	}
+	for _, identifier := range c.ResourceServerFor {
+		switch _, err := d.Store.APIResources().GetByIdentifier(ctx, tenantID, identifier); {
+		case errors.Is(err, store.ErrNotFound):
+			return store.Client{}, "", fmt.Errorf("%w: %q is not a registered API resource",
+				ErrInvalidClientMetadata, identifier)
+		case err != nil:
+			return store.Client{}, "", fmt.Errorf("looking up API resource %q: %w", identifier, err)
+		}
 	}
 	var secret string
 	if c.Type == store.ClientConfidential {
@@ -113,6 +128,7 @@ func (spec ClientSpec) client() (store.Client, error) {
 		Lifetimes:              spec.Lifetimes,
 		SkipConsent:            spec.SkipConsent,
 		PKCEExempt:             spec.PKCEExempt,
+		ResourceServerFor:      dedupe(spec.ResourceServerFor),
 	}
 	if c.ClientID == "" {
 		c.ClientID = oauth.NewClientID()
@@ -166,6 +182,15 @@ func (spec ClientSpec) client() (store.Client, error) {
 
 	if err := validateLifetimes(c.Lifetimes); err != nil {
 		return store.Client{}, err
+	}
+	switch {
+	case len(c.ResourceServerFor) > MaxResources:
+		return store.Client{}, fmt.Errorf("%w: a client can serve at most %d API resources",
+			ErrInvalidClientMetadata, MaxResources)
+	// RFC 7662, section 2.1: a resource server authenticates to introspect.
+	case len(c.ResourceServerFor) > 0 && c.Type != store.ClientConfidential:
+		return store.Client{}, fmt.Errorf("%w: only a confidential client can be a resource server",
+			ErrInvalidClientMetadata)
 	}
 	if c.PKCEExempt {
 		switch {
