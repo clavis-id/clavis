@@ -472,7 +472,8 @@ type Login struct {
 // CompletePasswordLogin signs a user in with a password and answers the
 // authorization request p, which FindAuthorizationRequest returned. It
 // replaces the session whose token hashes to previousSession, if any, with
-// a new one, and issues an authorization code bound to the request
+// a new one, as replaceSession describes, and issues an authorization code
+// bound to the request
 // (ADR 0014). When the request names another user, through id_token_hint or
 // the sub claim, the response is a login_required error instead (OpenID
 // Connect Core 1.0, sections 3.1.2.1 and 5.5.1), and the new session stays.
@@ -517,7 +518,7 @@ func CompletePasswordLogin(ctx context.Context, d Deps, h PasswordHasher, t Auth
 	}
 
 	if previousSession != nil {
-		if err := endSession(ctx, d, t.ID, previousSession); err != nil {
+		if err := replaceSession(ctx, d, t.ID, previousSession, sessionID, u.ID); err != nil {
 			return Login{}, err
 		}
 	}
@@ -594,9 +595,14 @@ func issueCode(ctx context.Context, d Deps, t AuthorizationTenant, r store.Autho
 	return authorizationResponse(r.RedirectURI, r.ResponseMode, params), nil
 }
 
-// endSession deletes the session of a tenant whose token hashes to
-// tokenHash, if it exists.
-func endSession(ctx context.Context, d Deps, tenantID uuid.UUID, tokenHash []byte) error {
+// replaceSession ends the session of a tenant whose token hashes to
+// tokenHash, if it exists, because a sign-in of the user with the ID userID
+// replaces it with the session with the ID next (ADR 0023). When the same
+// user signs in again, next takes over the codes of the old session, and
+// with them its online access, which a logout then ends. When another user
+// signs in, the old user is signed out of the browser, and the online access
+// of the old session ends as at logout.
+func replaceSession(ctx context.Context, d Deps, tenantID uuid.UUID, tokenHash []byte, next, userID uuid.UUID) error {
 	s, err := d.Store.Sessions().GetByTokenHash(ctx, tenantID, tokenHash)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -604,8 +610,25 @@ func endSession(ctx context.Context, d Deps, tenantID uuid.UUID, tokenHash []byt
 	case err != nil:
 		return fmt.Errorf("looking up the previous session: %w", err)
 	}
+	if s.UserID != userID {
+		codes, tokens, err := endSession(ctx, d, tenantID, s)
+		if err != nil {
+			return err
+		}
+		d.Logger.LogAttrs(ctx, slog.LevelInfo, "another user signed in; signed out the previous user",
+			slog.String("tenant_id", tenantID.String()),
+			slog.String("user_id", s.UserID.String()),
+			slog.String("session_id", s.ID.String()),
+			slog.Int64("deleted_authorization_codes", codes),
+			slog.Int64("revoked_access_tokens", tokens))
+		return nil
+	}
+	// The session goes first, so no new code comes from it.
 	if err := d.Store.Sessions().Delete(ctx, tenantID, s.ID); err != nil && !errors.Is(err, store.ErrNotFound) {
 		return fmt.Errorf("ending the previous session: %w", err)
+	}
+	if _, err := d.Store.AuthorizationCodes().MoveSession(ctx, tenantID, s.ID, next); err != nil {
+		return fmt.Errorf("moving the codes of the previous session: %w", err)
 	}
 	return nil
 }

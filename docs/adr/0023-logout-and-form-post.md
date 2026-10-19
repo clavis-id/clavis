@@ -45,7 +45,10 @@ Policy, and the form must submit itself.
   check, the page says why the browser will stay at Clavis. The form posts to `/logout`, which
   accepts only same-origin submissions, like the sign-in form. To stay signed in, the user
   closes the page. A browser without an active session has nothing to confirm: it goes to the
-  post-logout redirect URI or to a page that says the user is signed out.
+  post-logout redirect URI or to a page that says the user is signed out. A `POST` without the
+  session cookie gets the confirmation page too: browsers do not send `SameSite=Lax` cookies
+  with a cross-site `POST`, which is how a relying party posts the request, so the browser may
+  still be signed in. The confirmation, submitted from Clavis itself, carries the cookie.
 - **What logout ends.**
   - The session and its cookie.
   - The session's codes that were not exchanged yet.
@@ -60,6 +63,11 @@ Policy, and the form must submit itself.
     that an exchange in progress fails when it redeems its code, and then revokes the access
     tokens. A single sign-on request that read the session just before it ended may still
     issue a code.
+  - A new sign-in replaces the browser's session. When the same user signs in again, for
+    example after `prompt=login`, the new session takes over the codes of the old one, and
+    with them its online access, which a later logout ends. When another user signs in, the
+    previous user is signed out of the browser, and the online access of the old session
+    ends as at logout.
 - **Key retention.** A retired key stays published for 15 days instead of 48 hours: the
   longest session, 14 days, plus the longest ID token lifetime, a day. An `id_token_hint` from
   any live session verifies, at the end session endpoint and at the authorization endpoint.
@@ -83,6 +91,9 @@ Policy, and the form must submit itself.
   validate JWTs locally accept those tokens until they expire, 10 minutes by default.
 - The JWK set publishes two keys for about half of each rotation period. Deployments that
   shorten the retention lose the post-logout redirect for hints signed by keys that are gone.
+  Each key stores its expiry when it is created, so keys created before the new retention
+  keep 48 hours: for one rotation period after an upgrade, hints signed by the retiring key
+  stop verifying 48 hours after it retires.
 - Authorization code records stay a day longer than before.
 - The conformance run adds the Form Post Basic and RP-Initiated Logout plans. The logout tests
   that expect a screenshot end in review, with screenshots of the confirmation page or of the

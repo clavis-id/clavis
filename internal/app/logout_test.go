@@ -176,3 +176,53 @@ func TestLogoutRequests(t *testing.T) {
 		}
 	}
 }
+
+// ADR 0023: a new sign-in replaces the browser's session. The same user's
+// new session takes over the online access of the old one, which a logout
+// then ends; another user's sign-in ends it at once.
+func TestSignInReplacesTheSession(t *testing.T) {
+	t.Parallel()
+	f := newAuthzFixture(t)
+	grace, err := CreateUser(t.Context(), f.d, f.tenant.ID, UserSpec{Email: "grace@example.com"})
+	if err != nil {
+		t.Fatalf("CreateUser() unexpected error: %v", err)
+	}
+	if err := SetPassword(t.Context(), f.d, f.h, grace, "correct horse"); err != nil {
+		t.Fatalf("SetPassword() unexpected error: %v", err)
+	}
+	signInWith := func(email string, previous []byte, params url.Values) (sessionHash []byte, resp TokenResponse) {
+		t.Helper()
+		login, err := CompletePasswordLogin(t.Context(), f.d, f.h, f.tenant, f.start(t, params), email, "correct horse",
+			previous)
+		if err != nil {
+			t.Fatalf("CompletePasswordLogin(%s) unexpected error: %v", email, err)
+		}
+		resp, err = ExchangeCode(t.Context(), f.d, fakeSigner{}, f.tenant, f.client(t, "web"),
+			codeRequest(login.Response.Params.Get("code")))
+		if err != nil {
+			t.Fatalf("ExchangeCode() unexpected error: %v", err)
+		}
+		return oauth.HashToken(login.SessionToken), resp
+	}
+	works := func(name, at string) {
+		t.Helper()
+		if _, err := UserInfo(t.Context(), f.d, fakeSigner{}, f.tenant, at); err != nil {
+			t.Errorf("%s: UserInfo() = %v, want the token to work", name, err)
+		}
+	}
+
+	first, online := signInWith("ada@example.com", nil, webRequest())
+	second, _ := signInWith("ada@example.com", first, with(webRequest(), "prompt", "login"))
+	works("online access of the replaced session", online.AccessToken)
+	if _, err := CompleteLogout(t.Context(), f.d, fakeSigner{}, f.tenant, nil, second); err != nil {
+		t.Fatalf("CompleteLogout() unexpected error: %v", err)
+	}
+	f.wantRevoked(t, "online access of the replaced session after the logout", online.AccessToken)
+
+	adaSession, adaOnline := signInWith("ada@example.com", nil, webRequest())
+	adaOffline := f.exchangeWith(t, with(webRequest(), "scope", "openid offline_access"), adaSession)
+	_, graceOnline := signInWith("grace@example.com", adaSession, with(webRequest(), "prompt", "login"))
+	f.wantRevoked(t, "online access of a user whom another sign-in replaced", adaOnline.AccessToken)
+	works("offline access of a user whom another sign-in replaced", adaOffline.AccessToken)
+	works("online access of the new user", graceOnline.AccessToken)
+}

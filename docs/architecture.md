@@ -282,7 +282,8 @@ year.
 - **Browser sessions:** one server-side session per sign-in, stored as the SHA-256 hash of a
   256-bit cookie named `__Host-clavis-session-<tenant ID>`, so tenants on one host never share
   a session. Sessions end after 24 hours without use or 14 days in all, and a new sign-in
-  replaces the browser's previous session. Every Clavis cookie is `Secure`, `HttpOnly` and
+  replaces the browser's previous session: the same user's new session takes over its online
+  access, and another user's sign-in ends it (ADR 0023). Every Clavis cookie is `Secure`, `HttpOnly` and
   `SameSite=Lax`, with `Path=/`.
   - Single sign-on: a session answers the authorization requests of every client of its
     tenant without the login page, while its user is active and the request needs no
@@ -292,7 +293,8 @@ year.
     `prompt=select_account` shows the sign-in form too. With `prompt=none`, a request that
     needs a sign-in fails with `login_required`.
   - RP-initiated logout (ADR 0023): a browser with an active session confirms on a page,
-    which posts only from Clavis itself. Logout ends the session, its pending codes and the
+    which posts only from Clavis itself; so does a `POST` without the session cookie, which a
+    cross-site `POST` does not carry. Logout ends the session, its pending codes and the
     access tokens of its codes that started no refresh token family; refresh token families
     are offline access and stay. The browser returns to `post_logout_redirect_uri`, with
     `state`, only when the request has an `id_token_hint` that the tenant issued to a client

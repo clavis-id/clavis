@@ -381,6 +381,18 @@ func (r authorizationCodes) DeleteBySession(ctx context.Context, tenantID, sessi
 	return n, nil
 }
 
+func (r authorizationCodes) MoveSession(ctx context.Context, tenantID, from, to uuid.UUID) (int64, error) {
+	n, err := r.q.MoveAuthorizationCodesToSession(ctx, db.MoveAuthorizationCodesToSessionParams{
+		ToSessionID:   to.String(),
+		TenantID:      tenantID.String(),
+		FromSessionID: from.String(),
+	})
+	if err != nil {
+		return 0, mapError("moving the authorization codes of a session", err)
+	}
+	return n, nil
+}
+
 func (r authorizationCodes) DeleteExpired(ctx context.Context, before time.Time) (int64, error) {
 	n, err := r.q.DeleteExpiredAuthorizationCodes(ctx, before.UnixMicro())
 	if err != nil {

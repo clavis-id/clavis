@@ -3,6 +3,7 @@ package clavis
 import (
 	"encoding/json/v2"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -136,5 +137,40 @@ func TestRPInitiatedLogoutWithAnInvalidRequest(t *testing.T) {
 		if rec := serve(t, s.Handler(), method, "/oauth2/logout"); rec.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s /oauth2/logout = %d, want 405", method, rec.Code)
 		}
+	}
+}
+
+// A browser does not send SameSite=Lax cookies with a cross-site POST, which
+// is how a relying party posts a logout request. The confirmation page,
+// submitted from Clavis itself, then carries the session cookie.
+func TestRPInitiatedLogoutByCrossSitePOST(t *testing.T) {
+	t.Parallel()
+	const issuer = "https://auth.example.com"
+	s, tn := newLoginServer(t, issuer, "")
+	b := newBrowser(t, s.Handler())
+	idToken := signInForLogout(t, s, tn, b, issuer)
+
+	form := url.Values{"id_token_hint": {idToken}, "post_logout_redirect_uri": {"https://app.example.com/signed-out"},
+		"state": {"af0ifjsldkj"}}
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, issuer+"/oauth2/logout",
+		strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req) // without the browser's cookies
+	page := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(page, `id="logout"`) || !strings.Contains(page, "Web App") {
+		t.Fatalf("cross-site POST without cookies = %d to %q:\n%s", rec.Code, rec.Header().Get("Location"), page)
+	}
+	res, _ := b.post(issuer+"/logout", hiddenFields(page), "same-origin")
+	if res.StatusCode != http.StatusSeeOther ||
+		res.Header.Get("Location") != "https://app.example.com/signed-out?state=af0ifjsldkj" {
+		t.Fatalf("sign-out = %d to %q", res.StatusCode, res.Header.Get("Location"))
+	}
+	none := authorizeQuery()
+	none.Set("prompt", "none")
+	res, _ = b.get(issuer + "/oauth2/authorize?" + none.Encode())
+	if loc, err := url.Parse(res.Header.Get("Location")); err != nil || loc.Query().Get("error") != "login_required" {
+		t.Errorf("authorize with prompt=none after the sign-out = %d to %q", res.StatusCode, res.Header.Get("Location"))
 	}
 }

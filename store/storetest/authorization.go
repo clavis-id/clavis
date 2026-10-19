@@ -552,6 +552,34 @@ func runAuthorizationCodes(t *testing.T, open OpenFunc) {
 		}
 	})
 
+	t.Run("MoveSession", func(t *testing.T) {
+		t.Parallel()
+		f := newAuthorizationFixture(t, open)
+		pending, redeemed, other := newAuthorizationCode(f.client, f.user), newAuthorizationCode(f.client, f.user),
+			newAuthorizationCode(f.client, f.user)
+		redeemed.SessionID = pending.SessionID
+		for _, c := range []store.AuthorizationCode{pending, redeemed, other} {
+			mustCreateAuthorizationCode(t, f.s, c)
+		}
+		codes := f.s.AuthorizationCodes()
+		if err := codes.Redeem(t.Context(), f.a.ID, redeemed.Hash, redeemed.CreatedAt); err != nil {
+			t.Fatalf("Redeem() unexpected error: %v", err)
+		}
+		next := uuid.NewV7()
+		if n, err := codes.MoveSession(t.Context(), f.b.ID, pending.SessionID, next); err != nil || n != 0 {
+			t.Errorf("MoveSession() through another tenant = %d, %v; want 0", n, err)
+		}
+		if n, err := codes.MoveSession(t.Context(), f.a.ID, pending.SessionID, next); err != nil || n != 2 {
+			t.Errorf("MoveSession() = %d, %v; want 2", n, err)
+		}
+		for c, want := range map[*store.AuthorizationCode]uuid.UUID{&pending: next, &redeemed: next,
+			&other: other.SessionID} {
+			if got, err := get(t, f, c.Hash); err != nil || got.SessionID != want {
+				t.Errorf("session of a code after MoveSession() = %v, %v; want %v", got.SessionID, err, want)
+			}
+		}
+	})
+
 	t.Run("DeleteExpired", func(t *testing.T) {
 		t.Parallel()
 		f := newAuthorizationFixture(t, open)
