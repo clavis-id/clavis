@@ -193,9 +193,11 @@ func splitLoopback(raw string) (loopbackURI, bool) {
 			}
 			rest = afterColon[digits:]
 		}
-		// The authority must end here; anything else, such as "@host" or
-		// a longer host name, is a different URI.
-		if rest != "" && rest[0] != '/' && rest[0] != '?' {
+		// The authority must end here: what follows is empty or starts the
+		// path or the query. Anything else, such as "@host" or a longer host
+		// name, is a different URI. The host is fixed, so the path cannot
+		// change where the browser goes.
+		if rest != "" && strings.IndexAny(rest, "/?") != 0 {
 			return loopbackURI{}, false
 		}
 		return loopbackURI{prefix: prefix, port: port, rest: rest}, true
