@@ -69,7 +69,7 @@ multi-architecture.
 ```
 clavis/
   cmd/clavis/            CLI and server entry point (serve, migrate, tenants, clients, users,
-                         keys; later plan, apply, import)
+                         resources, grants, email, keys; later plan, apply, import)
   clavis.go              Public embed API (New, Config, Server, Server.Handler, Server.Verifier)
                          and the HTTP handlers of the protocol endpoints
   middleware/            Public: resource-server token validation for net/http
@@ -81,6 +81,7 @@ clavis/
     postgres/            Public: PostgreSQL adapter (pgx v5), same structure as sqlite/
     storetest/           Public: contract suite every adapter must pass
   kek/                   Public: key encryption (Encrypter interface, AES-256-GCM Local)
+  email/                 Public: email delivery (Sender interface, SMTP and console senders)
   hooks/                 Public: hook payload types and WebAssembly ABI
   client/                Public: generated Go client for the admin API
   internal/
@@ -93,6 +94,8 @@ clavis/
     keys/                Signing key lifecycle, rotation, envelope encryption at rest
     adminapi/            Admin REST handlers generated from api/openapi.yaml
     ui/                  templ components, static assets, i18n catalogs
+    emailtmpl/           Email templates: plain text with an HTML alternative
+    mailer/              Background email delivery with retries
     webhook/             Outbound event delivery (Standard Webhooks)
     wasmhooks/           wazero runtime for WebAssembly hooks
     ratelimit/           In-process and store-backed limiters
@@ -315,12 +318,18 @@ year.
   - `clavis grants list|revoke` lists and revokes the grants of a user. Revoking a grant
     revokes the client's refresh and access tokens for the user and deletes its unexchanged
     codes, and the next request asks again.
-- **Hosted pages:** rendered on the server with templ, without scripts. They send a Content
+- **Hosted pages:** rendered on the server with templ, without scripts except the one that
+  submits a form post response, which the policy allows by its hash. They send a Content
   Security Policy that allows only same-origin stylesheets and images, forbids framing, and
   lets forms submit only to Clavis and, on the login page, to the origin of the client's
   redirect URI, because browsers apply `form-action` to the redirect after a sign-in. The
   sign-in form is protected by `http.CrossOriginProtection`, and pages are never cached and
   send no referrer.
+- **Email:** see ADR 0024. Requests queue messages, and background workers send them, so a
+  response takes the same time whether or not a message goes out. Messages stay in memory and
+  are retried twice. SMTP requires STARTTLS or implicit TLS with a verified certificate;
+  plain text is accepted only for a loopback host and without credentials. The console
+  driver, for development, is never a default.
 - **Comparisons:** every secret comparison is constant time.
 - **Logging:** secrets, tokens, passwords, codes and full authorization requests are never
   logged. Audit events record who, what, when and from where, without credential material.
@@ -350,7 +359,7 @@ year.
 | Port | Default adapter | Purpose |
 |---|---|---|
 | `store.Store` | SQLite, PostgreSQL | Persistence |
-| `Sender` | SMTP | Email delivery |
+| `email.Sender` | `email.SMTP`; `email.Console` for development | Email delivery (ADR 0024) |
 | `kek.Encrypter` | `kek.Local` (AES-256-GCM) | Signing key protection (KMS adapters later) |
 | `Hook` | Webhook, WebAssembly | Lifecycle customization |
 | `RateLimiter` | In-process, store-backed | Abuse protection |

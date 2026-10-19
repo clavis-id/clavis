@@ -31,6 +31,7 @@ The design decisions this plan relies on are recorded as ADRs:
 | [0021](../adr/0021-refresh-token-rotation.md) | Refresh tokens with `offline_access` or for OAuth requests; one family per code exchange; concurrent refreshes count as reuse; tokens recorded before the step that validates them |
 | [0022](../adr/0022-revocation-and-introspection.md) | Revoking a refresh token revokes its family; clients introspect their own tokens, and resource server clients the access tokens for their API resources |
 | [0023](../adr/0023-logout-and-form-post.md) | Logout asks for confirmation and ends the session's online access; post-logout redirects need an `id_token_hint`; retired keys stay published 15 days; form post responses |
+| [0024](../adr/0024-email-delivery.md) | A public `email.Sender` port with SMTP and console senders; messages queued in memory and sent in the background; TLS required except to a loopback host |
 
 ## Rules for every work item
 

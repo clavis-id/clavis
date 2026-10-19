@@ -32,3 +32,4 @@ request. Status values: Proposed, Accepted, Superseded by NNNN, Deprecated.
 | [0021](0021-refresh-token-rotation.md) | Refresh token rotation | Accepted |
 | [0022](0022-revocation-and-introspection.md) | Revocation and introspection | Accepted |
 | [0023](0023-logout-and-form-post.md) | Logout and the form post response mode | Accepted |
+| [0024](0024-email-delivery.md) | Email delivery | Accepted |
