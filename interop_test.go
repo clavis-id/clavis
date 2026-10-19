@@ -2,12 +2,14 @@ package clavis
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -299,6 +301,104 @@ func TestInteropRefreshToken(t *testing.T) {
 	}
 	if _, err := provider.UserInfo(ctx, oauth2.StaticTokenSource(second)); err == nil {
 		t.Error("userinfo accepted an access token of a revoked family")
+	}
+}
+
+// TestInteropRevocationAndIntrospection finds the endpoints in the provider
+// metadata, introspects an access token as the server of its API resource,
+// and revokes the refresh token as the client (ADR 0022).
+func TestInteropRevocationAndIntrospection(t *testing.T) {
+	t.Parallel()
+	s, issuer, httpClient := interopServer(t)
+	ctx := oidc.ClientContext(t.Context(), httpClient)
+	tn := s.defaultTenant.ID
+	if _, err := app.CreateAPIResource(t.Context(), s.deps, tn, app.APIResourceSpec{
+		Identifier: "https://api.example.com/orders", Scopes: []string{"orders:read"},
+	}); err != nil {
+		t.Fatalf("CreateAPIResource() unexpected error: %v", err)
+	}
+	_, secret, err := app.CreateClient(t.Context(), s.deps, tn, app.ClientSpec{
+		ClientID: "rp", Type: store.ClientConfidential, RedirectURIs: []string{interopRedirectURI},
+		Scopes: []string{oidc.ScopeOpenID, oidc.ScopeOfflineAccess, "orders:read"},
+	})
+	if err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	_, apiSecret, err := app.CreateClient(t.Context(), s.deps, tn, app.ClientSpec{
+		ClientID: "orders-api", Type: store.ClientConfidential, GrantTypes: []string{"client_credentials"},
+		ResourceServerFor: []string{"https://api.example.com/orders"},
+	})
+	if err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	createUser(t, s, s.defaultTenant)
+	provider, err := oidc.NewProvider(ctx, issuer)
+	if err != nil {
+		t.Fatalf("discovering the provider: %v", err)
+	}
+	var endpoints struct {
+		Revocation    string `json:"revocation_endpoint"`
+		Introspection string `json:"introspection_endpoint"`
+	}
+	if err := provider.Claims(&endpoints); err != nil || endpoints.Revocation != issuer+"/oauth2/revoke" ||
+		endpoints.Introspection != issuer+"/oauth2/introspect" {
+		t.Fatalf("metadata endpoints = %+v, %v", endpoints, err)
+	}
+	config := oauth2.Config{
+		ClientID: "rp", ClientSecret: secret, Endpoint: provider.Endpoint(), RedirectURL: interopRedirectURI,
+		Scopes: []string{oidc.ScopeOpenID, oidc.ScopeOfflineAccess, "orders:read"},
+	}
+	verifier := oauth2.GenerateVerifier()
+	response := signIn(t, interopBrowser(t, httpClient), config.AuthCodeURL("s", oauth2.S256ChallengeOption(verifier)))
+	token, err := config.Exchange(ctx, response.Get("code"), oauth2.VerifierOption(verifier))
+	if err != nil || token.RefreshToken == "" {
+		t.Fatalf("exchanging the code = %+v, %v; want a refresh token", token, err)
+	}
+
+	call := func(endpoint, id, secret, value string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, endpoint,
+			strings.NewReader(url.Values{"token": {value}}.Encode()))
+		if err != nil {
+			t.Fatalf("building the request: %v", err)
+		}
+		req.Header.Set("Content-Type", formContentType)
+		req.SetBasicAuth(id, secret)
+		res, err := httpClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST %s: %v", endpoint, err)
+		}
+		return res
+	}
+	introspect := func() app.Introspection {
+		t.Helper()
+		res := call(endpoints.Introspection, "orders-api", apiSecret, token.AccessToken)
+		var got app.Introspection
+		if err := json.Unmarshal([]byte(readBody(t, res)), &got); res.StatusCode != http.StatusOK || err != nil {
+			t.Fatalf("introspection = %d, %v", res.StatusCode, err)
+		}
+		return got
+	}
+	if got := introspect(); !got.Active || got.Scope != "orders:read" ||
+		!slices.Equal(got.Audience, []string{"https://api.example.com/orders"}) {
+		t.Errorf("introspection by the resource server = %+v", got)
+	}
+
+	// RFC 7009, section 2.1: revoking the refresh token revokes the access
+	// tokens of the same grant.
+	res := call(endpoints.Revocation, "rp", secret, token.RefreshToken)
+	if body := readBody(t, res); res.StatusCode != http.StatusOK {
+		t.Fatalf("revocation = %d: %s", res.StatusCode, body)
+	}
+	if got := introspect(); got.Active {
+		t.Errorf("introspection after the revocation = %+v, want inactive", got)
+	}
+	expired := *token
+	expired.Expiry = time.Now().Add(-time.Minute)
+	var retrieveErr *oauth2.RetrieveError
+	if _, err := config.TokenSource(ctx, &expired).Token(); !errors.As(err, &retrieveErr) ||
+		retrieveErr.ErrorCode != "invalid_grant" {
+		t.Errorf("refreshing after the revocation = %v, want invalid_grant", err)
 	}
 }
 

@@ -86,6 +86,20 @@ func (r accessTokens) RevokeByUserAndClient(ctx context.Context, tenantID, userI
 	return n, nil
 }
 
+func (r accessTokens) Revoke(ctx context.Context, tenantID uuid.UUID, id string, at time.Time) error {
+	n, err := r.q.RevokeAccessToken(ctx, db.RevokeAccessTokenParams{RevokedAt: &at, TenantID: tenantID, ID: id})
+	if err != nil {
+		return mapError("revoking access token", err)
+	}
+	if n == 0 {
+		// The token was revoked already, or does not exist.
+		if _, err := r.Get(ctx, tenantID, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r accessTokens) RevokeByCode(ctx context.Context, tenantID uuid.UUID, codeHash []byte, at time.Time) (int64, error) {
 	n, err := r.q.RevokeAccessTokensByCode(ctx, db.RevokeAccessTokensByCodeParams{
 		RevokedAt: &at,

@@ -365,8 +365,9 @@ type clients struct {
 }
 
 func (r clients) Create(ctx context.Context, c store.Client) error {
-	lists := make([]string, 4)
-	for i, list := range [][]string{c.RedirectURIs, c.PostLogoutRedirectURIs, c.GrantTypes, c.Scopes} {
+	lists := make([]string, 5)
+	for i, list := range [][]string{c.RedirectURIs, c.PostLogoutRedirectURIs, c.GrantTypes, c.Scopes,
+		c.ResourceServerFor} {
 		// A nil slice is encoded as an empty array.
 		b, err := json.Marshal(list)
 		if err != nil {
@@ -393,6 +394,7 @@ func (r clients) Create(ctx context.Context, c store.Client) error {
 		PkceExempt:                          boolInt(c.PKCEExempt),
 		CreatedAt:                           c.CreatedAt.UnixMicro(),
 		UpdatedAt:                           c.UpdatedAt.UnixMicro(),
+		ResourceServerFor:                   lists[4],
 	})
 	return mapError("creating client", err)
 }
@@ -476,8 +478,9 @@ func clientFromRow(row db.Client) (store.Client, error) {
 	if err != nil {
 		return store.Client{}, fmt.Errorf("sqlite: corrupt tenant id %q of client %s: %w", row.TenantID, id, err)
 	}
-	var lists [4][]string
-	for i, encoded := range []string{row.RedirectUris, row.PostLogoutRedirectUris, row.GrantTypes, row.Scopes} {
+	var lists [5][]string
+	for i, encoded := range []string{row.RedirectUris, row.PostLogoutRedirectUris, row.GrantTypes, row.Scopes,
+		row.ResourceServerFor} {
 		if err := json.Unmarshal([]byte(encoded), &lists[i]); err != nil {
 			return store.Client{}, fmt.Errorf("sqlite: corrupt list in client %s: %w", id, err)
 		}
@@ -499,10 +502,11 @@ func clientFromRow(row db.Client) (store.Client, error) {
 			RefreshTokenIdle:     time.Duration(row.RefreshTokenIdleLifetimeSeconds) * time.Second,
 			RefreshTokenAbsolute: time.Duration(row.RefreshTokenAbsoluteLifetimeSeconds) * time.Second,
 		},
-		SkipConsent: row.SkipConsent != 0,
-		PKCEExempt:  row.PkceExempt != 0,
-		CreatedAt:   time.UnixMicro(row.CreatedAt).UTC(),
-		UpdatedAt:   time.UnixMicro(row.UpdatedAt).UTC(),
+		SkipConsent:       row.SkipConsent != 0,
+		PKCEExempt:        row.PkceExempt != 0,
+		ResourceServerFor: lists[4],
+		CreatedAt:         time.UnixMicro(row.CreatedAt).UTC(),
+		UpdatedAt:         time.UnixMicro(row.UpdatedAt).UTC(),
 	}, nil
 }
 

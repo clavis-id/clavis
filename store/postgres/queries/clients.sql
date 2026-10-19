@@ -3,15 +3,17 @@ INSERT INTO clients (
     id, tenant_id, client_id, name, type, secret_hash, redirect_uris,
     post_logout_redirect_uris, grant_types, scopes, access_token_lifetime_seconds,
     id_token_lifetime_seconds, refresh_token_idle_lifetime_seconds,
-    refresh_token_absolute_lifetime_seconds, skip_consent, pkce_exempt, created_at, updated_at
+    refresh_token_absolute_lifetime_seconds, skip_consent, pkce_exempt, created_at, updated_at,
+    resource_server_for
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18);
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19);
 
 -- name: GetClient :one
 SELECT id, tenant_id, client_id, name, type, secret_hash, redirect_uris,
     post_logout_redirect_uris, grant_types, scopes, access_token_lifetime_seconds,
     id_token_lifetime_seconds, refresh_token_idle_lifetime_seconds,
-    refresh_token_absolute_lifetime_seconds, skip_consent, pkce_exempt, created_at, updated_at
+    refresh_token_absolute_lifetime_seconds, skip_consent, pkce_exempt, created_at, updated_at,
+    resource_server_for
 FROM clients
 WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id);
 
@@ -19,7 +21,8 @@ WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id);
 SELECT id, tenant_id, client_id, name, type, secret_hash, redirect_uris,
     post_logout_redirect_uris, grant_types, scopes, access_token_lifetime_seconds,
     id_token_lifetime_seconds, refresh_token_idle_lifetime_seconds,
-    refresh_token_absolute_lifetime_seconds, skip_consent, pkce_exempt, created_at, updated_at
+    refresh_token_absolute_lifetime_seconds, skip_consent, pkce_exempt, created_at, updated_at,
+    resource_server_for
 FROM clients
 WHERE tenant_id = sqlc.arg(tenant_id) AND client_id = sqlc.arg(client_id);
 
@@ -27,7 +30,8 @@ WHERE tenant_id = sqlc.arg(tenant_id) AND client_id = sqlc.arg(client_id);
 SELECT id, tenant_id, client_id, name, type, secret_hash, redirect_uris,
     post_logout_redirect_uris, grant_types, scopes, access_token_lifetime_seconds,
     id_token_lifetime_seconds, refresh_token_idle_lifetime_seconds,
-    refresh_token_absolute_lifetime_seconds, skip_consent, pkce_exempt, created_at, updated_at
+    refresh_token_absolute_lifetime_seconds, skip_consent, pkce_exempt, created_at, updated_at,
+    resource_server_for
 FROM clients
 WHERE tenant_id = sqlc.arg(tenant_id) AND id > sqlc.arg(after)
 ORDER BY id

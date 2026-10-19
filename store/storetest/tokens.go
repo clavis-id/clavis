@@ -114,6 +114,37 @@ func runAccessTokens(t *testing.T, open OpenFunc) {
 		}
 	})
 
+	t.Run("Revoke", func(t *testing.T) {
+		t.Parallel()
+		f := newAuthorizationFixture(t, open)
+		tokens := f.s.AccessTokens()
+		revoked, kept := newAccessToken(f.client, f.user.ID), newAccessToken(f.client, f.user.ID)
+		for _, tok := range []store.AccessToken{revoked, kept} {
+			if err := tokens.Create(t.Context(), tok); err != nil {
+				t.Fatalf("Create() unexpected error: %v", err)
+			}
+		}
+		at := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
+		if err := tokens.Revoke(t.Context(), f.b.ID, revoked.ID, at); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Revoke() through another tenant error = %v, want ErrNotFound", err)
+		}
+		if err := tokens.Revoke(t.Context(), f.a.ID, "missing", at); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Revoke() of an unknown token error = %v, want ErrNotFound", err)
+		}
+		for _, when := range []time.Time{at, at.Add(time.Hour)} {
+			if err := tokens.Revoke(t.Context(), f.a.ID, revoked.ID, when); err != nil {
+				t.Fatalf("Revoke() unexpected error: %v", err)
+			}
+		}
+		// The token keeps the time of its first revocation.
+		if got, err := tokens.Get(t.Context(), f.a.ID, revoked.ID); err != nil || !got.RevokedAt.Equal(at) {
+			t.Errorf("revoked token = %v, %v; want RevokedAt %v", got.RevokedAt, err, at)
+		}
+		if got, err := tokens.Get(t.Context(), f.a.ID, kept.ID); err != nil || !got.RevokedAt.IsZero() {
+			t.Errorf("another token = %v, %v; want it not revoked", got.RevokedAt, err)
+		}
+	})
+
 	t.Run("RevokeByCode", func(t *testing.T) {
 		t.Parallel()
 		f := newAuthorizationFixture(t, open)

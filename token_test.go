@@ -235,3 +235,97 @@ func TestServerDeletesExpiredRefreshTokens(t *testing.T) {
 		}
 	})
 }
+
+func TestRevocationAndIntrospectionEndpoints(t *testing.T) {
+	t.Parallel()
+	s, webSecret := tokenServer(t)
+	h := s.Handler()
+	ctx := t.Context()
+	if _, err := app.CreateAPIResource(ctx, s.deps, s.defaultTenant.ID, app.APIResourceSpec{
+		Identifier: "https://api.example.com/orders", Scopes: []string{"orders:read"},
+	}); err != nil {
+		t.Fatalf("CreateAPIResource() unexpected error: %v", err)
+	}
+	_, secret, err := app.CreateClient(ctx, s.deps, s.defaultTenant.ID, app.ClientSpec{
+		ClientID: "service", Type: store.ClientConfidential, GrantTypes: []string{"client_credentials"},
+		Scopes: []string{"orders:read"},
+	})
+	if err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	if _, _, err := app.CreateClient(ctx, s.deps, s.defaultTenant.ID, app.ClientSpec{
+		ClientID: "spa", Type: store.ClientPublic, RedirectURIs: []string{"http://127.0.0.1/callback"},
+	}); err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	basicFor := func(id, secret string) http.Header {
+		return http.Header{"Authorization": {"Basic " + base64.StdEncoding.EncodeToString([]byte(id+":"+secret))}}
+	}
+	service, web := basicFor("service", secret), basicFor("web", webSecret)
+	rec := post(t, h, "/oauth2/token", formContentType, "grant_type=client_credentials", service)
+	var token app.TokenResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &token); rec.Code != http.StatusOK || err != nil {
+		t.Fatalf("token = %d %s", rec.Code, rec.Body.String())
+	}
+	tokenForm := "token=" + url.QueryEscape(token.AccessToken)
+	introspect := func(header http.Header) app.Introspection {
+		t.Helper()
+		rec := post(t, h, "/oauth2/introspect", formContentType, tokenForm+"&token_type_hint=access_token", header)
+		var got app.Introspection
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); rec.Code != http.StatusOK || err != nil ||
+			rec.Header().Get("Cache-Control") != "no-store" || rec.Header().Get("Access-Control-Allow-Origin") != "" {
+			t.Fatalf("introspect = %d %s, %v", rec.Code, rec.Body.String(), rec.Header())
+		}
+		return got
+	}
+	if got := introspect(service); !got.Active || got.ClientID != "service" || got.Scope != "orders:read" {
+		t.Errorf("introspection = %+v", got)
+	}
+	if got := introspect(web); got.Active {
+		t.Errorf("introspection by another client = %+v, want inactive", got)
+	}
+
+	tests := []struct {
+		name   string
+		path   string
+		body   string
+		header http.Header
+		status int
+		code   string
+	}{
+		{"revoke without a token", "/oauth2/revoke", "token_type_hint=access_token", service, 400, "invalid_request"},
+		{"introspect without a token", "/oauth2/introspect", "", service, 400, "invalid_request"},
+		{"revoke with a wrong secret", "/oauth2/revoke", tokenForm, basicFor("service", "wrong"), 401, "invalid_client"},
+		{"introspect without credentials", "/oauth2/introspect", tokenForm, nil, 401, "invalid_client"},
+		{"introspect as a public client", "/oauth2/introspect", tokenForm + "&client_id=spa", nil, 401, "invalid_client"},
+		{"revoke the token of another client", "/oauth2/revoke", tokenForm, web, 400, "unauthorized_client"},
+	}
+	for _, tt := range tests {
+		rec := post(t, h, tt.path, formContentType, tt.body, tt.header)
+		if rec.Code != tt.status || errorCode(t, rec) != tt.code {
+			t.Errorf("%s: %d %s", tt.name, rec.Code, rec.Body.String())
+		}
+	}
+
+	// RFC 7009, section 2.2: success and unknown tokens both answer 200.
+	for _, body := range []string{tokenForm, "token=unknown"} {
+		rec := post(t, h, "/oauth2/revoke", formContentType, body, service)
+		if rec.Code != http.StatusOK || rec.Body.Len() != 0 || rec.Header().Get("Cache-Control") != "no-store" ||
+			rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+			t.Errorf("revoke %q = %d %q, %v", body, rec.Code, rec.Body.String(), rec.Header())
+		}
+	}
+	if got := introspect(service); got.Active {
+		t.Errorf("introspection of a revoked token = %+v, want inactive", got)
+	}
+
+	if rec := serve(t, h, http.MethodOptions, "/oauth2/revoke"); rec.Code != http.StatusNoContent ||
+		rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Errorf("OPTIONS /oauth2/revoke = %d, %v", rec.Code, rec.Header())
+	}
+	for _, path := range []string{"/oauth2/revoke", "/oauth2/introspect"} {
+		if rec := serve(t, h, http.MethodGet, path); rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("GET %s = %d, want 405", path, rec.Code)
+		}
+	}
+}

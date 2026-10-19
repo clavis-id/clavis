@@ -17,9 +17,10 @@ INSERT INTO clients (
     id, tenant_id, client_id, name, type, secret_hash, redirect_uris,
     post_logout_redirect_uris, grant_types, scopes, access_token_lifetime_seconds,
     id_token_lifetime_seconds, refresh_token_idle_lifetime_seconds,
-    refresh_token_absolute_lifetime_seconds, skip_consent, pkce_exempt, created_at, updated_at
+    refresh_token_absolute_lifetime_seconds, skip_consent, pkce_exempt, created_at, updated_at,
+    resource_server_for
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 `
 
 type CreateClientParams struct {
@@ -41,6 +42,7 @@ type CreateClientParams struct {
 	PkceExempt                          bool
 	CreatedAt                           time.Time
 	UpdatedAt                           time.Time
+	ResourceServerFor                   []string
 }
 
 func (q *Queries) CreateClient(ctx context.Context, arg CreateClientParams) error {
@@ -63,6 +65,7 @@ func (q *Queries) CreateClient(ctx context.Context, arg CreateClientParams) erro
 		arg.PkceExempt,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+		arg.ResourceServerFor,
 	)
 	return err
 }
@@ -89,7 +92,8 @@ const getClient = `-- name: GetClient :one
 SELECT id, tenant_id, client_id, name, type, secret_hash, redirect_uris,
     post_logout_redirect_uris, grant_types, scopes, access_token_lifetime_seconds,
     id_token_lifetime_seconds, refresh_token_idle_lifetime_seconds,
-    refresh_token_absolute_lifetime_seconds, skip_consent, pkce_exempt, created_at, updated_at
+    refresh_token_absolute_lifetime_seconds, skip_consent, pkce_exempt, created_at, updated_at,
+    resource_server_for
 FROM clients
 WHERE tenant_id = $1 AND id = $2
 `
@@ -121,6 +125,7 @@ func (q *Queries) GetClient(ctx context.Context, arg GetClientParams) (Client, e
 		&i.PkceExempt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResourceServerFor,
 	)
 	return i, err
 }
@@ -129,7 +134,8 @@ const getClientByClientID = `-- name: GetClientByClientID :one
 SELECT id, tenant_id, client_id, name, type, secret_hash, redirect_uris,
     post_logout_redirect_uris, grant_types, scopes, access_token_lifetime_seconds,
     id_token_lifetime_seconds, refresh_token_idle_lifetime_seconds,
-    refresh_token_absolute_lifetime_seconds, skip_consent, pkce_exempt, created_at, updated_at
+    refresh_token_absolute_lifetime_seconds, skip_consent, pkce_exempt, created_at, updated_at,
+    resource_server_for
 FROM clients
 WHERE tenant_id = $1 AND client_id = $2
 `
@@ -161,6 +167,7 @@ func (q *Queries) GetClientByClientID(ctx context.Context, arg GetClientByClient
 		&i.PkceExempt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ResourceServerFor,
 	)
 	return i, err
 }
@@ -169,7 +176,8 @@ const listClients = `-- name: ListClients :many
 SELECT id, tenant_id, client_id, name, type, secret_hash, redirect_uris,
     post_logout_redirect_uris, grant_types, scopes, access_token_lifetime_seconds,
     id_token_lifetime_seconds, refresh_token_idle_lifetime_seconds,
-    refresh_token_absolute_lifetime_seconds, skip_consent, pkce_exempt, created_at, updated_at
+    refresh_token_absolute_lifetime_seconds, skip_consent, pkce_exempt, created_at, updated_at,
+    resource_server_for
 FROM clients
 WHERE tenant_id = $1 AND id > $2
 ORDER BY id
@@ -210,6 +218,7 @@ func (q *Queries) ListClients(ctx context.Context, arg ListClientsParams) ([]Cli
 			&i.PkceExempt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ResourceServerFor,
 		); err != nil {
 			return nil, err
 		}

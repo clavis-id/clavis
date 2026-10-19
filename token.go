@@ -14,6 +14,7 @@ import (
 	"clavisid.org/clavis/internal/app"
 	"clavisid.org/clavis/internal/keys"
 	"clavisid.org/clavis/internal/oauth"
+	"clavisid.org/clavis/store"
 )
 
 // formContentType is the media type of token requests (RFC 6749, section
@@ -24,27 +25,11 @@ const formContentType = "application/x-www-form-urlencoded"
 // authenticates first; only then is the grant examined.
 func (s *Server) handleToken(w http.ResponseWriter, r *http.Request, t tenant) {
 	allowCORS(w)
-	if !hasContentType(r, formContentType) {
-		s.tokenError(w, r, &oauth.Error{Code: oauth.ErrorInvalidRequest,
-			Description: "the request must be application/x-www-form-urlencoded"})
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
-	if err := r.ParseForm(); err != nil {
-		s.tokenError(w, r, &oauth.Error{Code: oauth.ErrorInvalidRequest, Description: "the form is malformed"})
-		return
-	}
-	creds, err := oauth.ParseClientCredentials(r.Header.Get("Authorization"), r.PostForm)
-	if err != nil {
-		s.tokenError(w, r, err)
+	client, ok := s.authenticateClient(w, r, t)
+	if !ok {
 		return
 	}
 	at := t.authorizationTenant()
-	client, err := app.AuthenticateClient(r.Context(), s.deps, t.ID, creds)
-	if err != nil {
-		s.tokenError(w, r, err)
-		return
-	}
 	req, err := oauth.ParseTokenRequest(r.PostForm)
 	if err != nil {
 		s.tokenError(w, r, err)
@@ -60,6 +45,75 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request, t tenant) {
 		resp, err = app.ClientCredentialsToken(r.Context(), s.deps, s.signer, at, client, req)
 	default:
 		err = &oauth.Error{Code: oauth.ErrorUnsupportedGrantType, Description: "the grant type is not supported"}
+	}
+	if err != nil {
+		s.tokenError(w, r, err)
+		return
+	}
+	s.writeNoStoreJSON(w, r, http.StatusOK, resp)
+}
+
+// authenticateClient reads the form of a request to the token, revocation
+// or introspection endpoint and authenticates the client that sent it (RFC
+// 6749, section 2.3). On failure it writes the error response and returns
+// false.
+func (s *Server) authenticateClient(w http.ResponseWriter, r *http.Request, t tenant) (store.Client, bool) {
+	if !hasContentType(r, formContentType) {
+		s.tokenError(w, r, &oauth.Error{Code: oauth.ErrorInvalidRequest,
+			Description: "the request must be application/x-www-form-urlencoded"})
+		return store.Client{}, false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
+	if err := r.ParseForm(); err != nil {
+		s.tokenError(w, r, &oauth.Error{Code: oauth.ErrorInvalidRequest, Description: "the form is malformed"})
+		return store.Client{}, false
+	}
+	creds, err := oauth.ParseClientCredentials(r.Header.Get("Authorization"), r.PostForm)
+	if err != nil {
+		s.tokenError(w, r, err)
+		return store.Client{}, false
+	}
+	client, err := app.AuthenticateClient(r.Context(), s.deps, t.ID, creds)
+	if err != nil {
+		s.tokenError(w, r, err)
+		return store.Client{}, false
+	}
+	return client, true
+}
+
+// handleRevocation serves the revocation endpoint (RFC 7009, section 2),
+// which browser-based clients may call too.
+func (s *Server) handleRevocation(w http.ResponseWriter, r *http.Request, t tenant) {
+	allowCORS(w)
+	client, ok := s.authenticateClient(w, r, t)
+	if !ok {
+		return
+	}
+	token, err := oauth.ParseTokenReference(r.PostForm)
+	if err == nil {
+		err = app.RevokeToken(r.Context(), s.deps, s.signer, t.authorizationTenant(), client, token)
+	}
+	if err != nil {
+		s.tokenError(w, r, err)
+		return
+	}
+	// Section 2.2: the client ignores the body of a success response.
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleIntrospection serves the introspection endpoint (RFC 7662, section
+// 2) to confidential clients, which are servers, so it allows no
+// cross-origin requests.
+func (s *Server) handleIntrospection(w http.ResponseWriter, r *http.Request, t tenant) {
+	client, ok := s.authenticateClient(w, r, t)
+	if !ok {
+		return
+	}
+	token, err := oauth.ParseTokenReference(r.PostForm)
+	var resp app.Introspection
+	if err == nil {
+		resp, err = app.IntrospectToken(r.Context(), s.deps, s.signer, t.authorizationTenant(), client, token)
 	}
 	if err != nil {
 		s.tokenError(w, r, err)

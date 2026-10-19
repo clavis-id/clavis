@@ -273,6 +273,25 @@ func newRefreshToken(client store.Client, family store.RefreshTokenFamily, now t
 	}
 }
 
+// revokeFamily revokes a refresh token family and the access tokens issued
+// from it, which carry the hash of its code, and returns how many access
+// tokens it revoked.
+func revokeFamily(ctx context.Context, d Deps, t AuthorizationTenant, family store.RefreshTokenFamily) (int64, error) {
+	now := d.Now()
+	if err := d.Store.RefreshTokens().RevokeFamily(ctx, t.ID, family.ID, now); err != nil &&
+		!errors.Is(err, store.ErrNotFound) {
+		return 0, fmt.Errorf("revoking the family: %w", err)
+	}
+	if family.CodeHash == nil {
+		return 0, nil
+	}
+	n, err := d.Store.AccessTokens().RevokeByCode(ctx, t.ID, family.CodeHash, now)
+	if err != nil {
+		return 0, fmt.Errorf("revoking the access tokens of the family: %w", err)
+	}
+	return n, nil
+}
+
 // RefreshToken answers a refresh_token token request (RFC 6749, section 6)
 // from client, which AuthenticateClient returned (ADR 0021). Every refresh
 // replaces the refresh token with a new one in the same family. Presenting a
@@ -367,17 +386,9 @@ func RefreshToken(ctx context.Context, d Deps, signer TokenSigner, t Authorizati
 func refreshTokenReused(ctx context.Context, d Deps, t AuthorizationTenant, client store.Client,
 	family store.RefreshTokenFamily,
 ) error {
-	now := d.Now()
-	if err := d.Store.RefreshTokens().RevokeFamily(ctx, t.ID, family.ID, now); err != nil &&
-		!errors.Is(err, store.ErrNotFound) {
+	tokens, err := revokeFamily(ctx, d, t, family)
+	if err != nil {
 		return fmt.Errorf("revoking the family of a reused refresh token: %w", err)
-	}
-	var tokens int64
-	if family.CodeHash != nil {
-		var err error
-		if tokens, err = d.Store.AccessTokens().RevokeByCode(ctx, t.ID, family.CodeHash, now); err != nil {
-			return fmt.Errorf("revoking the access tokens of a reused refresh token: %w", err)
-		}
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelWarn, "refresh token reused; revoked its family",
 		slog.String("tenant_id", t.ID.String()),
@@ -592,20 +603,16 @@ func orDefault(d, fallback time.Duration) time.Duration {
 func UserInfo(ctx context.Context, d Deps, signer TokenSigner, t AuthorizationTenant, token string,
 ) (map[string]any, error) {
 	invalid := &oauth.Error{Code: oauth.ErrorInvalidToken, Description: "the access token is not valid"}
-	payload, err := signer.Verify(ctx, t.ID, token, oidc.AccessTokenType)
+	claims, ok, err := verifyAccessToken(ctx, signer, t, token)
 	switch {
-	case errors.Is(err, ErrInvalidToken):
-		return nil, invalid
 	case err != nil:
-		return nil, fmt.Errorf("verifying the access token: %w", err)
-	}
-	var claims oidc.AccessTokenClaims
-	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, err
+	case !ok:
 		return nil, invalid
 	}
 	now := d.Now()
 	switch {
-	case claims.Issuer != t.Issuer, !slices.Contains(claims.Audience, t.Issuer), now.Unix() >= claims.Expiry:
+	case !slices.Contains(claims.Audience, t.Issuer), now.Unix() >= claims.Expiry:
 		return nil, invalid
 	case !slices.Contains(strings.Split(claims.Scope, " "), oauth.ScopeOpenID):
 		return nil, &oauth.Error{Code: oauth.ErrorInsufficientScope, Description: "the access token does not grant openid"}
@@ -627,6 +634,25 @@ func UserInfo(ctx context.Context, d Deps, signer TokenSigner, t AuthorizationTe
 		return nil, fmt.Errorf("looking up the user: %w", err)
 	}
 	return userClaims(u, record.Scopes, record.UserInfoClaims), nil
+}
+
+// verifyAccessToken returns the claims of an access token that the tenant
+// signed and issued, or false for any other token. It does not check
+// expiry, audience or revocation.
+func verifyAccessToken(ctx context.Context, signer TokenSigner, t AuthorizationTenant, token string,
+) (oidc.AccessTokenClaims, bool, error) {
+	payload, err := signer.Verify(ctx, t.ID, token, oidc.AccessTokenType)
+	switch {
+	case errors.Is(err, ErrInvalidToken):
+		return oidc.AccessTokenClaims{}, false, nil
+	case err != nil:
+		return oidc.AccessTokenClaims{}, false, fmt.Errorf("verifying the access token: %w", err)
+	}
+	var claims oidc.AccessTokenClaims
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.Issuer != t.Issuer || claims.JWTID == "" {
+		return oidc.AccessTokenClaims{}, false, nil //nolint:nilerr // A token that does not decode is invalid.
+	}
+	return claims, true, nil
 }
 
 // userClaims returns sub and the claims of u that scopes request (OpenID

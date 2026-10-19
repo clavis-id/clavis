@@ -357,6 +357,7 @@ func (r clients) Create(ctx context.Context, c store.Client) error {
 		PkceExempt:                          c.PKCEExempt,
 		CreatedAt:                           c.CreatedAt,
 		UpdatedAt:                           c.UpdatedAt,
+		ResourceServerFor:                   orEmpty(c.ResourceServerFor),
 	})
 	return mapError("creating client", err)
 }
@@ -438,10 +439,11 @@ func clientFromRow(row db.Client) store.Client {
 			RefreshTokenIdle:     time.Duration(row.RefreshTokenIdleLifetimeSeconds) * time.Second,
 			RefreshTokenAbsolute: time.Duration(row.RefreshTokenAbsoluteLifetimeSeconds) * time.Second,
 		},
-		SkipConsent: row.SkipConsent,
-		PKCEExempt:  row.PkceExempt,
-		CreatedAt:   row.CreatedAt.UTC(),
-		UpdatedAt:   row.UpdatedAt.UTC(),
+		SkipConsent:       row.SkipConsent,
+		PKCEExempt:        row.PkceExempt,
+		ResourceServerFor: row.ResourceServerFor,
+		CreatedAt:         row.CreatedAt.UTC(),
+		UpdatedAt:         row.UpdatedAt.UTC(),
 	}
 }
 

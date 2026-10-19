@@ -96,6 +96,7 @@ type Client struct {
 	PkceExempt                          bool
 	CreatedAt                           time.Time
 	UpdatedAt                           time.Time
+	ResourceServerFor                   []string
 }
 
 type Grant struct {
