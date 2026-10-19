@@ -9,7 +9,7 @@ services:
   mongodb:
     # The version the suite's own docker-compose.yml uses at the pinned
     # release. Dependabot ignores this image: move it only with the suite.
-    image: mongo:6.0.13@sha256:b415b12f638e2685d06c58ab7fb5943577c50fadec6d9340ef67d21aeac72070
+    image: mongo:9.0.2@sha256:f5c6240ae8fccc21cf75acc6462929b3394a7a5a7abd934b6b0e7ada5eb5fe95
     tmpfs:
       - /data/db
 
@@ -60,7 +60,7 @@ services:
   # Terminates TLS for Clavis with a certificate from Caddy's internal CA. The
   # suite reaches the issuer https://clavis.test through this alias.
   clavis-tls:
-    image: caddy:2.10@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb
+    image: caddy:2.11@sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa0c16bd8ca328fb7af
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     networks:
