@@ -147,9 +147,11 @@ func introspectAccessToken(ctx context.Context, d Deps, signer TokenSigner, t Au
 	audience, scopes := claims.Audience, strings.Fields(claims.Scope)
 	if record.ClientID != client.ID {
 		// A resource server sees its own audiences and the scopes of its
-		// resources (RFC 7662, section 4).
+		// resources (RFC 7662, section 4). The issuer, the audience of every
+		// token that grants OpenID Connect scopes, is never one of them, even
+		// when an API resource was registered under its identifier.
 		audience = slices.DeleteFunc(slices.Clone(audience), func(aud string) bool {
-			return !slices.Contains(client.ResourceServerFor, aud)
+			return aud == t.Issuer || !slices.Contains(client.ResourceServerFor, aud)
 		})
 		if len(audience) == 0 {
 			return Introspection{}, nil
