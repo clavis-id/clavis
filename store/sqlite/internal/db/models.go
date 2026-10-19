@@ -73,6 +73,7 @@ type AuthorizationRequest struct {
 	IDTokenClaims       string
 	ForceConsent        int64
 	SessionID           sql.NullString
+	ResponseMode        string
 }
 
 type Client struct {

@@ -371,8 +371,11 @@ type AuthorizationRequest struct {
 	// request, which waits for the user's consent, or the zero UUID until
 	// then. It is not a reference: the session may have ended since.
 	SessionID uuid.UUID
-	CreatedAt time.Time
-	ExpiresAt time.Time
+	// ResponseMode is how the response goes back to the client: query or
+	// form_post (OAuth 2.0 Form Post Response Mode).
+	ResponseMode string
+	CreatedAt    time.Time
+	ExpiresAt    time.Time
 }
 
 // AuthorizationRequests stores authorization requests. Every method works

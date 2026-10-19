@@ -2,6 +2,8 @@ package ui
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -178,6 +180,51 @@ func TestConsentEscapesItsInput(t *testing.T) {
 		if !strings.Contains(page, want) {
 			t.Errorf("the page does not contain %q:\n%s", want, page)
 		}
+	}
+}
+
+func TestFormPostEscapesItsInputAndRunsOnlyItsScript(t *testing.T) {
+	t.Parallel()
+	var b bytes.Buffer
+	err := FormPost(FormPostPage{
+		Layout: Layout{Stylesheet: "/assets/clavis-0123456789ab.css"},
+		Action: "https://app.example.com/callback?x=1&y=2",
+		Fields: []Field{{"code", "abc"}, {"state", `"><script>alert(1)</script>`}},
+	}).Render(t.Context(), &b)
+	if err != nil {
+		t.Fatalf("Render() unexpected error: %v", err)
+	}
+	page := b.String()
+	if strings.Count(page, "<script>") != 1 || strings.Contains(page, "alert(1)</script>") {
+		t.Errorf("the page has a script besides its own, or input unescaped:\n%s", page)
+	}
+	for _, want := range []string{
+		`<form id="response" method="post" action="https://app.example.com/callback?x=1&amp;y=2">`,
+		`<input type="hidden" name="code" value="abc">`, `name="state"`, `id="continue"`,
+		"<script>" + formPostScript + "</script>",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the page does not contain %q:\n%s", want, page)
+		}
+	}
+
+	// The policy allows the page's script by its hash, and the form only to
+	// the client.
+	sum := sha256.Sum256([]byte(formPostScript))
+	policy := FormPostContentSecurityPolicy("https://app.example.com")
+	for _, want := range []string{
+		"script-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "';",
+		"form-action https://app.example.com;", "default-src 'none'", "frame-ancestors 'none'",
+	} {
+		if !strings.Contains(policy, want) {
+			t.Errorf("FormPostContentSecurityPolicy() = %q, want %q", policy, want)
+		}
+	}
+	if policy := FormPostContentSecurityPolicy(""); !strings.Contains(policy, "form-action 'none';") {
+		t.Errorf("FormPostContentSecurityPolicy(\"\") = %q, want no form target", policy)
+	}
+	if strings.Contains(ContentSecurityPolicy(true), "script-src") {
+		t.Error("ContentSecurityPolicy() allows scripts")
 	}
 }
 

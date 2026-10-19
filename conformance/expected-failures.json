@@ -58,5 +58,140 @@
         "condition": "VerifyScopesReturnedInUserInfoClaims",
         "expected-result": "warning",
         "comment": "The conformance user has only the claims the CLI can set (name, given_name, family_name, email); users get the other standard claims with profile editing (#32, #39)"
+    },
+    {
+        "test-name": "oidcc-scope-profile",
+        "variant": {
+            "client_auth_type": "client_secret_basic",
+            "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "form_post",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": ".cache/clavis-oidcc.json",
+        "current-block": "",
+        "condition": "VerifyScopesReturnedInUserInfoClaims",
+        "expected-result": "warning",
+        "comment": "The conformance user has only the claims the CLI can set (name, given_name, family_name, email); users get the other standard claims with profile editing (#32, #39)"
+    },
+    {
+        "test-name": "oidcc-scope-address",
+        "variant": {
+            "client_auth_type": "client_secret_basic",
+            "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "form_post",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": ".cache/clavis-oidcc.json",
+        "current-block": "",
+        "condition": "VerifyScopesReturnedInUserInfoClaims",
+        "expected-result": "warning",
+        "comment": "The conformance user has only the claims the CLI can set (name, given_name, family_name, email); users get the other standard claims with profile editing (#32, #39)"
+    },
+    {
+        "test-name": "oidcc-scope-phone",
+        "variant": {
+            "client_auth_type": "client_secret_basic",
+            "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "form_post",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": ".cache/clavis-oidcc.json",
+        "current-block": "",
+        "condition": "VerifyScopesReturnedInUserInfoClaims",
+        "expected-result": "warning",
+        "comment": "The conformance user has only the claims the CLI can set (name, given_name, family_name, email); users get the other standard claims with profile editing (#32, #39)"
+    },
+    {
+        "test-name": "oidcc-scope-all",
+        "variant": {
+            "client_auth_type": "client_secret_basic",
+            "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "form_post",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": ".cache/clavis-oidcc.json",
+        "current-block": "",
+        "condition": "VerifyScopesReturnedInUserInfoClaims",
+        "expected-result": "warning",
+        "comment": "The conformance user has only the claims the CLI can set (name, given_name, family_name, email); users get the other standard claims with profile editing (#32, #39)"
+    },
+    {
+        "test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
+        "variant": {
+            "client_auth_type": "client_secret_basic",
+            "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "form_post",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": ".cache/clavis-oidcc.json",
+        "current-block": "Verify authorization endpoint response",
+        "condition": "CheckCallbackHttpMethodIsPost",
+        "expected-result": "failure",
+        "comment": "The test puts response_mode=form_post only inside the request object, which Clavis does not support (request_parameter_supported is false), so the request_not_supported error goes back in the default response mode, query (OpenID Connect Core 1.0, section 3.1.2.6); JAR may come with PAR in Phase 2"
+    },
+    {
+        "test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
+        "variant": {
+            "client_auth_type": "client_secret_basic",
+            "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "form_post",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": ".cache/clavis-oidcc.json",
+        "current-block": "Verify authorization endpoint response",
+        "condition": "CheckCallbackContentTypeIsFormUrlEncoded",
+        "expected-result": "failure",
+        "comment": "The test puts response_mode=form_post only inside the request object, which Clavis does not support (request_parameter_supported is false), so the request_not_supported error goes back in the default response mode, query (OpenID Connect Core 1.0, section 3.1.2.6); JAR may come with PAR in Phase 2"
+    },
+    {
+        "test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
+        "variant": {
+            "client_auth_type": "client_secret_basic",
+            "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "form_post",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": ".cache/clavis-oidcc.json",
+        "current-block": "Verify authorization endpoint response",
+        "condition": "RejectErrorInUrlQuery",
+        "expected-result": "failure",
+        "comment": "The test puts response_mode=form_post only inside the request object, which Clavis does not support (request_parameter_supported is false), so the request_not_supported error goes back in the default response mode, query (OpenID Connect Core 1.0, section 3.1.2.6); JAR may come with PAR in Phase 2"
+    },
+    {
+        "test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
+        "variant": {
+            "client_auth_type": "client_secret_basic",
+            "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "form_post",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": ".cache/clavis-oidcc.json",
+        "current-block": "Verify authorization endpoint response",
+        "condition": "ValidateIssIfPresentInAuthorizationResponse",
+        "expected-result": "failure",
+        "comment": "The test puts response_mode=form_post only inside the request object, which Clavis does not support (request_parameter_supported is false), so the request_not_supported error goes back in the default response mode, query (OpenID Connect Core 1.0, section 3.1.2.6); JAR may come with PAR in Phase 2"
+    },
+    {
+        "test-name": "oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported",
+        "variant": {
+            "client_auth_type": "client_secret_basic",
+            "server_metadata": "discovery",
+            "response_type": "code",
+            "response_mode": "form_post",
+            "client_registration": "static_client"
+        },
+        "configuration-filename": ".cache/clavis-oidcc.json",
+        "current-block": "Verify authorization endpoint response",
+        "condition": "CheckDiscEndpointRequestParameterSupported",
+        "expected-result": "warning",
+        "comment": "The test puts response_mode=form_post only inside the request object, which Clavis does not support (request_parameter_supported is false), so the request_not_supported error goes back in the default response mode, query (OpenID Connect Core 1.0, section 3.1.2.6); JAR may come with PAR in Phase 2"
     }
 ]

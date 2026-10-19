@@ -73,7 +73,7 @@ func NewMetadata(issuer string) Metadata {
 		ResponseTypesSupported: []string{"code"},
 		// The default is query and fragment; fragment serves implicit flows,
 		// which Clavis does not support.
-		ResponseModesSupported: []string{"query"},
+		ResponseModesSupported: []string{"query", "form_post"},
 		// The default is authorization_code and implicit.
 		GrantTypesSupported:              []string{"authorization_code", "refresh_token", "client_credentials"},
 		SubjectTypesSupported:            []string{"public"},

@@ -33,6 +33,7 @@ func (r authorizationRequests) Create(ctx context.Context, a store.Authorization
 		IDTokenClaims:       orEmpty(a.IDTokenClaims),
 		ForceConsent:        a.ForceConsent,
 		SessionID:           optionalID(a.SessionID),
+		ResponseMode:        a.ResponseMode,
 		CreatedAt:           a.CreatedAt,
 		ExpiresAt:           a.ExpiresAt,
 	})
@@ -60,6 +61,7 @@ func (r authorizationRequests) Get(ctx context.Context, tenantID uuid.UUID, id s
 		UserInfoClaims:      row.UserinfoClaims,
 		IDTokenClaims:       row.IDTokenClaims,
 		ForceConsent:        row.ForceConsent,
+		ResponseMode:        row.ResponseMode,
 		CreatedAt:           row.CreatedAt.UTC(),
 		ExpiresAt:           row.ExpiresAt.UTC(),
 	}

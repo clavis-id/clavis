@@ -26,6 +26,7 @@ RUNNER_SCRIPTS=(
 PLANS=(
 	"oidcc-config-certification-test-plan .cache/clavis-oidcc.json"
 	"oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client] .cache/clavis-oidcc.json"
+	"oidcc-formpost-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client] .cache/clavis-oidcc.json"
 )
 
 # Redirect URI of the suite's clients for the alias in the configuration.

@@ -34,7 +34,7 @@ func (f authzFixture) loginForConsent(t *testing.T, params url.Values) (p Pendin
 	if err != nil {
 		t.Fatalf("CompletePasswordLogin() unexpected error: %v", err)
 	}
-	if !login.Consent || login.RedirectURI != "" || login.SessionToken == "" {
+	if !login.Consent || login.Response.RedirectURI != "" || login.SessionToken == "" {
 		t.Fatalf("CompletePasswordLogin() = %+v, want a session and a request that waits for consent", login)
 	}
 	return p, oauth.HashToken(login.SessionToken)
@@ -47,10 +47,11 @@ func (f authzFixture) consent(t *testing.T, id string, sessionHash []byte, allow
 	if err != nil {
 		t.Fatalf("FindConsent() unexpected error: %v", err)
 	}
-	uri, err := CompleteConsent(t.Context(), f.d, f.tenant, c, allow)
+	resp, err := CompleteConsent(t.Context(), f.d, f.tenant, c, allow)
 	if err != nil {
 		t.Fatalf("CompleteConsent() unexpected error: %v", err)
 	}
+	uri := resp.URI()
 	u, err := url.Parse(uri)
 	if err != nil || !strings.HasPrefix(uri, "https://partner.example.com/callback?") {
 		t.Fatalf("CompleteConsent() = %q, want a response to the partner client", uri)
@@ -96,7 +97,7 @@ func TestConsentAfterSignIn(t *testing.T) {
 	}
 
 	// The grant answers the next request from the session at once.
-	if a, err := f.startWith(t, partnerRequest(), sessionHash); err != nil || a.RedirectURI == "" || a.Consent {
+	if a, err := f.startWith(t, partnerRequest(), sessionHash); err != nil || a.Response.RedirectURI == "" || a.Consent {
 		t.Errorf("StartAuthorization() with a grant = %+v, %v; want an authorization response", a, err)
 	}
 	// The request is single use.
@@ -133,7 +134,7 @@ func TestConsentForNewScopes(t *testing.T) {
 	}
 
 	// A request for fewer scopes than the grant needs no consent.
-	if a, err := f.startWith(t, with(partnerRequest(), "scope", "openid email"), sessionHash); err != nil || a.RedirectURI == "" {
+	if a, err := f.startWith(t, with(partnerRequest(), "scope", "openid email"), sessionHash); err != nil || a.Response.RedirectURI == "" {
 		t.Errorf("StartAuthorization() within the grant = %+v, %v; want an authorization response", a, err)
 	}
 }
@@ -190,7 +191,7 @@ func TestPromptNoneNeedsConsent(t *testing.T) {
 	_, err := f.startWith(t, params, sessionHash)
 	var redirect *RedirectError
 	if !errors.As(err, &redirect) || redirect.Err.Code != oauth.ErrorConsentRequired ||
-		!strings.HasPrefix(redirect.URI, "https://partner.example.com/callback?") {
+		!strings.HasPrefix(redirect.Response.URI(), "https://partner.example.com/callback?") {
 		t.Fatalf("StartAuthorization() with prompt=none and no grant = %v, want consent_required", err)
 	}
 	a, err := f.startWith(t, partnerRequest(), sessionHash)
@@ -198,7 +199,7 @@ func TestPromptNoneNeedsConsent(t *testing.T) {
 		t.Fatalf("StartAuthorization() = %+v, %v; want consent", a, err)
 	}
 	f.consent(t, a.RequestID, sessionHash, true)
-	if a, err := f.startWith(t, params, sessionHash); err != nil || a.RedirectURI == "" {
+	if a, err := f.startWith(t, params, sessionHash); err != nil || a.Response.RedirectURI == "" {
 		t.Errorf("StartAuthorization() with prompt=none and a grant = %+v, %v; want a response", a, err)
 	}
 }

@@ -57,6 +57,23 @@ templ Consent(p ConsentPage) {
 	}
 }
 
+// FormPost renders the page that posts an authorization response to the
+// client. Its script submits the form at once; a browser that runs no
+// scripts shows the Continue button. The script element holds exactly
+// formPostScript, which the page's Content Security Policy allows by its
+// hash.
+templ FormPost(p FormPostPage) {
+	@layout(p.Layout, "Returning to the application") {
+		<form id="response" method="post" action={ templ.SafeURL(p.Action) }>
+			for _, f := range p.Fields {
+				<input type="hidden" name={ f.Name } value={ f.Value }/>
+			}
+			<button id="continue" type="submit">Continue</button>
+		</form>
+		@templ.Raw("<script>" + formPostScript + "</script>")
+	}
+}
+
 // Error renders a page that explains why a request cannot continue.
 templ Error(p ErrorPage) {
 	@layout(p.Layout, p.Title) {

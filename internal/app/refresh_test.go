@@ -168,7 +168,7 @@ func TestConsentShowsOfflineAccessWhenTheClientGetsIt(t *testing.T) {
 		if g, err := f.partnerGrant(t); err != nil || !slices.Contains(g.Scopes, "offline_access") {
 			t.Errorf("grant after an OAuth request = %+v, %v; want offline_access", g, err)
 		}
-		if a, err := f.startWith(t, oauthRequest, sessionHash); err != nil || a.RedirectURI == "" {
+		if a, err := f.startWith(t, oauthRequest, sessionHash); err != nil || a.Response.RedirectURI == "" {
 			t.Errorf("StartAuthorization() of the same OAuth request = %+v, %v; want a code", a, err)
 		}
 	}

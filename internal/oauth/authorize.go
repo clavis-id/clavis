@@ -36,6 +36,15 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Code + ": " + e.Description }
 
+// Response modes Clavis supports: the parameters of the response go in the
+// query of the redirect URI, or the browser posts them to it (OAuth 2.0
+// Multiple Response Type Encoding Practices, section 2.1; OAuth 2.0 Form Post
+// Response Mode, section 2).
+const (
+	ResponseModeQuery    = "query"
+	ResponseModeFormPost = "form_post"
+)
+
 // CodeChallengeMethodS256 is the only code challenge method Clavis accepts
 // (RFC 7636, section 4.2; ADR 0018).
 const CodeChallengeMethodS256 = "S256"
@@ -82,7 +91,9 @@ type AuthorizationRequest struct {
 	// Scopes holds the requested scopes in order, without duplicates.
 	Scopes []string
 	State  string
-	Nonce  string
+	// ResponseMode is ResponseModeQuery or ResponseModeFormPost.
+	ResponseMode string
+	Nonce        string
 	// CodeChallenge is the PKCE challenge, empty when the request has none.
 	// Its method is always S256.
 	CodeChallenge string
@@ -132,8 +143,9 @@ func AuthorizationTarget(params url.Values) (clientID, redirectURI string, err e
 // ParseAuthorizationRequest parses an authorization request for the
 // authorization code flow. Call it once AuthorizationTarget has succeeded and
 // the client and redirect URI are known to be valid. An error is an *Error to
-// send to the redirect URI; the returned request then holds the state
-// parameter when it is valid, so the response can carry it.
+// send to the redirect URI; the returned request then holds the state and
+// response_mode parameters when they are valid, so the response can carry
+// the state in the requested response mode.
 func ParseAuthorizationRequest(params url.Values) (AuthorizationRequest, error) {
 	var r AuthorizationRequest
 	r.ClientID, r.RedirectURI, _ = AuthorizationTarget(params)
@@ -147,6 +159,19 @@ func ParseAuthorizationRequest(params url.Values) (AuthorizationRequest, error) 
 		return r, invalidRequest("state must have at most 4096 printable ASCII characters")
 	}
 	r.State = state
+
+	// The response mode goes next, so every later error goes back the way the
+	// client asked. An error about the response mode itself uses the default.
+	switch mode, ok := single(params, "response_mode"); {
+	case !ok:
+		return r, invalidRequest("response_mode is repeated")
+	case mode == "" || mode == ResponseModeQuery:
+		r.ResponseMode = ResponseModeQuery
+	case mode == ResponseModeFormPost:
+		r.ResponseMode = ResponseModeFormPost
+	default:
+		return r, invalidRequest("only response_mode query and form_post are supported")
+	}
 
 	// OpenID Connect Core 1.0, section 6, and section 7.2.1 for registration.
 	// Like any parameter, an empty one counts as omitted.
@@ -170,13 +195,6 @@ func ParseAuthorizationRequest(params url.Values) (AuthorizationRequest, error) 
 		// OAuth 2.1 keeps only the authorization code flow.
 		return r, &Error{Code: ErrorUnsupportedResponseType, Description: "only response_type code is supported"}
 	}
-	switch mode, ok := single(params, "response_mode"); {
-	case !ok:
-		return r, invalidRequest("response_mode is repeated")
-	case mode != "" && mode != "query":
-		return r, invalidRequest("only response_mode query is supported")
-	}
-
 	scope, ok := single(params, "scope")
 	switch {
 	case !ok:
