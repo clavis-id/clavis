@@ -46,6 +46,7 @@
     "client_secret_basic",
     "client_secret_post"
   ],
+  "end_session_endpoint": "http://localhost:8080/oauth2/logout",
   "claims_supported": [
     "sub",
     "iss",

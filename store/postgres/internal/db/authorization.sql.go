@@ -267,6 +267,24 @@ func (q *Queries) DeleteSession(ctx context.Context, arg DeleteSessionParams) (i
 	return result.RowsAffected(), nil
 }
 
+const deleteUnredeemedAuthorizationCodesBySession = `-- name: DeleteUnredeemedAuthorizationCodesBySession :execrows
+DELETE FROM authorization_codes
+WHERE tenant_id = $1 AND session_id = $2 AND redeemed_at IS NULL
+`
+
+type DeleteUnredeemedAuthorizationCodesBySessionParams struct {
+	TenantID  uuid.UUID
+	SessionID uuid.UUID
+}
+
+func (q *Queries) DeleteUnredeemedAuthorizationCodesBySession(ctx context.Context, arg DeleteUnredeemedAuthorizationCodesBySessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUnredeemedAuthorizationCodesBySession, arg.TenantID, arg.SessionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getAuthorizationCode = `-- name: GetAuthorizationCode :one
 SELECT hash, tenant_id, client_id, user_id, session_id, redirect_uri, redirect_uri_provided, scopes, nonce,
     code_challenge, code_challenge_method, auth_time, amr, acr, userinfo_claims, id_token_claims, created_at,

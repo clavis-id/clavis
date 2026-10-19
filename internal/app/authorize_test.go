@@ -44,7 +44,8 @@ func newAuthzFixture(t *testing.T) authzFixture {
 	// partner client asks for it (ADR 0020).
 	for _, spec := range []ClientSpec{
 		{ClientID: "web", Name: "Web app", Type: store.ClientConfidential, SkipConsent: true,
-			RedirectURIs: []string{"https://app.example.com/callback", "https://app.example.com/other?x=1"}},
+			RedirectURIs:           []string{"https://app.example.com/callback", "https://app.example.com/other?x=1"},
+			PostLogoutRedirectURIs: []string{"https://app.example.com/signed-out"}},
 		{ClientID: "spa", Type: store.ClientPublic, SkipConsent: true, RedirectURIs: []string{"http://127.0.0.1/callback"}},
 		{ClientID: "legacy", Type: store.ClientConfidential, PKCEExempt: true, SkipConsent: true,
 			RedirectURIs: []string{"https://legacy.example.com/callback"}},
@@ -469,10 +470,10 @@ func TestPurgeExpired(t *testing.T) {
 		{0, true, true, true},
 		// The request has expired; the code has too, but it is retained.
 		{AuthorizationRequestLifetime, false, true, true},
-		{AuthorizationCodeLifetime + AuthorizationCodeRetention - time.Second, false, true, true},
-		{AuthorizationCodeLifetime + AuthorizationCodeRetention, false, false, true},
 		// The session ends after a day without use.
-		{SessionIdleTimeout, false, false, false},
+		{SessionIdleTimeout, false, true, false},
+		{AuthorizationCodeLifetime + AuthorizationCodeRetention - time.Second, false, true, false},
+		{AuthorizationCodeLifetime + AuthorizationCodeRetention, false, false, false},
 	} {
 		*f.now = start.Add(step.after)
 		if err := PurgeExpired(t.Context(), f.d); err != nil {

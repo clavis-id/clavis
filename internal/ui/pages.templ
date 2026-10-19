@@ -74,6 +74,46 @@ templ FormPost(p FormPostPage) {
 	}
 }
 
+// Logout renders the page where the user confirms signing out. To stay
+// signed in, the user closes the page.
+templ Logout(p LogoutPage) {
+	@layout(p.Layout, "Sign out") {
+		if p.ClientName != "" {
+			<p class="lead"><strong>{ p.ClientName }</strong> asks you to sign out.</p>
+		}
+		if p.Account != "" {
+			<p>You are signed in as <strong>{ p.Account }</strong>.</p>
+		}
+		@logoutProblem(p.Problem)
+		<form method="post" action={ templ.SafeURL(p.Action) }>
+			for _, f := range p.Fields {
+				<input type="hidden" name={ f.Name } value={ f.Value }/>
+			}
+			<button id="logout" type="submit" autofocus>Sign out</button>
+		</form>
+		<p>To stay signed in, close this page.</p>
+	}
+}
+
+// SignedOut renders the page shown after the session ended, when the
+// browser does not return to an application.
+templ SignedOut(p SignedOutPage) {
+	@layout(p.Layout, "You are signed out") {
+		@logoutProblem(p.Problem)
+		<p>You can close this page.</p>
+	}
+}
+
+// logoutProblem explains why the browser stays at Clavis after signing out.
+templ logoutProblem(problem string) {
+	if problem != "" {
+		<p class="error" role="alert">
+			The application's sign-out request cannot be completed as sent ({ problem }), so you stay on
+			this site after signing out.
+		</p>
+	}
+}
+
 // Error renders a page that explains why a request cannot continue.
 templ Error(p ErrorPage) {
 	@layout(p.Layout, p.Title) {

@@ -265,6 +265,17 @@ func (r authorizationCodes) DeleteByUserAndClient(ctx context.Context, tenantID,
 	return n, nil
 }
 
+func (r authorizationCodes) DeleteBySession(ctx context.Context, tenantID, sessionID uuid.UUID) (int64, error) {
+	n, err := r.q.DeleteUnredeemedAuthorizationCodesBySession(ctx, db.DeleteUnredeemedAuthorizationCodesBySessionParams{
+		TenantID:  tenantID,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		return 0, mapError("deleting the authorization codes of a session", err)
+	}
+	return n, nil
+}
+
 func (r authorizationCodes) DeleteExpired(ctx context.Context, before time.Time) (int64, error) {
 	n, err := r.q.DeleteExpiredAuthorizationCodes(ctx, before)
 	if err != nil {

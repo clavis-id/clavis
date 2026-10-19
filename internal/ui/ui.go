@@ -232,6 +232,32 @@ type FormPostPage struct {
 	Fields []Field
 }
 
+// LogoutPage asks the user to confirm signing out (OpenID Connect
+// RP-Initiated Logout 1.0, section 2).
+type LogoutPage struct {
+	Layout
+	// Account is the email address of the signed-in user, or empty.
+	Account string
+	// ClientName names the application that asks for the logout, or is
+	// empty when the request does not show which one.
+	ClientName string
+	// Problem explains why the browser will stay at Clavis after signing
+	// out instead of returning to the application, or is empty.
+	Problem string
+	// Action is the URL the form posts to, and Fields carry the logout
+	// request to it.
+	Action string
+	Fields []Field
+}
+
+// SignedOutPage tells the user that the session ended.
+type SignedOutPage struct {
+	Layout
+	// Problem explains why the browser did not return to the application,
+	// or is empty.
+	Problem string
+}
+
 // Field is a hidden form field.
 type Field struct {
 	Name  string

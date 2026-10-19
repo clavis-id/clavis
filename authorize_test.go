@@ -37,11 +37,12 @@ func newLoginServer(t testing.TB, issuer, slug string) (*Server, store.Tenant) {
 		}
 	}
 	if _, _, err := app.CreateClient(t.Context(), s.deps, tn.ID, app.ClientSpec{
-		ClientID:     "web",
-		Name:         "Web App",
-		Type:         store.ClientConfidential,
-		RedirectURIs: []string{"https://app.example.com/callback"},
-		SkipConsent:  true,
+		ClientID:               "web",
+		Name:                   "Web App",
+		Type:                   store.ClientConfidential,
+		RedirectURIs:           []string{"https://app.example.com/callback"},
+		PostLogoutRedirectURIs: []string{"https://app.example.com/signed-out"},
+		SkipConsent:            true,
 	}); err != nil {
 		t.Fatalf("CreateClient() unexpected error: %v", err)
 	}

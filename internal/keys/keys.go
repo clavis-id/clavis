@@ -76,7 +76,8 @@ type Policy struct {
 	// signing. It must be shorter than RotationPeriod.
 	PublishAhead time.Duration
 	// Retention is how long a retired key stays published. It must exceed
-	// the lifetime of every token the key can sign.
+	// the lifetime of every token the key can sign, and the ID tokens it
+	// signed serve as id_token_hint values for as long as a session lasts.
 	Retention time.Duration
 	// CheckInterval is how often Run rotates keys. Successors are created
 	// PublishAhead plus CheckInterval before the switch, so they are
@@ -90,8 +91,9 @@ func DefaultPolicy() Policy {
 		Algorithms:     []string{RS256},
 		RotationPeriod: 30 * 24 * time.Hour,
 		PublishAhead:   24 * time.Hour,
-		Retention:      48 * time.Hour,
-		CheckInterval:  time.Hour,
+		// A session of 14 days plus an ID token of up to a day (ADR 0023).
+		Retention:     15 * 24 * time.Hour,
+		CheckInterval: time.Hour,
 	}
 }
 

@@ -23,9 +23,10 @@ const (
 	AuthorizationRequestLifetime = 10 * time.Minute
 	AuthorizationCodeLifetime    = 60 * time.Second
 	// AuthorizationCodeRetention keeps an expired code in the store this
-	// long, so a replay soon after expiry is still recognized (RFC 6749,
-	// section 4.1.2).
-	AuthorizationCodeRetention = time.Hour
+	// long, so a replay of it is still recognized (RFC 6749, section 4.1.2)
+	// and ending its session still finds the access tokens issued from it,
+	// which live a day at most (ADR 0023).
+	AuthorizationCodeRetention = maxTokenLifetime + time.Hour
 	// SessionIdleTimeout ends a session that is not used for this long, and
 	// SessionLifetime ends it regardless. Both become tenant settings later.
 	SessionIdleTimeout = 24 * time.Hour

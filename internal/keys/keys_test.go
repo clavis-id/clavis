@@ -177,7 +177,7 @@ func TestSignaturesVerifyAgainstPublishedKeys(t *testing.T) {
 func TestRotationLifecycle(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	policy := DefaultPolicy() // 30 days, published 24h ahead, retained 48h
+	policy := DefaultPolicy() // 30 days, published 24h ahead, retained 15 days
 	m := f.manager(t, newEncrypter(t, kek.GenerateSecret()), policy)
 
 	mustRotate(t, m, f.tenant.ID)

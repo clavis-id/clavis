@@ -88,3 +88,7 @@ WHERE tenant_id = sqlc.arg(tenant_id) AND user_id = sqlc.arg(user_id) AND client
 UPDATE authorization_codes
 SET redeemed_at = sqlc.arg(redeemed_at)
 WHERE tenant_id = sqlc.arg(tenant_id) AND hash = sqlc.arg(hash) AND redeemed_at IS NULL;
+
+-- name: DeleteUnredeemedAuthorizationCodesBySession :execrows
+DELETE FROM authorization_codes
+WHERE tenant_id = sqlc.arg(tenant_id) AND session_id = sqlc.arg(session_id) AND redeemed_at IS NULL;

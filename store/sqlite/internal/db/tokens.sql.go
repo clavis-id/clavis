@@ -143,6 +143,36 @@ func (q *Queries) RevokeAccessTokensByCode(ctx context.Context, arg RevokeAccess
 	return result.RowsAffected()
 }
 
+const revokeAccessTokensBySession = `-- name: RevokeAccessTokensBySession :execrows
+UPDATE access_tokens
+SET revoked_at = ?1
+WHERE access_tokens.tenant_id = ?2 AND access_tokens.revoked_at IS NULL
+    AND access_tokens.code_hash IN (
+        SELECT c.hash
+        FROM authorization_codes c
+        WHERE c.tenant_id = ?2 AND c.session_id = ?3
+            AND NOT EXISTS (
+                SELECT 1
+                FROM refresh_token_families f
+                WHERE f.tenant_id = c.tenant_id AND f.code_hash = c.hash
+            )
+    )
+`
+
+type RevokeAccessTokensBySessionParams struct {
+	RevokedAt sql.NullInt64
+	TenantID  string
+	SessionID string
+}
+
+func (q *Queries) RevokeAccessTokensBySession(ctx context.Context, arg RevokeAccessTokensBySessionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, revokeAccessTokensBySession, arg.RevokedAt, arg.TenantID, arg.SessionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const revokeAccessTokensByUserAndClient = `-- name: RevokeAccessTokensByUserAndClient :execrows
 UPDATE access_tokens
 SET revoked_at = ?1

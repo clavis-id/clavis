@@ -228,6 +228,45 @@ func TestFormPostEscapesItsInputAndRunsOnlyItsScript(t *testing.T) {
 	}
 }
 
+func TestLogoutPagesEscapeTheirInput(t *testing.T) {
+	t.Parallel()
+	var b bytes.Buffer
+	err := Logout(LogoutPage{
+		Layout:     Layout{Stylesheet: "/assets/clavis-0123456789ab.css"},
+		Account:    `ada@example.com<img src=x>`,
+		ClientName: `<script>alert(1)</script>`,
+		Problem:    "post_logout_redirect_uri <b>needs</b> an id_token_hint",
+		Action:     "/logout",
+		Fields:     []Field{{"state", `"><img src=x>`}},
+	}).Render(t.Context(), &b)
+	if err != nil {
+		t.Fatalf("Render() unexpected error: %v", err)
+	}
+	page := b.String()
+	for _, unsafe := range []string{"<script>", "<img", "<b>"} {
+		if strings.Contains(page, unsafe) {
+			t.Errorf("the page contains %q unescaped:\n%s", unsafe, page)
+		}
+	}
+	for _, want := range []string{
+		"<title>Sign out</title>", `action="/logout"`, `id="logout"`, `name="state"`, `role="alert"`,
+		"cannot be completed as sent", "To stay signed in, close this page.",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the page does not contain %q:\n%s", want, page)
+		}
+	}
+
+	b.Reset()
+	if err := SignedOut(SignedOutPage{}).Render(t.Context(), &b); err != nil {
+		t.Fatalf("Render() unexpected error: %v", err)
+	}
+	if page := b.String(); !strings.Contains(page, "<title>You are signed out</title>") ||
+		strings.Contains(page, "<form") || strings.Contains(page, `role="alert"`) {
+		t.Errorf("SignedOut() rendered:\n%s", page)
+	}
+}
+
 func TestScopeDescription(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct{ scope, resource, want string }{
