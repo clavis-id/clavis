@@ -52,3 +52,17 @@ func TestNewRejectsInvalidValues(t *testing.T) {
 		t.Error("New() accepted an invalid format")
 	}
 }
+
+func TestSingleLine(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		"":                     "",
+		"plain":                "plain",
+		"a\nb":                 "a b",
+		"a\r\nlevel=ERROR msg": "a  level=ERROR msg",
+	} {
+		if got := SingleLine(in); got != want {
+			t.Errorf("SingleLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
