@@ -19,7 +19,7 @@ request. Status values: Proposed, Accepted, Superseded by NNNN, Deprecated.
 | [0008](0008-hooks-webhooks-and-wasm.md) | Hooks as webhooks and WebAssembly modules | Accepted |
 | [0009](0009-per-tenant-issuer.md) | Multi-tenancy with a per-tenant issuer | Accepted |
 | [0010](0010-module-path.md) | Module path github.com/clavis-id/clavis | Superseded by 0012 |
-| [0011](0011-signing-key-lifecycle.md) | Signing key lifecycle and encryption at rest | Accepted |
+| [0011](0011-signing-key-lifecycle.md) | Signing key lifecycle and encryption at rest | Accepted; retention default superseded by 0023 |
 | [0012](0012-vanity-import-path.md) | Vanity import path clavisid.org/clavis | Accepted |
 | [0013](0013-authorization-requests-and-browser-sessions.md) | Authorization requests and browser sessions | Accepted |
 | [0014](0014-tokens-api-resources-and-client-credentials.md) | Tokens, API resources and client credentials | Accepted; PKCE policy superseded by 0018 |
@@ -31,3 +31,4 @@ request. Status values: Proposed, Accepted, Superseded by NNNN, Deprecated.
 | [0020](0020-consent-and-grants.md) | Consent and grants | Accepted |
 | [0021](0021-refresh-token-rotation.md) | Refresh token rotation | Accepted |
 | [0022](0022-revocation-and-introspection.md) | Revocation and introspection | Accepted |
+| [0023](0023-logout-and-form-post.md) | Logout and the form post response mode | Accepted |

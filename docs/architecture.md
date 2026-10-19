@@ -166,14 +166,15 @@ tenant is not reachable under `/t/default`.
 | `/oauth2/userinfo` | OpenID Connect Core 1.0, RFC 6750 | 1 (implemented) |
 | `/oauth2/revoke` | RFC 7009 | 1 (implemented) |
 | `/oauth2/introspect` | RFC 7662 | 1 (implemented) |
-| `/oauth2/logout` | OpenID Connect RP-Initiated Logout 1.0 | 1 |
+| `/oauth2/logout` | OpenID Connect RP-Initiated Logout 1.0 | 1 (implemented) |
 | `/oauth2/par` | RFC 9126 | 2 |
 | `/oauth2/device_authorization` | RFC 8628 | 2 |
 | `/oauth2/register` | RFC 7591 (fallback to CIMD) | 3 |
 | `/oauth2/bc-authorize` | OpenID CIBA Core 1.0 | 3 |
 
-The hosted UI adds `/login` per tenant, the sign-in page of a stored authorization request,
-and `/assets/` at the issuer of the default tenant, the stylesheet and other static files
+The hosted UI adds, per tenant, `/login`, the sign-in page of a stored authorization request,
+`/consent`, its consent page, and `/logout`, where the sign-out confirmation posts; and
+`/assets/` at the issuer of the default tenant, the stylesheet and other static files
 shared by every tenant. Asset names include a hash of their content, so they are cached for a
 year.
 
@@ -198,7 +199,8 @@ year.
   record by additional data). Rotated every 30 days by default; a successor is published at
   least 24 hours before it signs (publish-ahead plus the one-hour check interval), keys of a
   newly enabled algorithm are published ahead the same way, and a retired key stays in the
-  JWKS for 48 hours. The JWK set is cached in memory for one minute. See ADR 0011.
+  JWKS for 15 days, so ID tokens of any live session can serve as `id_token_hint`. The JWK set
+  is cached in memory for one minute. See ADRs 0011 and 0023.
 - **Tokens:** see ADR 0014.
   - The token endpoint authenticates the client first (`client_secret_basic`,
     `client_secret_post`, or `none` for public clients; one method per request) and then
@@ -261,6 +263,10 @@ year.
     finished in another. A request is single use.
   - Requests that use the request object, `request_uri`, dynamic registration or a response
     type other than `code` are rejected with the matching error.
+  - Responses go back in the query, or, with `response_mode=form_post`, from a page whose
+    form posts them to the redirect URI (OAuth 2.0 Form Post Response Mode). The page runs
+    one script, allowed by its hash, and its form may submit only to the client's origin
+    (ADR 0023).
   - `id_token_hint` must be an ID token that the tenant issued to the client; it may have
     expired. Only that user's session or sign-in answers the request, and the same holds for
     a `sub` claim that the `claims` parameter requests with a value (OpenID Connect Core 1.0,
@@ -269,8 +275,9 @@ year.
   bound to the client, the redirect URI, the PKCE challenge, the nonce, the scopes and the
   session (ADR 0014).
 - **Cleanup:** every 10 minutes, each instance deletes expired authorization requests,
-  sessions, access token records and refresh tokens, and codes that expired more than an hour ago, so a
-  replayed code is still recognized for a while. An authorization request, which needs no authentication, is gone
+  sessions, access token records and refresh tokens, and codes that expired more than 25 hours
+  ago, so a replayed code is still recognized for a while and a logout still finds the access
+  tokens issued from it. An authorization request, which needs no authentication, is gone
   within 20 minutes of its creation.
 - **Browser sessions:** one server-side session per sign-in, stored as the SHA-256 hash of a
   256-bit cookie named `__Host-clavis-session-<tenant ID>`, so tenants on one host never share
@@ -284,6 +291,14 @@ year.
     `max_age`, or an `id_token_hint` of another user. Until account selection exists,
     `prompt=select_account` shows the sign-in form too. With `prompt=none`, a request that
     needs a sign-in fails with `login_required`.
+  - RP-initiated logout (ADR 0023): a browser with an active session confirms on a page,
+    which posts only from Clavis itself. Logout ends the session, its pending codes and the
+    access tokens of its codes that started no refresh token family; refresh token families
+    are offline access and stay. The browser returns to `post_logout_redirect_uri`, with
+    `state`, only when the request has an `id_token_hint` that the tenant issued to a client
+    (it may have expired), `client_id` names that client if present, and the URI is
+    registered for it exactly. Otherwise the page says why, and the browser stays at
+    Clavis.
 - **Consent:** see ADR 0020. A grant records the scopes a user allowed a client.
   - After the user authenticates, a request needs consent when it asks for a scope that the
     grant lacks (a claim requested individually counts as its scope, and `offline_access`
