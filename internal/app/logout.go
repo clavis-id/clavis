@@ -100,15 +100,20 @@ func (l *Logout) target(ctx context.Context, d Deps, signer TokenSigner, t Autho
 		return err
 	}
 	l.Client = client
-	switch {
 	// Section 2: client_id must name the client of the hint.
-	case r.ClientID != "" && r.ClientID != client.ClientID:
+	if r.ClientID != "" && r.ClientID != client.ClientID {
 		return invalid("client_id is not the client the id_token_hint was issued to")
-	// Section 3: the URI must match a registered one exactly.
-	case r.PostLogoutRedirectURI != "" && !slices.Contains(client.PostLogoutRedirectURIs, r.PostLogoutRedirectURI):
+	}
+	if r.PostLogoutRedirectURI == "" {
+		return nil
+	}
+	// Section 3: the URI must match a registered one exactly. The browser
+	// goes to the registered string, never to the request's.
+	i := slices.Index(client.PostLogoutRedirectURIs, r.PostLogoutRedirectURI)
+	if i < 0 {
 		return invalid("post_logout_redirect_uri is not registered for the client")
 	}
-	l.RedirectURI, l.State = r.PostLogoutRedirectURI, r.State
+	l.RedirectURI, l.State = client.PostLogoutRedirectURIs[i], r.State
 	return nil
 }
 

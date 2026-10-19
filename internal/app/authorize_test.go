@@ -570,3 +570,24 @@ func TestFormPostResponseMode(t *testing.T) {
 	}
 	formPost("denied consent", denied, "error")
 }
+
+// Responses go to the registered redirect URI, with the requested port of a
+// loopback URI (RFC 8252, section 7.3). A port with a leading zero would not
+// be written back as the request sent it, so it does not match.
+func TestResponsesGoToTheRegisteredRedirectURI(t *testing.T) {
+	t.Parallel()
+	f := newAuthzFixture(t)
+	params := with(with(webRequest(), "client_id", "spa"), "redirect_uri", "http://127.0.0.1:8080/callback")
+	if p := f.start(t, params); p.Request.RedirectURI != "http://127.0.0.1:8080/callback" {
+		t.Errorf("stored redirect URI = %q, want the registered one with port 8080", p.Request.RedirectURI)
+	}
+	var redirect *RedirectError
+	_, err := f.startWith(t, with(params, "prompt", "none"), nil)
+	if !errors.As(err, &redirect) || redirect.Response.RedirectURI != "http://127.0.0.1:8080/callback" {
+		t.Errorf("error response = %v, want it sent to the registered URI with port 8080", err)
+	}
+	_, err = f.startWith(t, with(params, "redirect_uri", "http://127.0.0.1:08080/callback"), nil)
+	if !errors.Is(err, oauth.ErrInvalidAuthorizationTarget) {
+		t.Errorf("a port with a leading zero = %v, want ErrInvalidAuthorizationTarget", err)
+	}
+}

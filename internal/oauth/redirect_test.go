@@ -207,6 +207,40 @@ func FuzzValidateRedirectURI(f *testing.F) {
 	})
 }
 
+func TestResolveRedirectURI(t *testing.T) {
+	t.Parallel()
+	registered := []string{"https://app.example.com/callback", "http://127.0.0.1/cb?x=1", "http://[::1]:8080/cb"}
+	for requested, want := range map[string]string{
+		"https://app.example.com/callback": "https://app.example.com/callback",
+		"http://127.0.0.1:51004/cb?x=1":    "http://127.0.0.1:51004/cb?x=1",
+		"http://127.0.0.1/cb?x=1":          "http://127.0.0.1/cb?x=1",
+		"http://[::1]/cb":                  "http://[::1]/cb",
+		"http://[::1]:9/cb":                "http://[::1]:9/cb",
+	} {
+		if got, ok := ResolveRedirectURI(registered, requested); !ok || got != want {
+			t.Errorf("ResolveRedirectURI(%q) = %q, %v; want %q", requested, got, ok, want)
+		}
+	}
+	for _, requested := range []string{
+		"https://app.example.com/callback/", "http://127.0.0.1:51004/cb", "http://127.0.0.1:0/cb?x=1",
+		"http://127.0.0.1:080/cb?x=1",
+		"http://127.0.0.1:51004@evil.example/cb?x=1", "http://[::1]:8080/other",
+	} {
+		if got, ok := ResolveRedirectURI(registered, requested); ok {
+			t.Errorf("ResolveRedirectURI(%q) = %q, want no match", requested, got)
+		}
+	}
+}
+
+// withoutPort returns raw without the port of a loopback URI.
+func withoutPort(t *testing.T, raw string) string {
+	t.Helper()
+	if u, ok := splitLoopback(raw); ok {
+		return u.withPort(0)
+	}
+	return raw
+}
+
 // FuzzMatchRedirectURI checks that a requested URI matches a valid registered
 // one only when it is the same string, or the same loopback URI with another
 // port, so a match never sends the browser to another host.
@@ -224,6 +258,12 @@ func FuzzMatchRedirectURI(f *testing.F) {
 	f.Fuzz(func(t *testing.T, registered, requested string) {
 		if ValidateRedirectURI(registered) != nil || !MatchRedirectURI([]string{registered}, requested) {
 			return
+		}
+		// The resolved URI is the registered one, with at most another port.
+		resolved, _ := ResolveRedirectURI([]string{registered}, requested)
+		if got, want := withoutPort(t, resolved), withoutPort(t, registered); resolved != registered && got != want {
+			t.Fatalf("ResolveRedirectURI(%q, %q) = %q, which is not the registered URI", registered, requested,
+				resolved)
 		}
 		if requested == registered {
 			return

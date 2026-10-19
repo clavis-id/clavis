@@ -118,56 +118,87 @@ func rawAuthority(raw, scheme string) string {
 }
 
 // MatchRedirectURI reports whether requested is one of the registered redirect
-// URIs of an authorization request. Strings are compared exactly (RFC 9700,
-// section 4.1.3), except that the port of an http URI on a loopback IP literal
-// is ignored, so native apps can listen on an ephemeral port (RFC 8252,
-// section 7.3).
+// URIs of an authorization request, as ResolveRedirectURI defines it.
 //
 // Post-logout redirect URIs must not use it: they match exactly, without the
 // port exception (OpenID Connect RP-Initiated Logout 1.0, section 3).
 func MatchRedirectURI(registered []string, requested string) bool {
-	for _, r := range registered {
-		if r == requested {
-			return true
-		}
-	}
-	want, ok := withoutLoopbackPort(requested)
-	if !ok {
-		return false
-	}
-	for _, r := range registered {
-		if got, ok := withoutLoopbackPort(r); ok && got == want {
-			return true
-		}
-	}
-	return false
+	_, ok := ResolveRedirectURI(registered, requested)
+	return ok
 }
 
-// withoutLoopbackPort returns raw without its port when raw is an http URI on
-// a loopback IP literal. It works on the string rather than on a parsed URL,
+// ResolveRedirectURI returns the redirect URI that the response to an
+// authorization request goes to, when requested is one of the registered
+// URIs. Strings are compared exactly (RFC 9700, section 4.1.3), except that
+// the port of an http URI on a loopback IP literal is ignored, so native
+// apps can listen on an ephemeral port (RFC 8252, section 7.3).
+//
+// The result is the registered URI, with the requested port in the loopback
+// case. It is built from the registration, never copied from the request,
+// so a request can only choose among registered destinations.
+func ResolveRedirectURI(registered []string, requested string) (string, bool) {
+	for _, r := range registered {
+		if r == requested {
+			return r, true
+		}
+	}
+	want, ok := splitLoopback(requested)
+	if !ok {
+		return "", false
+	}
+	for _, r := range registered {
+		if got, ok := splitLoopback(r); ok && got.prefix == want.prefix && got.rest == want.rest {
+			return got.withPort(want.port), true
+		}
+	}
+	return "", false
+}
+
+// loopbackURI is an http URI on a loopback IP literal, split around its
+// port, which is 0 when the URI has none.
+type loopbackURI struct {
+	prefix string
+	port   int
+	rest   string
+}
+
+// withPort returns the URI with the given port, or without one for 0.
+func (u loopbackURI) withPort(port int) string {
+	if port == 0 {
+		return u.prefix + u.rest
+	}
+	return u.prefix + ":" + strconv.Itoa(port) + u.rest
+}
+
+// splitLoopback splits raw around its port when raw is an http URI on a
+// loopback IP literal. It works on the string rather than on a parsed URL,
 // so the comparison stays exact everywhere except the port.
-func withoutLoopbackPort(raw string) (string, bool) {
+func splitLoopback(raw string) (loopbackURI, bool) {
 	for _, prefix := range loopbackIPPrefixes {
 		rest, ok := strings.CutPrefix(raw, prefix)
 		if !ok {
 			continue
 		}
+		port := 0
 		if afterColon, ok := strings.CutPrefix(rest, ":"); ok {
+			// Without leading zeros, the port written back from its number
+			// is the string the request sent, which the token request must
+			// repeat (RFC 6749, section 4.1.3).
 			digits := len(afterColon) - len(strings.TrimLeft(afterColon, "0123456789"))
-			if digits == 0 || digits > 5 {
-				return "", false
+			if digits == 0 || digits > 5 || afterColon[0] == '0' {
+				return loopbackURI{}, false
 			}
-			if n, _ := strconv.Atoi(afterColon[:digits]); n < 1 || n > 65535 {
-				return "", false
+			if port, _ = strconv.Atoi(afterColon[:digits]); port < 1 || port > 65535 {
+				return loopbackURI{}, false
 			}
 			rest = afterColon[digits:]
 		}
 		// The authority must end here; anything else, such as "@host" or
 		// a longer host name, is a different URI.
 		if rest != "" && rest[0] != '/' && rest[0] != '?' {
-			return "", false
+			return loopbackURI{}, false
 		}
-		return prefix + rest, true
+		return loopbackURI{prefix: prefix, port: port, rest: rest}, true
 	}
-	return "", false
+	return loopbackURI{}, false
 }

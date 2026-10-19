@@ -392,11 +392,13 @@ func authorizationTarget(ctx context.Context, d Deps, tenantID uuid.UUID, params
 		return store.Client{}, "", false, fmt.Errorf("looking up the client: %w", err)
 	}
 	if redirectURI != "" {
-		if !oauth.MatchRedirectURI(client.RedirectURIs, redirectURI) {
+		// Responses go to the registered URI, never to the request's string.
+		resolved, ok := oauth.ResolveRedirectURI(client.RedirectURIs, redirectURI)
+		if !ok {
 			return store.Client{}, "", false, fmt.Errorf("%w: redirect_uri is not registered for the client",
 				oauth.ErrInvalidAuthorizationTarget)
 		}
-		return client, redirectURI, true, nil
+		return client, resolved, true, nil
 	}
 	// OAuth 2.1 lets a request omit the redirect URI when the client has
 	// only one; OpenID Connect Core 1.0, section 3.1.2.1, always requires it.
