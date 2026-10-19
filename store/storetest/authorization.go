@@ -75,6 +75,8 @@ func runAuthorizationRequests(t *testing.T, open OpenFunc) {
 		f := newAuthorizationFixture(t, open)
 		want := newAuthorizationRequest(f.client)
 		want.Scopes, want.State, want.Nonce, want.CodeChallenge, want.CodeChallengeMethod = nil, "", "", "", ""
+		want.LoginHint, want.HintSubject, want.UserInfoClaims, want.IDTokenClaims = "", uuid.Nil(), nil, nil
+		want.SessionID, want.ForceConsent, want.ResponseMode = uuid.Nil(), false, ""
 		want.RedirectURIProvided = false
 		want.ExpiresAt = want.CreatedAt.Add(-time.Second)
 		mustCreateAuthorizationRequest(t, f.s, want)
@@ -84,6 +86,32 @@ func runAuthorizationRequests(t *testing.T, open OpenFunc) {
 		}
 		if diff := cmp.Diff(normalizeAuthorizationRequest(want), got, cmpopts.EquateEmpty()); diff != "" {
 			t.Errorf("Get() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("SetSession", func(t *testing.T) {
+		t.Parallel()
+		f := newAuthorizationFixture(t, open)
+		r := newAuthorizationRequest(f.client)
+		r.SessionID = uuid.Nil()
+		mustCreateAuthorizationRequest(t, f.s, r)
+		requests := f.s.AuthorizationRequests()
+		session := uuid.NewV7()
+		if err := requests.SetSession(t.Context(), f.b.ID, r.ID, session); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("SetSession() through another tenant = %v, want ErrNotFound", err)
+		}
+		if err := requests.SetSession(t.Context(), f.a.ID, r.ID, session); err != nil {
+			t.Fatalf("SetSession() unexpected error: %v", err)
+		}
+		// A request gets a session once.
+		if err := requests.SetSession(t.Context(), f.a.ID, r.ID, uuid.NewV7()); !errors.Is(err, store.ErrConflict) {
+			t.Errorf("a second SetSession() = %v, want ErrConflict", err)
+		}
+		if got, err := get(t, f, r.ID); err != nil || got.SessionID != session {
+			t.Errorf("Get() after SetSession() = %v, %v; want session %v", got.SessionID, err, session)
+		}
+		if err := requests.SetSession(t.Context(), f.a.ID, "missing", session); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("SetSession() of an unknown request = %v, want ErrNotFound", err)
 		}
 	})
 
@@ -218,11 +246,34 @@ func runSessions(t *testing.T, open OpenFunc) {
 		}
 	})
 
+	t.Run("Touch", func(t *testing.T) {
+		t.Parallel()
+		f := newAuthorizationFixture(t, open)
+		want := newSession(f.user)
+		mustCreateSession(t, f.s, want)
+		want.LastSeenAt = want.LastSeenAt.Add(time.Hour + time.Nanosecond)
+		want.IdleExpiresAt = want.LastSeenAt.Add(24 * time.Hour)
+		if err := f.s.Sessions().Touch(t.Context(), f.a.ID, want.ID, want.LastSeenAt, want.IdleExpiresAt); err != nil {
+			t.Fatalf("Touch() unexpected error: %v", err)
+		}
+		got, err := get(t, f, want.TokenHash)
+		if err != nil {
+			t.Fatalf("GetByTokenHash() unexpected error: %v", err)
+		}
+		if diff := cmp.Diff(normalizeSession(want), got, cmpopts.EquateEmpty()); diff != "" {
+			t.Errorf("GetByTokenHash() after Touch() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
 	t.Run("NotFound", func(t *testing.T) {
 		t.Parallel()
 		f := newAuthorizationFixture(t, open)
 		if _, err := get(t, f, hashOf("missing")); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("GetByTokenHash() error = %v, want ErrNotFound", err)
+		}
+		now := time.Now()
+		if err := f.s.Sessions().Touch(t.Context(), f.a.ID, uuid.NewV7(), now, now); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Touch() error = %v, want ErrNotFound", err)
 		}
 		if err := f.s.Sessions().Delete(t.Context(), f.a.ID, uuid.NewV7()); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("Delete() error = %v, want ErrNotFound", err)
@@ -260,6 +311,13 @@ func runSessions(t *testing.T, open OpenFunc) {
 		sessions := f.s.Sessions()
 		if _, err := sessions.GetByTokenHash(t.Context(), f.b.ID, s.TokenHash); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("GetByTokenHash() from another tenant error = %v, want ErrNotFound", err)
+		}
+		later := s.LastSeenAt.Add(time.Hour)
+		if err := sessions.Touch(t.Context(), f.b.ID, s.ID, later, later); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Touch() from another tenant error = %v, want ErrNotFound", err)
+		}
+		if got, err := get(t, f, s.TokenHash); err != nil || !got.LastSeenAt.Equal(normalizeSession(s).LastSeenAt) {
+			t.Errorf("GetByTokenHash() after Touch() from another tenant = %v, %v; want it unchanged", got.LastSeenAt, err)
 		}
 		if err := sessions.Delete(t.Context(), f.b.ID, s.ID); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("Delete() from another tenant error = %v, want ErrNotFound", err)
@@ -345,6 +403,7 @@ func runAuthorizationCodes(t *testing.T, open OpenFunc) {
 		f := newAuthorizationFixture(t, open)
 		want := newAuthorizationCode(f.client, f.user)
 		want.Scopes, want.AMR, want.Nonce, want.ACR, want.CodeChallenge, want.CodeChallengeMethod = nil, nil, "", "", "", ""
+		want.UserInfoClaims, want.IDTokenClaims = nil, nil
 		want.ExpiresAt = want.CreatedAt.Add(-time.Second)
 		mustCreateAuthorizationCode(t, f.s, want)
 		got, err := get(t, f, want.Hash)
@@ -431,6 +490,96 @@ func runAuthorizationCodes(t *testing.T, open OpenFunc) {
 		}
 	})
 
+	t.Run("DeleteByUserAndClient", func(t *testing.T) {
+		t.Parallel()
+		f := newAuthorizationFixture(t, open)
+		other := newClient(f.a.ID, "other")
+		mustCreateClient(t, f.s.Clients(), other)
+		grace := newUser(f.a.ID, "grace@example.com")
+		mustCreateUser(t, f.s.Users(), grace)
+		a, b := newAuthorizationCode(f.client, f.user), newAuthorizationCode(f.client, f.user)
+		kept := []store.AuthorizationCode{newAuthorizationCode(other, f.user), newAuthorizationCode(f.client, grace)}
+		for _, c := range append([]store.AuthorizationCode{a, b}, kept...) {
+			mustCreateAuthorizationCode(t, f.s, c)
+		}
+		codes := f.s.AuthorizationCodes()
+		if n, err := codes.DeleteByUserAndClient(t.Context(), f.b.ID, f.user.ID, f.client.ID); err != nil || n != 0 {
+			t.Errorf("DeleteByUserAndClient() through another tenant = %d, %v; want 0", n, err)
+		}
+		if n, err := codes.DeleteByUserAndClient(t.Context(), f.a.ID, f.user.ID, f.client.ID); err != nil || n != 2 {
+			t.Errorf("DeleteByUserAndClient() = %d, %v; want 2", n, err)
+		}
+		for _, c := range []store.AuthorizationCode{a, b} {
+			if _, err := get(t, f, c.Hash); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("Get() of a deleted code = %v, want ErrNotFound", err)
+			}
+		}
+		for _, c := range kept {
+			if _, err := get(t, f, c.Hash); err != nil {
+				t.Errorf("Get() of a code of another user or client = %v, want nil", err)
+			}
+		}
+	})
+
+	t.Run("DeleteBySession", func(t *testing.T) {
+		t.Parallel()
+		f := newAuthorizationFixture(t, open)
+		pending, redeemed, other := newAuthorizationCode(f.client, f.user), newAuthorizationCode(f.client, f.user),
+			newAuthorizationCode(f.client, f.user)
+		redeemed.SessionID = pending.SessionID
+		for _, c := range []store.AuthorizationCode{pending, redeemed, other} {
+			mustCreateAuthorizationCode(t, f.s, c)
+		}
+		codes := f.s.AuthorizationCodes()
+		if err := codes.Redeem(t.Context(), f.a.ID, redeemed.Hash, redeemed.CreatedAt); err != nil {
+			t.Fatalf("Redeem() unexpected error: %v", err)
+		}
+		if n, err := codes.DeleteBySession(t.Context(), f.b.ID, pending.SessionID); err != nil || n != 0 {
+			t.Errorf("DeleteBySession() through another tenant = %d, %v; want 0", n, err)
+		}
+		if n, err := codes.DeleteBySession(t.Context(), f.a.ID, pending.SessionID); err != nil || n != 1 {
+			t.Errorf("DeleteBySession() = %d, %v; want 1", n, err)
+		}
+		if _, err := get(t, f, pending.Hash); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Get() of a deleted code = %v, want ErrNotFound", err)
+		}
+		// A redeemed code stays for replay detection, and so do the codes of
+		// other sessions.
+		for _, c := range []store.AuthorizationCode{redeemed, other} {
+			if _, err := get(t, f, c.Hash); err != nil {
+				t.Errorf("Get() of a code that DeleteBySession() keeps = %v, want nil", err)
+			}
+		}
+	})
+
+	t.Run("MoveSession", func(t *testing.T) {
+		t.Parallel()
+		f := newAuthorizationFixture(t, open)
+		pending, redeemed, other := newAuthorizationCode(f.client, f.user), newAuthorizationCode(f.client, f.user),
+			newAuthorizationCode(f.client, f.user)
+		redeemed.SessionID = pending.SessionID
+		for _, c := range []store.AuthorizationCode{pending, redeemed, other} {
+			mustCreateAuthorizationCode(t, f.s, c)
+		}
+		codes := f.s.AuthorizationCodes()
+		if err := codes.Redeem(t.Context(), f.a.ID, redeemed.Hash, redeemed.CreatedAt); err != nil {
+			t.Fatalf("Redeem() unexpected error: %v", err)
+		}
+		next := uuid.NewV7()
+		if n, err := codes.MoveSession(t.Context(), f.b.ID, pending.SessionID, next); err != nil || n != 0 {
+			t.Errorf("MoveSession() through another tenant = %d, %v; want 0", n, err)
+		}
+		if n, err := codes.MoveSession(t.Context(), f.a.ID, pending.SessionID, next); err != nil || n != 2 {
+			t.Errorf("MoveSession() = %d, %v; want 2", n, err)
+		}
+		for c, want := range map[*store.AuthorizationCode]uuid.UUID{&pending: next, &redeemed: next,
+			&other: other.SessionID} {
+			if got, err := get(t, f, c.Hash); err != nil || got.SessionID != want {
+				t.Errorf("session of a code after MoveSession() = %v, %v; want %v", got.SessionID, err, want)
+			}
+		}
+	})
+
 	t.Run("DeleteExpired", func(t *testing.T) {
 		t.Parallel()
 		f := newAuthorizationFixture(t, open)
@@ -481,8 +630,17 @@ func newAuthorizationRequest(c store.Client) store.AuthorizationRequest {
 		Nonce:               "n-0S6_WzA2Mj",
 		CodeChallenge:       "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
 		CodeChallengeMethod: "S256",
-		CreatedAt:           created,
-		ExpiresAt:           created.Add(10 * time.Minute),
+		LoginHint:           "ada@example.com",
+		// Not a reference: any user ID is stored as is.
+		HintSubject:    uuid.NewV7(),
+		UserInfoClaims: []string{"name", "email"},
+		IDTokenClaims:  []string{"email"},
+		ForceConsent:   true,
+		// Not a reference either.
+		SessionID:    uuid.NewV7(),
+		ResponseMode: "form_post",
+		CreatedAt:    created,
+		ExpiresAt:    created.Add(10 * time.Minute),
 	}
 }
 
@@ -553,6 +711,8 @@ func newAuthorizationCode(c store.Client, u store.User) store.AuthorizationCode 
 		AuthTime:            created.Add(-time.Minute),
 		AMR:                 []string{"pwd"},
 		ACR:                 "urn:example:acr:pwd",
+		UserInfoClaims:      []string{"name"},
+		IDTokenClaims:       []string{"email", "email_verified"},
 		CreatedAt:           created,
 		ExpiresAt:           created.Add(time.Minute),
 	}

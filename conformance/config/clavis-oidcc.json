@@ -45,6 +45,18 @@
                     ]
                 },
                 {
+                    "task": "Consent",
+                    "optional": true,
+                    "match": "https://clavis.test/consent*",
+                    "commands": [
+                        [
+                            "click",
+                            "id",
+                            "allow"
+                        ]
+                    ]
+                },
+                {
                     "task": "Verify Complete",
                     "match": "*/test/*/callback*",
                     "commands": [
@@ -52,6 +64,28 @@
                             "wait",
                             "id",
                             "submission_complete",
+                            10
+                        ]
+                    ]
+                }
+            ]
+        },
+        {
+            "match": "https://clavis.test/oauth2/logout*",
+            "tasks": [
+                {
+                    "task": "Sign out",
+                    "match": "https://clavis.test/oauth2/logout*",
+                    "commands": [
+                        [
+                            "click",
+                            "id",
+                            "logout"
+                        ],
+                        [
+                            "wait",
+                            "contains",
+                            "post_logout_redirect",
                             10
                         ]
                     ]
@@ -95,6 +129,18 @@
                                     "click",
                                     "id",
                                     "submit"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Consent",
+                            "optional": true,
+                            "match": "https://clavis.test/consent*",
+                            "commands": [
+                                [
+                                    "click",
+                                    "id",
+                                    "allow"
                                 ]
                             ]
                         },
@@ -149,6 +195,18 @@
                                     "click",
                                     "id",
                                     "submit"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Consent",
+                            "optional": true,
+                            "match": "https://clavis.test/consent*",
+                            "commands": [
+                                [
+                                    "click",
+                                    "id",
+                                    "allow"
                                 ]
                             ]
                         },
@@ -208,6 +266,637 @@
                                     "//*",
                                     10,
                                     "Invalid sign-in request",
+                                    "update-image-placeholder"
+                                ]
+                            ]
+                        }
+                    ]
+                }
+            ]
+        },
+        "oidcc-rp-initiated-logout-bad-id-token-hint": {
+            "browser": [
+                {
+                    "match": "https://clavis.test/oauth2/authorize*",
+                    "tasks": [
+                        {
+                            "task": "Login",
+                            "optional": true,
+                            "match": "https://clavis.test/login*",
+                            "commands": [
+                                [
+                                    "text",
+                                    "id",
+                                    "email",
+                                    "${USER_EMAIL}"
+                                ],
+                                [
+                                    "text",
+                                    "id",
+                                    "password",
+                                    "${USER_PASSWORD}"
+                                ],
+                                [
+                                    "click",
+                                    "id",
+                                    "submit"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Consent",
+                            "optional": true,
+                            "match": "https://clavis.test/consent*",
+                            "commands": [
+                                [
+                                    "click",
+                                    "id",
+                                    "allow"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Verify Complete",
+                            "match": "*/test/*/callback*",
+                            "commands": [
+                                [
+                                    "wait",
+                                    "id",
+                                    "submission_complete",
+                                    10
+                                ]
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "comment": "expects the confirmation page to explain why the browser stays at Clavis",
+                    "match": "https://clavis.test/oauth2/logout*",
+                    "tasks": [
+                        {
+                            "task": "Sign out",
+                            "match": "https://clavis.test/oauth2/logout*",
+                            "commands": [
+                                [
+                                    "wait",
+                                    "xpath",
+                                    "//*",
+                                    10,
+                                    "cannot be completed as sent",
+                                    "update-image-placeholder"
+                                ]
+                            ]
+                        }
+                    ]
+                }
+            ]
+        },
+        "oidcc-rp-initiated-logout-modified-id-token-hint": {
+            "browser": [
+                {
+                    "match": "https://clavis.test/oauth2/authorize*",
+                    "tasks": [
+                        {
+                            "task": "Login",
+                            "optional": true,
+                            "match": "https://clavis.test/login*",
+                            "commands": [
+                                [
+                                    "text",
+                                    "id",
+                                    "email",
+                                    "${USER_EMAIL}"
+                                ],
+                                [
+                                    "text",
+                                    "id",
+                                    "password",
+                                    "${USER_PASSWORD}"
+                                ],
+                                [
+                                    "click",
+                                    "id",
+                                    "submit"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Consent",
+                            "optional": true,
+                            "match": "https://clavis.test/consent*",
+                            "commands": [
+                                [
+                                    "click",
+                                    "id",
+                                    "allow"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Verify Complete",
+                            "match": "*/test/*/callback*",
+                            "commands": [
+                                [
+                                    "wait",
+                                    "id",
+                                    "submission_complete",
+                                    10
+                                ]
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "comment": "expects the confirmation page to explain why the browser stays at Clavis",
+                    "match": "https://clavis.test/oauth2/logout*",
+                    "tasks": [
+                        {
+                            "task": "Sign out",
+                            "match": "https://clavis.test/oauth2/logout*",
+                            "commands": [
+                                [
+                                    "wait",
+                                    "xpath",
+                                    "//*",
+                                    10,
+                                    "cannot be completed as sent",
+                                    "update-image-placeholder"
+                                ]
+                            ]
+                        }
+                    ]
+                }
+            ]
+        },
+        "oidcc-rp-initiated-logout-no-id-token-hint": {
+            "browser": [
+                {
+                    "match": "https://clavis.test/oauth2/authorize*",
+                    "tasks": [
+                        {
+                            "task": "Login",
+                            "optional": true,
+                            "match": "https://clavis.test/login*",
+                            "commands": [
+                                [
+                                    "text",
+                                    "id",
+                                    "email",
+                                    "${USER_EMAIL}"
+                                ],
+                                [
+                                    "text",
+                                    "id",
+                                    "password",
+                                    "${USER_PASSWORD}"
+                                ],
+                                [
+                                    "click",
+                                    "id",
+                                    "submit"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Consent",
+                            "optional": true,
+                            "match": "https://clavis.test/consent*",
+                            "commands": [
+                                [
+                                    "click",
+                                    "id",
+                                    "allow"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Verify Complete",
+                            "match": "*/test/*/callback*",
+                            "commands": [
+                                [
+                                    "wait",
+                                    "id",
+                                    "submission_complete",
+                                    10
+                                ]
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "comment": "expects the confirmation page to explain why the browser stays at Clavis",
+                    "match": "https://clavis.test/oauth2/logout*",
+                    "tasks": [
+                        {
+                            "task": "Sign out",
+                            "match": "https://clavis.test/oauth2/logout*",
+                            "commands": [
+                                [
+                                    "wait",
+                                    "xpath",
+                                    "//*",
+                                    10,
+                                    "cannot be completed as sent",
+                                    "update-image-placeholder"
+                                ]
+                            ]
+                        }
+                    ]
+                }
+            ]
+        },
+        "oidcc-rp-initiated-logout-bad-post-logout-redirect-uri": {
+            "browser": [
+                {
+                    "match": "https://clavis.test/oauth2/authorize*",
+                    "tasks": [
+                        {
+                            "task": "Login",
+                            "optional": true,
+                            "match": "https://clavis.test/login*",
+                            "commands": [
+                                [
+                                    "text",
+                                    "id",
+                                    "email",
+                                    "${USER_EMAIL}"
+                                ],
+                                [
+                                    "text",
+                                    "id",
+                                    "password",
+                                    "${USER_PASSWORD}"
+                                ],
+                                [
+                                    "click",
+                                    "id",
+                                    "submit"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Consent",
+                            "optional": true,
+                            "match": "https://clavis.test/consent*",
+                            "commands": [
+                                [
+                                    "click",
+                                    "id",
+                                    "allow"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Verify Complete",
+                            "match": "*/test/*/callback*",
+                            "commands": [
+                                [
+                                    "wait",
+                                    "id",
+                                    "submission_complete",
+                                    10
+                                ]
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "comment": "expects the confirmation page to explain why the browser stays at Clavis",
+                    "match": "https://clavis.test/oauth2/logout*",
+                    "tasks": [
+                        {
+                            "task": "Sign out",
+                            "match": "https://clavis.test/oauth2/logout*",
+                            "commands": [
+                                [
+                                    "wait",
+                                    "xpath",
+                                    "//*",
+                                    10,
+                                    "cannot be completed as sent",
+                                    "update-image-placeholder"
+                                ]
+                            ]
+                        }
+                    ]
+                }
+            ]
+        },
+        "oidcc-rp-initiated-logout-query-added-to-post-logout-redirect-uri": {
+            "browser": [
+                {
+                    "match": "https://clavis.test/oauth2/authorize*",
+                    "tasks": [
+                        {
+                            "task": "Login",
+                            "optional": true,
+                            "match": "https://clavis.test/login*",
+                            "commands": [
+                                [
+                                    "text",
+                                    "id",
+                                    "email",
+                                    "${USER_EMAIL}"
+                                ],
+                                [
+                                    "text",
+                                    "id",
+                                    "password",
+                                    "${USER_PASSWORD}"
+                                ],
+                                [
+                                    "click",
+                                    "id",
+                                    "submit"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Consent",
+                            "optional": true,
+                            "match": "https://clavis.test/consent*",
+                            "commands": [
+                                [
+                                    "click",
+                                    "id",
+                                    "allow"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Verify Complete",
+                            "match": "*/test/*/callback*",
+                            "commands": [
+                                [
+                                    "wait",
+                                    "id",
+                                    "submission_complete",
+                                    10
+                                ]
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "comment": "expects the confirmation page to explain why the browser stays at Clavis",
+                    "match": "https://clavis.test/oauth2/logout*",
+                    "tasks": [
+                        {
+                            "task": "Sign out",
+                            "match": "https://clavis.test/oauth2/logout*",
+                            "commands": [
+                                [
+                                    "wait",
+                                    "xpath",
+                                    "//*",
+                                    10,
+                                    "cannot be completed as sent",
+                                    "update-image-placeholder"
+                                ]
+                            ]
+                        }
+                    ]
+                }
+            ]
+        },
+        "oidcc-rp-initiated-logout-no-params": {
+            "browser": [
+                {
+                    "match": "https://clavis.test/oauth2/authorize*",
+                    "tasks": [
+                        {
+                            "task": "Login",
+                            "optional": true,
+                            "match": "https://clavis.test/login*",
+                            "commands": [
+                                [
+                                    "text",
+                                    "id",
+                                    "email",
+                                    "${USER_EMAIL}"
+                                ],
+                                [
+                                    "text",
+                                    "id",
+                                    "password",
+                                    "${USER_PASSWORD}"
+                                ],
+                                [
+                                    "click",
+                                    "id",
+                                    "submit"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Consent",
+                            "optional": true,
+                            "match": "https://clavis.test/consent*",
+                            "commands": [
+                                [
+                                    "click",
+                                    "id",
+                                    "allow"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Verify Complete",
+                            "match": "*/test/*/callback*",
+                            "commands": [
+                                [
+                                    "wait",
+                                    "id",
+                                    "submission_complete",
+                                    10
+                                ]
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "comment": "confirms the sign-out and expects the signed-out page",
+                    "match": "https://clavis.test/oauth2/logout*",
+                    "tasks": [
+                        {
+                            "task": "Sign out",
+                            "match": "https://clavis.test/oauth2/logout*",
+                            "commands": [
+                                [
+                                    "click",
+                                    "id",
+                                    "logout"
+                                ],
+                                [
+                                    "wait",
+                                    "xpath",
+                                    "//*",
+                                    10,
+                                    "You are signed out",
+                                    "update-image-placeholder"
+                                ]
+                            ]
+                        }
+                    ]
+                }
+            ]
+        },
+        "oidcc-rp-initiated-logout-no-post-logout-redirect-uri": {
+            "browser": [
+                {
+                    "match": "https://clavis.test/oauth2/authorize*",
+                    "tasks": [
+                        {
+                            "task": "Login",
+                            "optional": true,
+                            "match": "https://clavis.test/login*",
+                            "commands": [
+                                [
+                                    "text",
+                                    "id",
+                                    "email",
+                                    "${USER_EMAIL}"
+                                ],
+                                [
+                                    "text",
+                                    "id",
+                                    "password",
+                                    "${USER_PASSWORD}"
+                                ],
+                                [
+                                    "click",
+                                    "id",
+                                    "submit"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Consent",
+                            "optional": true,
+                            "match": "https://clavis.test/consent*",
+                            "commands": [
+                                [
+                                    "click",
+                                    "id",
+                                    "allow"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Verify Complete",
+                            "match": "*/test/*/callback*",
+                            "commands": [
+                                [
+                                    "wait",
+                                    "id",
+                                    "submission_complete",
+                                    10
+                                ]
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "comment": "confirms the sign-out and expects the signed-out page",
+                    "match": "https://clavis.test/oauth2/logout*",
+                    "tasks": [
+                        {
+                            "task": "Sign out",
+                            "match": "https://clavis.test/oauth2/logout*",
+                            "commands": [
+                                [
+                                    "click",
+                                    "id",
+                                    "logout"
+                                ],
+                                [
+                                    "wait",
+                                    "xpath",
+                                    "//*",
+                                    10,
+                                    "You are signed out",
+                                    "update-image-placeholder"
+                                ]
+                            ]
+                        }
+                    ]
+                }
+            ]
+        },
+        "oidcc-rp-initiated-logout-only-state": {
+            "browser": [
+                {
+                    "match": "https://clavis.test/oauth2/authorize*",
+                    "tasks": [
+                        {
+                            "task": "Login",
+                            "optional": true,
+                            "match": "https://clavis.test/login*",
+                            "commands": [
+                                [
+                                    "text",
+                                    "id",
+                                    "email",
+                                    "${USER_EMAIL}"
+                                ],
+                                [
+                                    "text",
+                                    "id",
+                                    "password",
+                                    "${USER_PASSWORD}"
+                                ],
+                                [
+                                    "click",
+                                    "id",
+                                    "submit"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Consent",
+                            "optional": true,
+                            "match": "https://clavis.test/consent*",
+                            "commands": [
+                                [
+                                    "click",
+                                    "id",
+                                    "allow"
+                                ]
+                            ]
+                        },
+                        {
+                            "task": "Verify Complete",
+                            "match": "*/test/*/callback*",
+                            "commands": [
+                                [
+                                    "wait",
+                                    "id",
+                                    "submission_complete",
+                                    10
+                                ]
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "comment": "confirms the sign-out and expects the signed-out page",
+                    "match": "https://clavis.test/oauth2/logout*",
+                    "tasks": [
+                        {
+                            "task": "Sign out",
+                            "match": "https://clavis.test/oauth2/logout*",
+                            "commands": [
+                                [
+                                    "click",
+                                    "id",
+                                    "logout"
+                                ],
+                                [
+                                    "wait",
+                                    "xpath",
+                                    "//*",
+                                    10,
+                                    "You are signed out",
                                     "update-image-placeholder"
                                 ]
                             ]

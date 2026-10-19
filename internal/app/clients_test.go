@@ -246,6 +246,9 @@ func TestCreateClientRejections(t *testing.T) {
 		{"negative ID token lifetime", func(s *ClientSpec) { s.Lifetimes.IDToken = -time.Minute }, ErrInvalidClientMetadata},
 		{"fractional lifetime", func(s *ClientSpec) { s.Lifetimes.IDToken = time.Minute + time.Millisecond }, ErrInvalidClientMetadata},
 		{"refresh lifetime too short", func(s *ClientSpec) { s.Lifetimes.RefreshTokenIdle = time.Minute }, ErrInvalidClientMetadata},
+		{"refresh idle lifetime above the default absolute", func(s *ClientSpec) {
+			s.Lifetimes.RefreshTokenIdle = DefaultRefreshTokenAbsoluteLifetime + time.Hour
+		}, ErrInvalidClientMetadata},
 		{"refresh lifetime too long", func(s *ClientSpec) {
 			s.Lifetimes.RefreshTokenAbsolute = 366 * 24 * time.Hour
 		}, ErrInvalidClientMetadata},

@@ -149,7 +149,8 @@ type SigningKeyPolicy struct {
 	// least 15 minutes. Default: 24 hours.
 	PublishAhead time.Duration
 	// Retention is how long a retired key stays published so tokens it
-	// signed can still be verified. Default: 48 hours.
+	// signed can still be verified, including ID tokens that relying parties
+	// send back as id_token_hint. Default: 15 days.
 	Retention time.Duration
 	// CheckInterval is how often rotation runs. It must not exceed
 	// PublishAhead, and successors are created PublishAhead plus
@@ -345,11 +346,19 @@ func (s *Server) routes() http.Handler {
 	s.handleTenant(mux, http.MethodPost, oidc.AuthorizationPath, s.handleAuthorize)
 	s.handleTenant(mux, http.MethodPost, oidc.TokenPath, s.handleToken)
 	s.handleTenant(mux, http.MethodOptions, oidc.TokenPath, handlePreflight("POST"))
+	s.handleTenant(mux, http.MethodPost, oidc.RevocationPath, s.handleRevocation)
+	s.handleTenant(mux, http.MethodOptions, oidc.RevocationPath, handlePreflight("POST"))
+	s.handleTenant(mux, http.MethodPost, oidc.IntrospectionPath, s.handleIntrospection)
 	s.handleTenant(mux, http.MethodGet, oidc.UserinfoPath, s.handleUserInfo)
 	s.handleTenant(mux, http.MethodPost, oidc.UserinfoPath, s.handleUserInfo)
 	s.handleTenant(mux, http.MethodOptions, oidc.UserinfoPath, handlePreflight("GET, POST"))
 	s.handleTenant(mux, http.MethodGet, loginPath, s.handleLoginPage)
 	s.handleTenant(mux, http.MethodPost, loginPath, s.handleLogin)
+	s.handleTenant(mux, http.MethodGet, consentPath, s.handleConsentPage)
+	s.handleTenant(mux, http.MethodPost, consentPath, s.handleConsent)
+	s.handleTenant(mux, http.MethodGet, oidc.EndSessionPath, s.handleEndSession)
+	s.handleTenant(mux, http.MethodPost, oidc.EndSessionPath, s.handleEndSession)
+	s.handleTenant(mux, http.MethodPost, logoutPath, s.handleLogout)
 	// Assets are the same for every tenant and are not instrumented, like
 	// the probes.
 	mux.HandleFunc(http.MethodGet+" "+assetsPath+"{name}", s.handleAsset)

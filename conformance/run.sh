@@ -23,32 +23,17 @@ RUNNER_SCRIPTS=(
 # Plans run by default, as "<plan name and variants> <configuration file>".
 # The configuration is generated from config/clavis-oidcc.json with the
 # secrets of the clients and user that setup_clavis creates.
-#
-# Basic OP runs its modules by name, without oidcc-max-age-10000: that test
-# needs single sign-on (work item 2.1, #24), and until then it passes or fails
-# depending on whether its two sign-ins fall in the same second. Add it back
-# with single sign-on, and check this list when the suite is updated.
-BASIC_MODULES=(
-	oidcc-server oidcc-response-type-missing oidcc-userinfo-get oidcc-userinfo-post-header
-	oidcc-userinfo-post-body oidcc-ensure-request-without-nonce-succeeds-for-code-flow oidcc-scope-profile
-	oidcc-scope-email oidcc-scope-address oidcc-scope-phone oidcc-scope-all oidcc-alternate-happy-flow
-	oidcc-display-page oidcc-display-popup oidcc-prompt-login oidcc-prompt-none-not-logged-in
-	oidcc-prompt-none-logged-in oidcc-max-age-1 oidcc-ensure-request-with-unknown-parameter-succeeds
-	oidcc-id-token-hint oidcc-login-hint oidcc-ui-locales oidcc-claims-locales
-	oidcc-ensure-request-with-acr-values-succeeds oidcc-codereuse oidcc-codereuse-30seconds
-	oidcc-ensure-registered-redirect-uri oidcc-ensure-post-request-succeeds oidcc-server-client-secret-post
-	oidcc-unsigned-request-object-supported-correctly-or-rejected-as-unsupported oidcc-claims-essential
-	oidcc-ensure-request-object-with-redirect-uri oidcc-refresh-token oidcc-ensure-request-with-valid-pkce-succeeds
-)
-BASIC_PLAN="oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client]"
-BASIC_PLAN+=":$(IFS=,; echo "${BASIC_MODULES[*]}")"
 PLANS=(
 	"oidcc-config-certification-test-plan .cache/clavis-oidcc.json"
-	"$BASIC_PLAN .cache/clavis-oidcc.json"
+	"oidcc-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client] .cache/clavis-oidcc.json"
+	"oidcc-formpost-basic-certification-test-plan[server_metadata=discovery][client_registration=static_client] .cache/clavis-oidcc.json"
+	"oidcc-rp-initiated-logout-certification-test-plan[response_type=code][client_registration=static_client] .cache/clavis-oidcc.json"
 )
 
-# Redirect URI of the suite's clients for the alias in the configuration.
+# Redirect URI and post-logout redirect URI of the suite's clients for the
+# alias in the configuration.
 REDIRECT_URI=https://localhost.emobix.co.uk:8443/test/a/clavis/callback
+POST_LOGOUT_REDIRECT_URI=https://localhost.emobix.co.uk:8443/test/a/clavis/post_logout_redirect
 
 compose() {
 	docker compose --file compose.yaml --profile runner "$@"
@@ -144,13 +129,19 @@ setup_clavis() {
 # create_client registers a confidential client and prints its secret.
 create_client() {
 	clavis clients create --client-id "$1" --name "Conformance $1" --redirect-uri "$REDIRECT_URI" \
-		--scope openid --scope profile --scope email --scope address --scope phone --pkce-exempt |
+		--post-logout-redirect-uri "$POST_LOGOUT_REDIRECT_URI" \
+		--scope openid --scope profile --scope email --scope address --scope phone --scope offline_access \
+		--pkce-exempt |
 		sed -n 's/^Client secret: //p'
 }
 
 fetch_runner
 build_clavis
 rm -rf results
+# Created here so the caller owns it. The runner container runs as root, and on
+# Linux a directory it creates belongs to root, so cleanup could not write the
+# service logs into it.
+mkdir results
 export CLAVIS_KEYS_ENCRYPTION_KEY
 CLAVIS_KEYS_ENCRYPTION_KEY=$(openssl rand -base64 32)
 

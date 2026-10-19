@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json/v2"
 	"fmt"
 	"time"
@@ -16,7 +17,7 @@ type authorizationRequests struct {
 }
 
 func (r authorizationRequests) Create(ctx context.Context, a store.AuthorizationRequest) error {
-	scopes, err := encodeList(a.Scopes)
+	lists, err := encodeLists(a.Scopes, a.UserInfoClaims, a.IDTokenClaims)
 	if err != nil {
 		return fmt.Errorf("sqlite: creating authorization request: %w", err)
 	}
@@ -27,11 +28,18 @@ func (r authorizationRequests) Create(ctx context.Context, a store.Authorization
 		BindingHash:         a.BindingHash,
 		RedirectUri:         a.RedirectURI,
 		RedirectUriProvided: boolInt(a.RedirectURIProvided),
-		Scopes:              scopes,
+		Scopes:              lists[0],
 		State:               a.State,
 		Nonce:               a.Nonce,
 		CodeChallenge:       a.CodeChallenge,
 		CodeChallengeMethod: a.CodeChallengeMethod,
+		LoginHint:           a.LoginHint,
+		HintSubject:         optionalID(a.HintSubject),
+		UserinfoClaims:      lists[1],
+		IDTokenClaims:       lists[2],
+		ForceConsent:        boolInt(a.ForceConsent),
+		SessionID:           optionalID(a.SessionID),
+		ResponseMode:        a.ResponseMode,
 		CreatedAt:           a.CreatedAt.UnixMicro(),
 		ExpiresAt:           a.ExpiresAt.UnixMicro(),
 	})
@@ -47,25 +55,56 @@ func (r authorizationRequests) Get(ctx context.Context, tenantID uuid.UUID, id s
 	if err != nil {
 		return store.AuthorizationRequest{}, err
 	}
-	scopes, err := decodeList(row.Scopes)
+	optional, err := parseOptionalIDs("authorization request", row.HintSubject, row.SessionID)
 	if err != nil {
-		return store.AuthorizationRequest{}, fmt.Errorf("sqlite: corrupt scopes in an authorization request: %w", err)
+		return store.AuthorizationRequest{}, err
 	}
-	return store.AuthorizationRequest{
+	lists, err := decodeLists(row.Scopes, row.UserinfoClaims, row.IDTokenClaims)
+	if err != nil {
+		return store.AuthorizationRequest{}, fmt.Errorf("sqlite: corrupt list in an authorization request: %w", err)
+	}
+	a := store.AuthorizationRequest{
 		ID:                  row.ID,
 		TenantID:            ids[0],
 		ClientID:            ids[1],
 		BindingHash:         row.BindingHash,
 		RedirectURI:         row.RedirectUri,
 		RedirectURIProvided: row.RedirectUriProvided != 0,
-		Scopes:              scopes,
+		Scopes:              lists[0],
 		State:               row.State,
 		Nonce:               row.Nonce,
 		CodeChallenge:       row.CodeChallenge,
 		CodeChallengeMethod: row.CodeChallengeMethod,
+		LoginHint:           row.LoginHint,
+		UserInfoClaims:      lists[1],
+		IDTokenClaims:       lists[2],
+		HintSubject:         optional[0],
+		ForceConsent:        row.ForceConsent != 0,
+		SessionID:           optional[1],
+		ResponseMode:        row.ResponseMode,
 		CreatedAt:           time.UnixMicro(row.CreatedAt).UTC(),
 		ExpiresAt:           time.UnixMicro(row.ExpiresAt).UTC(),
-	}, nil
+	}
+	return a, nil
+}
+
+func (r authorizationRequests) SetSession(ctx context.Context, tenantID uuid.UUID, id string, sessionID uuid.UUID) error {
+	n, err := r.q.SetAuthorizationRequestSession(ctx, db.SetAuthorizationRequestSessionParams{
+		SessionID: optionalID(sessionID),
+		TenantID:  tenantID.String(),
+		ID:        id,
+	})
+	if err != nil {
+		return mapError("setting the session of an authorization request", err)
+	}
+	if n == 0 {
+		// Tell a request that has a session from one that does not exist.
+		if _, err := r.Get(ctx, tenantID, id); err != nil {
+			return err
+		}
+		return fmt.Errorf("sqlite: setting the session of an authorization request: %w", store.ErrConflict)
+	}
+	return nil
 }
 
 func (r authorizationRequests) Delete(ctx context.Context, tenantID uuid.UUID, id string) error {
@@ -143,6 +182,22 @@ func (r sessions) GetByTokenHash(ctx context.Context, tenantID uuid.UUID, tokenH
 	}, nil
 }
 
+func (r sessions) Touch(ctx context.Context, tenantID, id uuid.UUID, lastSeenAt, idleExpiresAt time.Time) error {
+	n, err := r.q.TouchSession(ctx, db.TouchSessionParams{
+		LastSeenAt:    lastSeenAt.UnixMicro(),
+		IdleExpiresAt: idleExpiresAt.UnixMicro(),
+		TenantID:      tenantID.String(),
+		ID:            id.String(),
+	})
+	if err != nil {
+		return mapError("touching session", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("sqlite: touching session: %w", store.ErrNotFound)
+	}
+	return nil
+}
+
 func (r sessions) Delete(ctx context.Context, tenantID, id uuid.UUID) error {
 	n, err := r.q.DeleteSession(ctx, db.DeleteSessionParams{TenantID: tenantID.String(), ID: id.String()})
 	if err != nil {
@@ -167,11 +222,7 @@ type authorizationCodes struct {
 }
 
 func (r authorizationCodes) Create(ctx context.Context, c store.AuthorizationCode) error {
-	scopes, err := encodeList(c.Scopes)
-	if err != nil {
-		return fmt.Errorf("sqlite: creating authorization code: %w", err)
-	}
-	amr, err := encodeList(c.AMR)
+	lists, err := encodeLists(c.Scopes, c.AMR, c.UserInfoClaims, c.IDTokenClaims)
 	if err != nil {
 		return fmt.Errorf("sqlite: creating authorization code: %w", err)
 	}
@@ -183,13 +234,15 @@ func (r authorizationCodes) Create(ctx context.Context, c store.AuthorizationCod
 		SessionID:           c.SessionID.String(),
 		RedirectUri:         c.RedirectURI,
 		RedirectUriProvided: boolInt(c.RedirectURIProvided),
-		Scopes:              scopes,
+		Scopes:              lists[0],
 		Nonce:               c.Nonce,
 		CodeChallenge:       c.CodeChallenge,
 		CodeChallengeMethod: c.CodeChallengeMethod,
 		AuthTime:            c.AuthTime.UnixMicro(),
-		Amr:                 amr,
+		Amr:                 lists[1],
 		Acr:                 c.ACR,
+		UserinfoClaims:      lists[2],
+		IDTokenClaims:       lists[3],
 		CreatedAt:           c.CreatedAt.UnixMicro(),
 		ExpiresAt:           c.ExpiresAt.UnixMicro(),
 	})
@@ -205,11 +258,9 @@ func (r authorizationCodes) Get(ctx context.Context, tenantID uuid.UUID, hash []
 	if err != nil {
 		return store.AuthorizationCode{}, err
 	}
-	var lists [2][]string
-	for i, encoded := range []string{row.Scopes, row.Amr} {
-		if lists[i], err = decodeList(encoded); err != nil {
-			return store.AuthorizationCode{}, fmt.Errorf("sqlite: corrupt list in an authorization code: %w", err)
-		}
+	lists, err := decodeLists(row.Scopes, row.Amr, row.UserinfoClaims, row.IDTokenClaims)
+	if err != nil {
+		return store.AuthorizationCode{}, fmt.Errorf("sqlite: corrupt list in an authorization code: %w", err)
 	}
 	return store.AuthorizationCode{
 		Hash:                row.Hash,
@@ -226,6 +277,8 @@ func (r authorizationCodes) Get(ctx context.Context, tenantID uuid.UUID, hash []
 		AuthTime:            time.UnixMicro(row.AuthTime).UTC(),
 		AMR:                 lists[1],
 		ACR:                 row.Acr,
+		UserInfoClaims:      lists[2],
+		IDTokenClaims:       lists[3],
 		CreatedAt:           time.UnixMicro(row.CreatedAt).UTC(),
 		ExpiresAt:           time.UnixMicro(row.ExpiresAt).UTC(),
 		RedeemedAt:          timeOrZero(row.RedeemedAt),
@@ -250,6 +303,47 @@ func decodeList(encoded string) ([]string, error) {
 	return list, nil
 }
 
+// encodeLists encodes several lists with encodeList, in order.
+func encodeLists(lists ...[]string) ([]string, error) {
+	encoded := make([]string, len(lists))
+	for i, list := range lists {
+		var err error
+		if encoded[i], err = encodeList(list); err != nil {
+			return nil, err
+		}
+	}
+	return encoded, nil
+}
+
+// decodeLists decodes several lists with decodeList, in order.
+func decodeLists(encoded ...string) ([][]string, error) {
+	lists := make([][]string, len(encoded))
+	for i, e := range encoded {
+		var err error
+		if lists[i], err = decodeList(e); err != nil {
+			return nil, err
+		}
+	}
+	return lists, nil
+}
+
+// parseOptionalIDs parses nullable UUID columns of a record of the given
+// kind; NULL becomes the zero UUID.
+func parseOptionalIDs(kind string, columns ...sql.NullString) ([]uuid.UUID, error) {
+	ids := make([]uuid.UUID, len(columns))
+	for i, column := range columns {
+		if !column.Valid {
+			continue
+		}
+		id, err := uuid.Parse(column.String)
+		if err != nil {
+			return nil, fmt.Errorf("sqlite: corrupt id %q in %s: %w", column.String, kind, err)
+		}
+		ids[i] = id
+	}
+	return ids, nil
+}
+
 // parseIDs parses the UUID columns of a record of the given kind.
 func parseIDs(kind string, columns ...string) ([]uuid.UUID, error) {
 	ids := make([]uuid.UUID, len(columns))
@@ -261,6 +355,42 @@ func parseIDs(kind string, columns ...string) ([]uuid.UUID, error) {
 		ids[i] = id
 	}
 	return ids, nil
+}
+
+func (r authorizationCodes) DeleteByUserAndClient(ctx context.Context, tenantID, userID, clientID uuid.UUID,
+) (int64, error) {
+	n, err := r.q.DeleteAuthorizationCodesByUserAndClient(ctx, db.DeleteAuthorizationCodesByUserAndClientParams{
+		TenantID: tenantID.String(),
+		UserID:   userID.String(),
+		ClientID: clientID.String(),
+	})
+	if err != nil {
+		return 0, mapError("deleting authorization codes", err)
+	}
+	return n, nil
+}
+
+func (r authorizationCodes) DeleteBySession(ctx context.Context, tenantID, sessionID uuid.UUID) (int64, error) {
+	n, err := r.q.DeleteUnredeemedAuthorizationCodesBySession(ctx, db.DeleteUnredeemedAuthorizationCodesBySessionParams{
+		TenantID:  tenantID.String(),
+		SessionID: sessionID.String(),
+	})
+	if err != nil {
+		return 0, mapError("deleting the authorization codes of a session", err)
+	}
+	return n, nil
+}
+
+func (r authorizationCodes) MoveSession(ctx context.Context, tenantID, from, to uuid.UUID) (int64, error) {
+	n, err := r.q.MoveAuthorizationCodesToSession(ctx, db.MoveAuthorizationCodesToSessionParams{
+		ToSessionID:   to.String(),
+		TenantID:      tenantID.String(),
+		FromSessionID: from.String(),
+	})
+	if err != nil {
+		return 0, mapError("moving the authorization codes of a session", err)
+	}
+	return n, nil
 }
 
 func (r authorizationCodes) DeleteExpired(ctx context.Context, before time.Time) (int64, error) {

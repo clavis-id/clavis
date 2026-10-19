@@ -9,15 +9,16 @@ import (
 )
 
 type AccessToken struct {
-	ID        string
-	TenantID  string
-	ClientID  string
-	UserID    sql.NullString
-	CodeHash  []byte
-	Scopes    string
-	IssuedAt  int64
-	ExpiresAt int64
-	RevokedAt sql.NullInt64
+	ID             string
+	TenantID       string
+	ClientID       string
+	UserID         sql.NullString
+	CodeHash       []byte
+	Scopes         string
+	IssuedAt       int64
+	ExpiresAt      int64
+	RevokedAt      sql.NullInt64
+	UserinfoClaims string
 }
 
 type ApiResource struct {
@@ -48,6 +49,8 @@ type AuthorizationCode struct {
 	CreatedAt           int64
 	ExpiresAt           int64
 	RedeemedAt          sql.NullInt64
+	UserinfoClaims      string
+	IDTokenClaims       string
 }
 
 type AuthorizationRequest struct {
@@ -64,6 +67,13 @@ type AuthorizationRequest struct {
 	CodeChallengeMethod string
 	CreatedAt           int64
 	ExpiresAt           int64
+	LoginHint           string
+	HintSubject         sql.NullString
+	UserinfoClaims      string
+	IDTokenClaims       string
+	ForceConsent        int64
+	SessionID           sql.NullString
+	ResponseMode        string
 }
 
 type Client struct {
@@ -85,6 +95,17 @@ type Client struct {
 	PkceExempt                          int64
 	CreatedAt                           int64
 	UpdatedAt                           int64
+	ResourceServerFor                   string
+}
+
+type Grant struct {
+	ID        string
+	TenantID  string
+	UserID    string
+	ClientID  string
+	Scopes    string
+	CreatedAt int64
+	UpdatedAt int64
 }
 
 type Password struct {
@@ -92,6 +113,34 @@ type Password struct {
 	TenantID string
 	Hash     string
 	SetAt    int64
+}
+
+type RefreshToken struct {
+	Hash      []byte
+	TenantID  string
+	FamilyID  string
+	IssuedAt  int64
+	ExpiresAt int64
+	RotatedAt sql.NullInt64
+}
+
+type RefreshTokenFamily struct {
+	ID             string
+	TenantID       string
+	ClientID       string
+	UserID         string
+	SessionID      sql.NullString
+	CodeHash       []byte
+	Scopes         string
+	AuthTime       int64
+	Amr            string
+	Acr            string
+	UserinfoClaims string
+	IDTokenClaims  string
+	CreatedAt      int64
+	IdleExpiresAt  int64
+	ExpiresAt      int64
+	RevokedAt      sql.NullInt64
 }
 
 type Session struct {

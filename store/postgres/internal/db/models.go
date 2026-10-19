@@ -11,15 +11,16 @@ import (
 )
 
 type AccessToken struct {
-	ID        string
-	TenantID  uuid.UUID
-	ClientID  uuid.UUID
-	UserID    *uuid.UUID
-	CodeHash  []byte
-	Scopes    []string
-	IssuedAt  time.Time
-	ExpiresAt time.Time
-	RevokedAt *time.Time
+	ID             string
+	TenantID       uuid.UUID
+	ClientID       uuid.UUID
+	UserID         *uuid.UUID
+	CodeHash       []byte
+	Scopes         []string
+	IssuedAt       time.Time
+	ExpiresAt      time.Time
+	RevokedAt      *time.Time
+	UserinfoClaims []string
 }
 
 type ApiResource struct {
@@ -50,6 +51,8 @@ type AuthorizationCode struct {
 	CreatedAt           time.Time
 	ExpiresAt           time.Time
 	RedeemedAt          *time.Time
+	UserinfoClaims      []string
+	IDTokenClaims       []string
 }
 
 type AuthorizationRequest struct {
@@ -66,6 +69,13 @@ type AuthorizationRequest struct {
 	CodeChallengeMethod string
 	CreatedAt           time.Time
 	ExpiresAt           time.Time
+	LoginHint           string
+	HintSubject         *uuid.UUID
+	UserinfoClaims      []string
+	IDTokenClaims       []string
+	ForceConsent        bool
+	SessionID           *uuid.UUID
+	ResponseMode        string
 }
 
 type Client struct {
@@ -87,6 +97,17 @@ type Client struct {
 	PkceExempt                          bool
 	CreatedAt                           time.Time
 	UpdatedAt                           time.Time
+	ResourceServerFor                   []string
+}
+
+type Grant struct {
+	ID        uuid.UUID
+	TenantID  uuid.UUID
+	UserID    uuid.UUID
+	ClientID  uuid.UUID
+	Scopes    []string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type Password struct {
@@ -94,6 +115,34 @@ type Password struct {
 	TenantID uuid.UUID
 	Hash     string
 	SetAt    time.Time
+}
+
+type RefreshToken struct {
+	Hash      []byte
+	TenantID  uuid.UUID
+	FamilyID  uuid.UUID
+	IssuedAt  time.Time
+	ExpiresAt time.Time
+	RotatedAt *time.Time
+}
+
+type RefreshTokenFamily struct {
+	ID             uuid.UUID
+	TenantID       uuid.UUID
+	ClientID       uuid.UUID
+	UserID         uuid.UUID
+	SessionID      *uuid.UUID
+	CodeHash       []byte
+	Scopes         []string
+	AuthTime       time.Time
+	Amr            []string
+	Acr            string
+	UserinfoClaims []string
+	IDTokenClaims  []string
+	CreatedAt      time.Time
+	IdleExpiresAt  time.Time
+	ExpiresAt      time.Time
+	RevokedAt      *time.Time
 }
 
 type Session struct {

@@ -1,18 +1,27 @@
 -- name: CreateAuthorizationRequest :exec
 INSERT INTO authorization_requests (
     id, tenant_id, client_id, binding_hash, redirect_uri, redirect_uri_provided, scopes, state, nonce,
-    code_challenge, code_challenge_method, created_at, expires_at
+    code_challenge, code_challenge_method, login_hint, hint_subject, userinfo_claims, id_token_claims, force_consent,
+    session_id, response_mode, created_at, expires_at
 ) VALUES (
     sqlc.arg(id), sqlc.arg(tenant_id), sqlc.arg(client_id), sqlc.arg(binding_hash), sqlc.arg(redirect_uri),
     sqlc.arg(redirect_uri_provided), sqlc.arg(scopes), sqlc.arg(state), sqlc.arg(nonce), sqlc.arg(code_challenge),
-    sqlc.arg(code_challenge_method), sqlc.arg(created_at), sqlc.arg(expires_at)
+    sqlc.arg(code_challenge_method), sqlc.arg(login_hint), sqlc.narg(hint_subject), sqlc.arg(userinfo_claims),
+    sqlc.arg(id_token_claims), sqlc.arg(force_consent), sqlc.narg(session_id), sqlc.arg(response_mode),
+    sqlc.arg(created_at), sqlc.arg(expires_at)
 );
 
 -- name: GetAuthorizationRequest :one
 SELECT id, tenant_id, client_id, binding_hash, redirect_uri, redirect_uri_provided, scopes, state, nonce,
-    code_challenge, code_challenge_method, created_at, expires_at
+    code_challenge, code_challenge_method, login_hint, hint_subject, userinfo_claims, id_token_claims, force_consent,
+    session_id, response_mode, created_at, expires_at
 FROM authorization_requests
 WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id);
+
+-- name: SetAuthorizationRequestSession :execrows
+UPDATE authorization_requests
+SET session_id = sqlc.arg(session_id)
+WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id) AND session_id IS NULL;
 
 -- name: DeleteAuthorizationRequest :execrows
 DELETE FROM authorization_requests
@@ -35,6 +44,11 @@ SELECT id, tenant_id, token_hash, user_id, auth_time, amr, acr, created_at, last
 FROM sessions
 WHERE tenant_id = sqlc.arg(tenant_id) AND token_hash = sqlc.arg(token_hash);
 
+-- name: TouchSession :execrows
+UPDATE sessions
+SET last_seen_at = sqlc.arg(last_seen_at), idle_expires_at = sqlc.arg(idle_expires_at)
+WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id);
+
 -- name: DeleteSession :execrows
 DELETE FROM sessions
 WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id);
@@ -46,17 +60,19 @@ WHERE expires_at <= sqlc.arg(now) OR idle_expires_at <= sqlc.arg(now);
 -- name: CreateAuthorizationCode :exec
 INSERT INTO authorization_codes (
     hash, tenant_id, client_id, user_id, session_id, redirect_uri, redirect_uri_provided, scopes, nonce,
-    code_challenge, code_challenge_method, auth_time, amr, acr, created_at, expires_at
+    code_challenge, code_challenge_method, auth_time, amr, acr, userinfo_claims, id_token_claims, created_at,
+    expires_at
 ) VALUES (
     sqlc.arg(hash), sqlc.arg(tenant_id), sqlc.arg(client_id), sqlc.arg(user_id), sqlc.arg(session_id),
     sqlc.arg(redirect_uri), sqlc.arg(redirect_uri_provided), sqlc.arg(scopes), sqlc.arg(nonce),
     sqlc.arg(code_challenge), sqlc.arg(code_challenge_method), sqlc.arg(auth_time), sqlc.arg(amr), sqlc.arg(acr),
-    sqlc.arg(created_at), sqlc.arg(expires_at)
+    sqlc.arg(userinfo_claims), sqlc.arg(id_token_claims), sqlc.arg(created_at), sqlc.arg(expires_at)
 );
 
 -- name: GetAuthorizationCode :one
 SELECT hash, tenant_id, client_id, user_id, session_id, redirect_uri, redirect_uri_provided, scopes, nonce,
-    code_challenge, code_challenge_method, auth_time, amr, acr, created_at, expires_at, redeemed_at
+    code_challenge, code_challenge_method, auth_time, amr, acr, userinfo_claims, id_token_claims, created_at,
+    expires_at, redeemed_at
 FROM authorization_codes
 WHERE tenant_id = sqlc.arg(tenant_id) AND hash = sqlc.arg(hash);
 
@@ -64,7 +80,20 @@ WHERE tenant_id = sqlc.arg(tenant_id) AND hash = sqlc.arg(hash);
 DELETE FROM authorization_codes
 WHERE expires_at <= ?;
 
+-- name: DeleteAuthorizationCodesByUserAndClient :execrows
+DELETE FROM authorization_codes
+WHERE tenant_id = sqlc.arg(tenant_id) AND user_id = sqlc.arg(user_id) AND client_id = sqlc.arg(client_id);
+
 -- name: RedeemAuthorizationCode :execrows
 UPDATE authorization_codes
 SET redeemed_at = sqlc.arg(redeemed_at)
 WHERE tenant_id = sqlc.arg(tenant_id) AND hash = sqlc.arg(hash) AND redeemed_at IS NULL;
+
+-- name: DeleteUnredeemedAuthorizationCodesBySession :execrows
+DELETE FROM authorization_codes
+WHERE tenant_id = sqlc.arg(tenant_id) AND session_id = sqlc.arg(session_id) AND redeemed_at IS NULL;
+
+-- name: MoveAuthorizationCodesToSession :execrows
+UPDATE authorization_codes
+SET session_id = sqlc.arg(to_session_id)
+WHERE tenant_id = sqlc.arg(tenant_id) AND session_id = sqlc.arg(from_session_id);

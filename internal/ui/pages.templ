@@ -38,6 +38,82 @@ templ Login(p LoginPage) {
 	}
 }
 
+// Consent renders the page where the user allows or denies a client
+// (ADR 0020).
+templ Consent(p ConsentPage) {
+	@layout(p.Layout, "Allow access") {
+		<p class="lead"><strong>{ p.ClientName }</strong> wants to access the account <strong>{ p.Account }</strong>.</p>
+		<p>It asks to:</p>
+		<ul class="scopes">
+			for _, scope := range p.Scopes {
+				<li>{ scope }</li>
+			}
+		</ul>
+		<form method="post" action={ templ.SafeURL(p.Action) }>
+			<input type="hidden" name="request" value={ p.RequestID }/>
+			<button id="allow" type="submit" name="decision" value="allow">Allow</button>
+			<button id="deny" class="secondary" type="submit" name="decision" value="deny">Deny</button>
+		</form>
+	}
+}
+
+// FormPost renders the page that posts an authorization response to the
+// client. Its script submits the form at once; a browser that runs no
+// scripts shows the Continue button. The script element holds exactly
+// formPostScript, which the page's Content Security Policy allows by its
+// hash.
+templ FormPost(p FormPostPage) {
+	@layout(p.Layout, "Returning to the application") {
+		<form id="response" method="post" action={ templ.SafeURL(p.Action) }>
+			for _, f := range p.Fields {
+				<input type="hidden" name={ f.Name } value={ f.Value }/>
+			}
+			<button id="continue" type="submit">Continue</button>
+		</form>
+		@templ.Raw("<script>" + formPostScript + "</script>")
+	}
+}
+
+// Logout renders the page where the user confirms signing out. To stay
+// signed in, the user closes the page.
+templ Logout(p LogoutPage) {
+	@layout(p.Layout, "Sign out") {
+		if p.ClientName != "" {
+			<p class="lead"><strong>{ p.ClientName }</strong> asks you to sign out.</p>
+		}
+		if p.Account != "" {
+			<p>You are signed in as <strong>{ p.Account }</strong>.</p>
+		}
+		@logoutProblem(p.Problem)
+		<form method="post" action={ templ.SafeURL(p.Action) }>
+			for _, f := range p.Fields {
+				<input type="hidden" name={ f.Name } value={ f.Value }/>
+			}
+			<button id="logout" type="submit" autofocus>Sign out</button>
+		</form>
+		<p>To stay signed in, close this page.</p>
+	}
+}
+
+// SignedOut renders the page shown after the session ended, when the
+// browser does not return to an application.
+templ SignedOut(p SignedOutPage) {
+	@layout(p.Layout, "You are signed out") {
+		@logoutProblem(p.Problem)
+		<p>You can close this page.</p>
+	}
+}
+
+// logoutProblem explains why the browser stays at Clavis after signing out.
+templ logoutProblem(problem string) {
+	if problem != "" {
+		<p class="error" role="alert">
+			The application's sign-out request cannot be completed as sent ({ problem }), so you stay on
+			this site after signing out.
+		</p>
+	}
+}
+
 // Error renders a page that explains why a request cannot continue.
 templ Error(p ErrorPage) {
 	@layout(p.Layout, p.Title) {

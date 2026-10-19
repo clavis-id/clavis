@@ -52,7 +52,9 @@ type Store struct {
 	sessions    sessions
 	codes       authorizationCodes
 	tokens      accessTokens
+	refresh     refreshTokens
 	resources   apiResources
+	grants      grants
 }
 
 var _ store.Store = (*Store)(nil)
@@ -108,7 +110,9 @@ func New(ctx context.Context, pool *pgxpool.Pool, opts ...Option) (*Store, error
 		sessions:    sessions{q: q},
 		codes:       authorizationCodes{q: q},
 		tokens:      accessTokens{q: q},
+		refresh:     refreshTokens{pool: pool, q: q},
 		resources:   apiResources{q: q},
+		grants:      grants{q: q},
 	}
 	if err := s.Ping(ctx); err != nil {
 		return nil, err
@@ -124,6 +128,12 @@ func New(ctx context.Context, pool *pgxpool.Pool, opts ...Option) (*Store, error
 // Migrate applies every pending schema migration. An advisory lock makes
 // instances that start at the same time apply migrations one after another.
 func (s *Store) Migrate(ctx context.Context) error {
+	return s.migrateTo(ctx, -1)
+}
+
+// migrateTo applies the pending migrations up to and including version, or
+// all of them when version is negative.
+func (s *Store) migrateTo(ctx context.Context, version int64) error {
 	fsys, err := fs.Sub(migrationFiles, "migrations")
 	if err != nil {
 		return fmt.Errorf("postgres: loading migrations: %w", err)
@@ -138,7 +148,12 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("postgres: preparing migrations: %w", err)
 	}
-	if _, err := p.Up(ctx); err != nil {
+	if version < 0 {
+		_, err = p.Up(ctx)
+	} else {
+		_, err = p.UpTo(ctx, version)
+	}
+	if err != nil {
 		return fmt.Errorf("postgres: applying migrations: %w", err)
 	}
 	return nil
@@ -186,8 +201,14 @@ func (s *Store) AuthorizationCodes() store.AuthorizationCodes { return s.codes }
 // AccessTokens returns the access token repository.
 func (s *Store) AccessTokens() store.AccessTokens { return s.tokens }
 
+// RefreshTokens returns the refresh token repository.
+func (s *Store) RefreshTokens() store.RefreshTokens { return s.refresh }
+
 // APIResources returns the API resource repository.
 func (s *Store) APIResources() store.APIResources { return s.resources }
+
+// Grants returns the grant repository.
+func (s *Store) Grants() store.Grants { return s.grants }
 
 type tenants struct {
 	q *db.Queries
@@ -336,6 +357,7 @@ func (r clients) Create(ctx context.Context, c store.Client) error {
 		PkceExempt:                          c.PKCEExempt,
 		CreatedAt:                           c.CreatedAt,
 		UpdatedAt:                           c.UpdatedAt,
+		ResourceServerFor:                   orEmpty(c.ResourceServerFor),
 	})
 	return mapError("creating client", err)
 }
@@ -417,10 +439,11 @@ func clientFromRow(row db.Client) store.Client {
 			RefreshTokenIdle:     time.Duration(row.RefreshTokenIdleLifetimeSeconds) * time.Second,
 			RefreshTokenAbsolute: time.Duration(row.RefreshTokenAbsoluteLifetimeSeconds) * time.Second,
 		},
-		SkipConsent: row.SkipConsent,
-		PKCEExempt:  row.PkceExempt,
-		CreatedAt:   row.CreatedAt.UTC(),
-		UpdatedAt:   row.UpdatedAt.UTC(),
+		SkipConsent:       row.SkipConsent,
+		PKCEExempt:        row.PkceExempt,
+		ResourceServerFor: row.ResourceServerFor,
+		CreatedAt:         row.CreatedAt.UTC(),
+		UpdatedAt:         row.UpdatedAt.UTC(),
 	}
 }
 

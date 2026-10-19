@@ -2,14 +2,17 @@ package clavis
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -41,15 +44,15 @@ func interopServer(t *testing.T) (*Server, string, *http.Client) {
 	return s, ts.URL, ts.Client()
 }
 
-// signIn plays the browser: it follows auth to the login page, signs in as
-// ada and returns the authorization response that reaches the client.
-func signIn(t *testing.T, client *http.Client, authURL string) url.Values {
+// interopBrowser returns a client that keeps cookies like a browser and
+// stops at redirects to the relying party.
+func interopBrowser(t *testing.T, client *http.Client) *http.Client {
 	t.Helper()
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		t.Fatalf("creating a cookie jar: %v", err)
 	}
-	browser := &http.Client{
+	return &http.Client{
 		Transport: client.Transport,
 		Jar:       jar,
 		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
@@ -59,6 +62,12 @@ func signIn(t *testing.T, client *http.Client, authURL string) url.Values {
 			return nil
 		},
 	}
+}
+
+// signIn plays the browser: it follows auth to the login page, signs in as
+// ada and returns the authorization response that reaches the client.
+func signIn(t *testing.T, browser *http.Client, authURL string) url.Values {
+	t.Helper()
 	res, err := browser.Get(authURL) //nolint:noctx // A test helper; the request ends with the test.
 	if err != nil {
 		t.Fatalf("GET the authorization URL: %v", err)
@@ -80,10 +89,26 @@ func signIn(t *testing.T, client *http.Client, authURL string) url.Values {
 	if err != nil {
 		t.Fatalf("POST the login form: %v", err)
 	}
-	readBody(t, res)
+	page = readBody(t, res)
+	// A client that asks for consent shows the consent page next.
+	if m := regexp.MustCompile(`name="request" value="([^"]+)"`).FindStringSubmatch(page); m != nil &&
+		strings.Contains(page, `id="allow"`) {
+		form := url.Values{"request": {m[1]}, "decision": {"allow"}}
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, res.Request.URL.String(),
+			strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatalf("building the consent request: %v", err)
+		}
+		req.Header.Set("Content-Type", formContentType)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		if res, err = browser.Do(req); err != nil {
+			t.Fatalf("POST the consent form: %v", err)
+		}
+		readBody(t, res)
+	}
 	loc, err := url.Parse(res.Header.Get("Location"))
 	if res.StatusCode != http.StatusSeeOther || err != nil || loc.Host != "client.example" {
-		t.Fatalf("login = %d to %q", res.StatusCode, res.Header.Get("Location"))
+		t.Fatalf("sign-in = %d to %q", res.StatusCode, res.Header.Get("Location"))
 	}
 	return loc.Query()
 }
@@ -126,7 +151,7 @@ func TestInteropAuthorizationCodeFlow(t *testing.T) {
 		Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
 	}
 	verifier := oauth2.GenerateVerifier()
-	response := signIn(t, httpClient, config.AuthCodeURL("state-1",
+	response := signIn(t, interopBrowser(t, httpClient), config.AuthCodeURL("state-1",
 		oauth2.S256ChallengeOption(verifier), oidc.Nonce("nonce-1")))
 	if response.Get("state") != "state-1" || response.Get("iss") != issuer {
 		t.Fatalf("authorization response = %v", response)
@@ -186,13 +211,272 @@ func TestInteropPublicClient(t *testing.T) {
 	config := oauth2.Config{ClientID: "native", Endpoint: endpoint, RedirectURL: interopRedirectURI,
 		Scopes: []string{oidc.ScopeOpenID}}
 	verifier := oauth2.GenerateVerifier()
-	response := signIn(t, httpClient, config.AuthCodeURL("s", oauth2.S256ChallengeOption(verifier)))
+	response := signIn(t, interopBrowser(t, httpClient), config.AuthCodeURL("s", oauth2.S256ChallengeOption(verifier)))
 	token, err := config.Exchange(ctx, response.Get("code"), oauth2.VerifierOption(verifier))
 	if err != nil {
 		t.Fatalf("exchanging the code: %v", err)
 	}
 	if _, err := provider.Verifier(&oidc.Config{ClientID: "native"}).Verify(ctx, token.Extra("id_token").(string)); err != nil {
 		t.Errorf("verifying the ID token: %v", err)
+	}
+}
+
+// TestInteropRefreshToken refreshes tokens through the token source of
+// x/oauth2, which replaces an expired access token, and checks rotation and
+// reuse detection (ADR 0021).
+func TestInteropRefreshToken(t *testing.T) {
+	t.Parallel()
+	s, issuer, httpClient := interopServer(t)
+	ctx := oidc.ClientContext(t.Context(), httpClient)
+	_, secret, err := app.CreateClient(t.Context(), s.deps, s.defaultTenant.ID, app.ClientSpec{
+		ClientID: "rp", Type: store.ClientConfidential, RedirectURIs: []string{interopRedirectURI},
+	})
+	if err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	createUser(t, s, s.defaultTenant)
+	provider, err := oidc.NewProvider(ctx, issuer)
+	if err != nil {
+		t.Fatalf("discovering the provider: %v", err)
+	}
+	config := oauth2.Config{
+		ClientID:     "rp",
+		ClientSecret: secret,
+		Endpoint:     provider.Endpoint(),
+		RedirectURL:  interopRedirectURI,
+		Scopes:       []string{oidc.ScopeOpenID, oidc.ScopeOfflineAccess},
+	}
+	verifier := oauth2.GenerateVerifier()
+	response := signIn(t, interopBrowser(t, httpClient), config.AuthCodeURL("s", oauth2.S256ChallengeOption(verifier),
+		oidc.Nonce("nonce-1")))
+	first, err := config.Exchange(ctx, response.Get("code"), oauth2.VerifierOption(verifier))
+	if err != nil || first.RefreshToken == "" {
+		t.Fatalf("exchanging the code = %+v, %v; want a refresh token", first, err)
+	}
+	idVerifier := provider.Verifier(&oidc.Config{ClientID: "rp"})
+	firstID, err := idVerifier.Verify(ctx, first.Extra("id_token").(string))
+	if err != nil {
+		t.Fatalf("verifying the first ID token: %v", err)
+	}
+
+	// An expired token makes the token source refresh it.
+	expired := *first
+	expired.Expiry = time.Now().Add(-time.Minute)
+	second, err := config.TokenSource(ctx, &expired).Token()
+	if err != nil {
+		t.Fatalf("refreshing the token: %v", err)
+	}
+	if second.AccessToken == first.AccessToken || second.RefreshToken == "" || second.RefreshToken == first.RefreshToken {
+		t.Errorf("refreshed token = %+v, want a new access token and a new refresh token", second)
+	}
+	secondID, err := idVerifier.Verify(ctx, second.Extra("id_token").(string))
+	if err != nil {
+		t.Fatalf("verifying the refreshed ID token: %v", err)
+	}
+	var firstClaims, secondClaims struct {
+		AuthTime int64 `json:"auth_time"`
+	}
+	if err := errors.Join(firstID.Claims(&firstClaims), secondID.Claims(&secondClaims)); err != nil {
+		t.Fatalf("reading the ID token claims: %v", err)
+	}
+	if secondID.Subject != firstID.Subject || secondClaims.AuthTime != firstClaims.AuthTime || secondID.Nonce != "" {
+		t.Errorf("refreshed ID token = %+v (auth_time %d), first %+v (auth_time %d)",
+			secondID, secondClaims.AuthTime, firstID, firstClaims.AuthTime)
+	}
+	if _, err := provider.UserInfo(ctx, oauth2.StaticTokenSource(second)); err != nil {
+		t.Errorf("userinfo with the refreshed token: %v", err)
+	}
+
+	// Presenting the first refresh token again revokes the family.
+	_, err = config.TokenSource(ctx, &expired).Token()
+	var retrieveErr *oauth2.RetrieveError
+	if !errors.As(err, &retrieveErr) || retrieveErr.ErrorCode != "invalid_grant" {
+		t.Errorf("reusing the refresh token = %v, want invalid_grant", err)
+	}
+	reexpired := *second
+	reexpired.Expiry = time.Now().Add(-time.Minute)
+	if _, err := config.TokenSource(ctx, &reexpired).Token(); !errors.As(err, &retrieveErr) ||
+		retrieveErr.ErrorCode != "invalid_grant" {
+		t.Errorf("refreshing after the reuse = %v, want invalid_grant", err)
+	}
+	if _, err := provider.UserInfo(ctx, oauth2.StaticTokenSource(second)); err == nil {
+		t.Error("userinfo accepted an access token of a revoked family")
+	}
+}
+
+// TestInteropRevocationAndIntrospection finds the endpoints in the provider
+// metadata, introspects an access token as the server of its API resource,
+// and revokes the refresh token as the client (ADR 0022).
+func TestInteropRevocationAndIntrospection(t *testing.T) {
+	t.Parallel()
+	s, issuer, httpClient := interopServer(t)
+	ctx := oidc.ClientContext(t.Context(), httpClient)
+	tn := s.defaultTenant.ID
+	if _, err := app.CreateAPIResource(t.Context(), s.deps, tn, app.APIResourceSpec{
+		Identifier: "https://api.example.com/orders", Scopes: []string{"orders:read"},
+	}); err != nil {
+		t.Fatalf("CreateAPIResource() unexpected error: %v", err)
+	}
+	_, secret, err := app.CreateClient(t.Context(), s.deps, tn, app.ClientSpec{
+		ClientID: "rp", Type: store.ClientConfidential, RedirectURIs: []string{interopRedirectURI},
+		Scopes: []string{oidc.ScopeOpenID, oidc.ScopeOfflineAccess, "orders:read"},
+	})
+	if err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	_, apiSecret, err := app.CreateClient(t.Context(), s.deps, tn, app.ClientSpec{
+		ClientID: "orders-api", Type: store.ClientConfidential, GrantTypes: []string{"client_credentials"},
+		ResourceServerFor: []string{"https://api.example.com/orders"},
+	})
+	if err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	createUser(t, s, s.defaultTenant)
+	provider, err := oidc.NewProvider(ctx, issuer)
+	if err != nil {
+		t.Fatalf("discovering the provider: %v", err)
+	}
+	var endpoints struct {
+		Revocation    string `json:"revocation_endpoint"`
+		Introspection string `json:"introspection_endpoint"`
+	}
+	if err := provider.Claims(&endpoints); err != nil || endpoints.Revocation != issuer+"/oauth2/revoke" ||
+		endpoints.Introspection != issuer+"/oauth2/introspect" {
+		t.Fatalf("metadata endpoints = %+v, %v", endpoints, err)
+	}
+	config := oauth2.Config{
+		ClientID: "rp", ClientSecret: secret, Endpoint: provider.Endpoint(), RedirectURL: interopRedirectURI,
+		Scopes: []string{oidc.ScopeOpenID, oidc.ScopeOfflineAccess, "orders:read"},
+	}
+	verifier := oauth2.GenerateVerifier()
+	response := signIn(t, interopBrowser(t, httpClient), config.AuthCodeURL("s", oauth2.S256ChallengeOption(verifier)))
+	token, err := config.Exchange(ctx, response.Get("code"), oauth2.VerifierOption(verifier))
+	if err != nil || token.RefreshToken == "" {
+		t.Fatalf("exchanging the code = %+v, %v; want a refresh token", token, err)
+	}
+
+	call := func(endpoint, id, secret, value string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, endpoint,
+			strings.NewReader(url.Values{"token": {value}}.Encode()))
+		if err != nil {
+			t.Fatalf("building the request: %v", err)
+		}
+		req.Header.Set("Content-Type", formContentType)
+		req.SetBasicAuth(id, secret)
+		res, err := httpClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST %s: %v", endpoint, err)
+		}
+		return res
+	}
+	introspect := func() app.Introspection {
+		t.Helper()
+		res := call(endpoints.Introspection, "orders-api", apiSecret, token.AccessToken)
+		var got app.Introspection
+		if err := json.Unmarshal([]byte(readBody(t, res)), &got); res.StatusCode != http.StatusOK || err != nil {
+			t.Fatalf("introspection = %d, %v", res.StatusCode, err)
+		}
+		return got
+	}
+	if got := introspect(); !got.Active || got.Scope != "orders:read" ||
+		!slices.Equal(got.Audience, []string{"https://api.example.com/orders"}) {
+		t.Errorf("introspection by the resource server = %+v", got)
+	}
+
+	// RFC 7009, section 2.1: revoking the refresh token revokes the access
+	// tokens of the same grant.
+	res := call(endpoints.Revocation, "rp", secret, token.RefreshToken)
+	if body := readBody(t, res); res.StatusCode != http.StatusOK {
+		t.Fatalf("revocation = %d: %s", res.StatusCode, body)
+	}
+	if got := introspect(); got.Active {
+		t.Errorf("introspection after the revocation = %+v, want inactive", got)
+	}
+	expired := *token
+	expired.Expiry = time.Now().Add(-time.Minute)
+	var retrieveErr *oauth2.RetrieveError
+	if _, err := config.TokenSource(ctx, &expired).Token(); !errors.As(err, &retrieveErr) ||
+		retrieveErr.ErrorCode != "invalid_grant" {
+		t.Errorf("refreshing after the revocation = %v, want invalid_grant", err)
+	}
+}
+
+func TestInteropSingleSignOn(t *testing.T) {
+	t.Parallel()
+	s, issuer, httpClient := interopServer(t)
+	ctx := oidc.ClientContext(t.Context(), httpClient)
+	_, secret, err := app.CreateClient(t.Context(), s.deps, s.defaultTenant.ID, app.ClientSpec{
+		ClientID: "rp", Type: store.ClientConfidential, RedirectURIs: []string{interopRedirectURI},
+	})
+	if err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	createUser(t, s, s.defaultTenant)
+	provider, err := oidc.NewProvider(ctx, issuer)
+	if err != nil {
+		t.Fatalf("discovering the provider: %v", err)
+	}
+	config := oauth2.Config{ClientID: "rp", ClientSecret: secret, Endpoint: provider.Endpoint(),
+		RedirectURL: interopRedirectURI, Scopes: []string{oidc.ScopeOpenID}}
+	verifier := provider.Verifier(&oidc.Config{ClientID: "rp"})
+	exchange := func(response url.Values, codeVerifier string) (*oauth2.Token, *oidc.IDToken, string) {
+		t.Helper()
+		token, err := config.Exchange(ctx, response.Get("code"), oauth2.VerifierOption(codeVerifier))
+		if err != nil {
+			t.Fatalf("exchanging the code of %v: %v", response, err)
+		}
+		raw, _ := token.Extra("id_token").(string)
+		idToken, err := verifier.Verify(ctx, raw)
+		if err != nil {
+			t.Fatalf("verifying the ID token: %v", err)
+		}
+		return token, idToken, raw
+	}
+
+	browser := interopBrowser(t, httpClient)
+	codeVerifier := oauth2.GenerateVerifier()
+	// The user allows the email scope, which the second request asks for
+	// through the claims parameter.
+	_, first, firstRaw := exchange(signIn(t, browser, config.AuthCodeURL("s1",
+		oauth2.S256ChallengeOption(codeVerifier), oauth2.SetAuthURLParam("scope", "openid email"))), codeVerifier)
+	type authClaims struct {
+		ACR      string `json:"acr"`
+		AuthTime int64  `json:"auth_time"`
+	}
+	var firstClaims authClaims
+	if err := first.Claims(&firstClaims); err != nil || firstClaims.ACR != "https://clavisid.org/acr/password" ||
+		firstClaims.AuthTime == 0 {
+		t.Errorf("ID token claims = %+v, %v; want the password class and auth_time", firstClaims, err)
+	}
+
+	// The second request forbids interaction, names the user with the first
+	// ID token and asks for the email address in the userinfo response.
+	codeVerifier = oauth2.GenerateVerifier()
+	authURL := config.AuthCodeURL("s2", oauth2.S256ChallengeOption(codeVerifier),
+		oauth2.SetAuthURLParam("prompt", "none"),
+		oauth2.SetAuthURLParam("max_age", "10000"),
+		oauth2.SetAuthURLParam("id_token_hint", firstRaw),
+		oauth2.SetAuthURLParam("claims", `{"userinfo":{"email":{"essential":true}}}`))
+	res, err := browser.Get(authURL) //nolint:noctx // A test helper; the request ends with the test.
+	if err != nil {
+		t.Fatalf("GET the authorization URL: %v", err)
+	}
+	readBody(t, res)
+	loc, err := url.Parse(res.Header.Get("Location"))
+	if res.StatusCode != http.StatusSeeOther || err != nil || loc.Host != "client.example" || loc.Query().Get("code") == "" {
+		t.Fatalf("authorize with a session = %d to %q, want a code", res.StatusCode, res.Header.Get("Location"))
+	}
+	token, second, _ := exchange(loc.Query(), codeVerifier)
+	var secondClaims authClaims
+	if err := second.Claims(&secondClaims); err != nil || second.Subject != first.Subject ||
+		secondClaims != firstClaims {
+		t.Errorf("second ID token sub %s, claims %+v, %v; want %s, %+v", second.Subject, secondClaims, err,
+			first.Subject, firstClaims)
+	}
+	info, err := provider.UserInfo(ctx, oauth2.StaticTokenSource(token))
+	if err != nil || info.Email != "ada@example.com" {
+		t.Errorf("userinfo = %+v, %v; want the email address that the claims parameter asked for", info, err)
 	}
 }
 

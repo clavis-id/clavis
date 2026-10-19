@@ -72,9 +72,17 @@ func Run(t *testing.T, open OpenFunc) {
 		t.Parallel()
 		runAccessTokens(t, open)
 	})
+	t.Run("RefreshTokens", func(t *testing.T) {
+		t.Parallel()
+		runRefreshTokens(t, open)
+	})
 	t.Run("APIResources", func(t *testing.T) {
 		t.Parallel()
 		runAPIResources(t, open)
+	})
+	t.Run("Grants", func(t *testing.T) {
+		t.Parallel()
+		runGrants(t, open)
 	})
 }
 
@@ -716,10 +724,11 @@ func newClient(tenantID uuid.UUID, clientID string) store.Client {
 			RefreshTokenIdle:     72 * time.Hour,
 			RefreshTokenAbsolute: 30 * 24 * time.Hour,
 		},
-		SkipConsent: true,
-		PKCEExempt:  true,
-		CreatedAt:   created,
-		UpdatedAt:   created.Add(time.Minute),
+		SkipConsent:       true,
+		PKCEExempt:        true,
+		ResourceServerFor: []string{"https://api.example.com/orders"},
+		CreatedAt:         created,
+		UpdatedAt:         created.Add(time.Minute),
 	}
 }
 

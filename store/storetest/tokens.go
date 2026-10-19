@@ -114,6 +114,89 @@ func runAccessTokens(t *testing.T, open OpenFunc) {
 		}
 	})
 
+	t.Run("Revoke", func(t *testing.T) {
+		t.Parallel()
+		f := newAuthorizationFixture(t, open)
+		tokens := f.s.AccessTokens()
+		revoked, kept := newAccessToken(f.client, f.user.ID), newAccessToken(f.client, f.user.ID)
+		for _, tok := range []store.AccessToken{revoked, kept} {
+			if err := tokens.Create(t.Context(), tok); err != nil {
+				t.Fatalf("Create() unexpected error: %v", err)
+			}
+		}
+		at := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
+		if err := tokens.Revoke(t.Context(), f.b.ID, revoked.ID, at); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Revoke() through another tenant error = %v, want ErrNotFound", err)
+		}
+		if err := tokens.Revoke(t.Context(), f.a.ID, "missing", at); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Revoke() of an unknown token error = %v, want ErrNotFound", err)
+		}
+		for _, when := range []time.Time{at, at.Add(time.Hour)} {
+			if err := tokens.Revoke(t.Context(), f.a.ID, revoked.ID, when); err != nil {
+				t.Fatalf("Revoke() unexpected error: %v", err)
+			}
+		}
+		// The token keeps the time of its first revocation.
+		if got, err := tokens.Get(t.Context(), f.a.ID, revoked.ID); err != nil || !got.RevokedAt.Equal(at) {
+			t.Errorf("revoked token = %v, %v; want RevokedAt %v", got.RevokedAt, err, at)
+		}
+		if got, err := tokens.Get(t.Context(), f.a.ID, kept.ID); err != nil || !got.RevokedAt.IsZero() {
+			t.Errorf("another token = %v, %v; want it not revoked", got.RevokedAt, err)
+		}
+	})
+
+	t.Run("RevokeBySession", func(t *testing.T) {
+		t.Parallel()
+		f := newAuthorizationFixture(t, open)
+		// Two codes of the session: one started a refresh token family, which
+		// is offline access, and one did not. A third code is of another
+		// session.
+		online, offline, other := newAuthorizationCode(f.client, f.user), newAuthorizationCode(f.client, f.user),
+			newAuthorizationCode(f.client, f.user)
+		offline.SessionID = online.SessionID
+		for _, c := range []store.AuthorizationCode{online, offline, other} {
+			mustCreateAuthorizationCode(t, f.s, c)
+		}
+		family, token := newRefreshTokenFamily(f.client, f.user)
+		family.SessionID, family.CodeHash = online.SessionID, offline.Hash
+		mustCreateRefreshTokenFamily(t, f.s, family, token)
+		tokenFor := func(code store.AuthorizationCode) store.AccessToken {
+			tok := newAccessToken(f.client, f.user.ID)
+			tok.CodeHash = code.Hash
+			if err := f.s.AccessTokens().Create(t.Context(), tok); err != nil {
+				t.Fatalf("Create() unexpected error: %v", err)
+			}
+			return tok
+		}
+		revoked, again := tokenFor(online), tokenFor(online)
+		kept := []store.AccessToken{tokenFor(offline), tokenFor(other), newAccessToken(f.client, uuid.Nil())}
+		if err := f.s.AccessTokens().Create(t.Context(), kept[2]); err != nil {
+			t.Fatalf("Create() unexpected error: %v", err)
+		}
+		tokens := f.s.AccessTokens()
+		at := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
+		if err := tokens.Revoke(t.Context(), f.a.ID, again.ID, at.Add(-time.Hour)); err != nil {
+			t.Fatalf("Revoke() unexpected error: %v", err)
+		}
+
+		if n, err := tokens.RevokeBySession(t.Context(), f.b.ID, online.SessionID, at); err != nil || n != 0 {
+			t.Errorf("RevokeBySession() through another tenant = %d, %v; want 0", n, err)
+		}
+		if n, err := tokens.RevokeBySession(t.Context(), f.a.ID, online.SessionID, at); err != nil || n != 1 {
+			t.Errorf("RevokeBySession() = %d, %v; want 1", n, err)
+		}
+		for tok, want := range map[string]time.Time{revoked.ID: at, again.ID: at.Add(-time.Hour)} {
+			if got, err := tokens.Get(t.Context(), f.a.ID, tok); err != nil || !got.RevokedAt.Equal(want) {
+				t.Errorf("token of an online code = %v, %v; want RevokedAt %v", got.RevokedAt, err, want)
+			}
+		}
+		for _, tok := range kept {
+			if got, err := tokens.Get(t.Context(), f.a.ID, tok.ID); err != nil || !got.RevokedAt.IsZero() {
+				t.Errorf("token that RevokeBySession() keeps = %v, %v; want it not revoked", got.RevokedAt, err)
+			}
+		}
+	})
+
 	t.Run("RevokeByCode", func(t *testing.T) {
 		t.Parallel()
 		f := newAuthorizationFixture(t, open)
@@ -143,6 +226,48 @@ func runAccessTokens(t *testing.T, open OpenFunc) {
 		}
 		if got, err := tokens.Get(t.Context(), f.a.ID, other.ID); err != nil || !got.RevokedAt.IsZero() {
 			t.Errorf("token of another code = %v, %v; want it not revoked", got.RevokedAt, err)
+		}
+	})
+
+	t.Run("RevokeByUserAndClient", func(t *testing.T) {
+		t.Parallel()
+		f := newAuthorizationFixture(t, open)
+		tokens := f.s.AccessTokens()
+		other := newClient(f.a.ID, "other")
+		mustCreateClient(t, f.s.Clients(), other)
+		grace := newUser(f.a.ID, "grace@example.com")
+		mustCreateUser(t, f.s.Users(), grace)
+		a, b := newAccessToken(f.client, f.user.ID), newAccessToken(f.client, f.user.ID)
+		kept := []store.AccessToken{
+			newAccessToken(other, f.user.ID),     // another client
+			newAccessToken(f.client, grace.ID),   // another user
+			newAccessToken(f.client, uuid.Nil()), // the client for itself
+		}
+		for _, tok := range append([]store.AccessToken{a, b}, kept...) {
+			if err := tokens.Create(t.Context(), tok); err != nil {
+				t.Fatalf("Create() unexpected error: %v", err)
+			}
+		}
+		at := time.Date(2026, 10, 17, 10, 0, 0, 0, time.UTC)
+		if n, err := tokens.RevokeByUserAndClient(t.Context(), f.b.ID, f.user.ID, f.client.ID, at); err != nil || n != 0 {
+			t.Errorf("RevokeByUserAndClient() through another tenant = %d, %v; want 0", n, err)
+		}
+		if n, err := tokens.RevokeByUserAndClient(t.Context(), f.a.ID, f.user.ID, f.client.ID, at); err != nil || n != 2 {
+			t.Errorf("RevokeByUserAndClient() = %d, %v; want 2", n, err)
+		}
+		// Revoked tokens keep the time of their first revocation.
+		if n, err := tokens.RevokeByUserAndClient(t.Context(), f.a.ID, f.user.ID, f.client.ID, at.Add(time.Hour)); err != nil || n != 0 {
+			t.Errorf("a second RevokeByUserAndClient() = %d, %v; want 0", n, err)
+		}
+		for _, tok := range []store.AccessToken{a, b} {
+			if got, err := tokens.Get(t.Context(), f.a.ID, tok.ID); err != nil || !got.RevokedAt.Equal(at) {
+				t.Errorf("revoked token = %v, %v; want RevokedAt %v", got.RevokedAt, err, at)
+			}
+		}
+		for _, tok := range kept {
+			if got, err := tokens.Get(t.Context(), f.a.ID, tok.ID); err != nil || !got.RevokedAt.IsZero() {
+				t.Errorf("token of another user or client = %v, %v; want it not revoked", got.RevokedAt, err)
+			}
 		}
 	})
 
@@ -263,14 +388,15 @@ func runAPIResources(t *testing.T, open OpenFunc) {
 func newAccessToken(c store.Client, userID uuid.UUID) store.AccessToken {
 	issued := time.Date(2026, 10, 16, 9, 31, 0, 123456789, time.UTC)
 	return store.AccessToken{
-		ID:        uuid.NewV7().String(),
-		TenantID:  c.TenantID,
-		ClientID:  c.ID,
-		UserID:    userID,
-		CodeHash:  hashOf("code " + uuid.NewV7().String()),
-		Scopes:    []string{"openid", "orders:read"},
-		IssuedAt:  issued,
-		ExpiresAt: issued.Add(10 * time.Minute),
+		ID:             uuid.NewV7().String(),
+		TenantID:       c.TenantID,
+		ClientID:       c.ID,
+		UserID:         userID,
+		CodeHash:       hashOf("code " + uuid.NewV7().String()),
+		Scopes:         []string{"openid", "orders:read"},
+		UserInfoClaims: []string{"name"},
+		IssuedAt:       issued,
+		ExpiresAt:      issued.Add(10 * time.Minute),
 	}
 }
 

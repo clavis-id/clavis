@@ -51,7 +51,9 @@ type Store struct {
 	sessions    sessions
 	codes       authorizationCodes
 	tokens      accessTokens
+	refresh     refreshTokens
 	resources   apiResources
+	grants      grants
 }
 
 var _ store.Store = (*Store)(nil)
@@ -104,7 +106,9 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		sessions:    sessions{q: q},
 		codes:       authorizationCodes{q: q},
 		tokens:      accessTokens{q: q},
+		refresh:     refreshTokens{db: conn, q: q},
 		resources:   apiResources{q: q},
+		grants:      grants{q: q},
 	}
 
 	if err := s.Ping(ctx); err != nil {
@@ -144,6 +148,12 @@ func createPrivate(path string) error {
 
 // Migrate applies every pending schema migration.
 func (s *Store) Migrate(ctx context.Context) error {
+	return s.migrateTo(ctx, -1)
+}
+
+// migrateTo applies the pending migrations up to and including version, or
+// all of them when version is negative.
+func (s *Store) migrateTo(ctx context.Context, version int64) error {
 	fsys, err := fs.Sub(migrationFiles, "migrations")
 	if err != nil {
 		return fmt.Errorf("sqlite: loading migrations: %w", err)
@@ -152,7 +162,12 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("sqlite: preparing migrations: %w", err)
 	}
-	if _, err := p.Up(ctx); err != nil {
+	if version < 0 {
+		_, err = p.Up(ctx)
+	} else {
+		_, err = p.UpTo(ctx, version)
+	}
+	if err != nil {
 		return fmt.Errorf("sqlite: applying migrations: %w", err)
 	}
 	return nil
@@ -201,8 +216,14 @@ func (s *Store) AuthorizationCodes() store.AuthorizationCodes { return s.codes }
 // AccessTokens returns the access token repository.
 func (s *Store) AccessTokens() store.AccessTokens { return s.tokens }
 
+// RefreshTokens returns the refresh token repository.
+func (s *Store) RefreshTokens() store.RefreshTokens { return s.refresh }
+
 // APIResources returns the API resource repository.
 func (s *Store) APIResources() store.APIResources { return s.resources }
+
+// Grants returns the grant repository.
+func (s *Store) Grants() store.Grants { return s.grants }
 
 type tenants struct {
 	q *db.Queries
@@ -344,8 +365,9 @@ type clients struct {
 }
 
 func (r clients) Create(ctx context.Context, c store.Client) error {
-	lists := make([]string, 4)
-	for i, list := range [][]string{c.RedirectURIs, c.PostLogoutRedirectURIs, c.GrantTypes, c.Scopes} {
+	lists := make([]string, 5)
+	for i, list := range [][]string{c.RedirectURIs, c.PostLogoutRedirectURIs, c.GrantTypes, c.Scopes,
+		c.ResourceServerFor} {
 		// A nil slice is encoded as an empty array.
 		b, err := json.Marshal(list)
 		if err != nil {
@@ -372,6 +394,7 @@ func (r clients) Create(ctx context.Context, c store.Client) error {
 		PkceExempt:                          boolInt(c.PKCEExempt),
 		CreatedAt:                           c.CreatedAt.UnixMicro(),
 		UpdatedAt:                           c.UpdatedAt.UnixMicro(),
+		ResourceServerFor:                   lists[4],
 	})
 	return mapError("creating client", err)
 }
@@ -455,8 +478,9 @@ func clientFromRow(row db.Client) (store.Client, error) {
 	if err != nil {
 		return store.Client{}, fmt.Errorf("sqlite: corrupt tenant id %q of client %s: %w", row.TenantID, id, err)
 	}
-	var lists [4][]string
-	for i, encoded := range []string{row.RedirectUris, row.PostLogoutRedirectUris, row.GrantTypes, row.Scopes} {
+	var lists [5][]string
+	for i, encoded := range []string{row.RedirectUris, row.PostLogoutRedirectUris, row.GrantTypes, row.Scopes,
+		row.ResourceServerFor} {
 		if err := json.Unmarshal([]byte(encoded), &lists[i]); err != nil {
 			return store.Client{}, fmt.Errorf("sqlite: corrupt list in client %s: %w", id, err)
 		}
@@ -478,10 +502,11 @@ func clientFromRow(row db.Client) (store.Client, error) {
 			RefreshTokenIdle:     time.Duration(row.RefreshTokenIdleLifetimeSeconds) * time.Second,
 			RefreshTokenAbsolute: time.Duration(row.RefreshTokenAbsoluteLifetimeSeconds) * time.Second,
 		},
-		SkipConsent: row.SkipConsent != 0,
-		PKCEExempt:  row.PkceExempt != 0,
-		CreatedAt:   time.UnixMicro(row.CreatedAt).UTC(),
-		UpdatedAt:   time.UnixMicro(row.UpdatedAt).UTC(),
+		SkipConsent:       row.SkipConsent != 0,
+		PKCEExempt:        row.PkceExempt != 0,
+		ResourceServerFor: lists[4],
+		CreatedAt:         time.UnixMicro(row.CreatedAt).UTC(),
+		UpdatedAt:         time.UnixMicro(row.UpdatedAt).UTC(),
 	}, nil
 }
 

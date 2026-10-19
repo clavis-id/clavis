@@ -51,8 +51,8 @@ func newRootCommand(environ []string) *cobra.Command {
 		SilenceUsage:  true,
 	}
 	root.AddCommand(newServeCommand(environ), newMigrateCommand(environ), newTenantsCommand(environ),
-		newClientsCommand(environ), newResourcesCommand(environ), newUsersCommand(environ), newKeysCommand(),
-		newVersionCommand())
+		newClientsCommand(environ), newResourcesCommand(environ), newUsersCommand(environ),
+		newGrantsCommand(environ), newKeysCommand(), newVersionCommand())
 	return root
 }
 

@@ -34,15 +34,16 @@ type accessTokens struct {
 
 func (r accessTokens) Create(ctx context.Context, t store.AccessToken) error {
 	err := r.q.CreateAccessToken(ctx, db.CreateAccessTokenParams{
-		ID:        t.ID,
-		TenantID:  t.TenantID,
-		ClientID:  t.ClientID,
-		UserID:    optionalID(t.UserID),
-		CodeHash:  t.CodeHash,
-		Scopes:    orEmpty(t.Scopes),
-		IssuedAt:  t.IssuedAt,
-		ExpiresAt: t.ExpiresAt,
-		RevokedAt: optionalTime(t.RevokedAt),
+		ID:             t.ID,
+		TenantID:       t.TenantID,
+		ClientID:       t.ClientID,
+		UserID:         optionalID(t.UserID),
+		CodeHash:       t.CodeHash,
+		Scopes:         orEmpty(t.Scopes),
+		UserinfoClaims: orEmpty(t.UserInfoClaims),
+		IssuedAt:       t.IssuedAt,
+		ExpiresAt:      t.ExpiresAt,
+		RevokedAt:      optionalTime(t.RevokedAt),
 	})
 	return mapError("creating access token", err)
 }
@@ -53,13 +54,14 @@ func (r accessTokens) Get(ctx context.Context, tenantID uuid.UUID, id string) (s
 		return store.AccessToken{}, mapError("getting access token", err)
 	}
 	t := store.AccessToken{
-		ID:        row.ID,
-		TenantID:  row.TenantID,
-		ClientID:  row.ClientID,
-		CodeHash:  row.CodeHash,
-		Scopes:    row.Scopes,
-		IssuedAt:  row.IssuedAt.UTC(),
-		ExpiresAt: row.ExpiresAt.UTC(),
+		ID:             row.ID,
+		TenantID:       row.TenantID,
+		ClientID:       row.ClientID,
+		CodeHash:       row.CodeHash,
+		Scopes:         row.Scopes,
+		UserInfoClaims: row.UserinfoClaims,
+		IssuedAt:       row.IssuedAt.UTC(),
+		ExpiresAt:      row.ExpiresAt.UTC(),
 	}
 	if row.UserID != nil {
 		t.UserID = *row.UserID
@@ -68,6 +70,46 @@ func (r accessTokens) Get(ctx context.Context, tenantID uuid.UUID, id string) (s
 		t.RevokedAt = row.RevokedAt.UTC()
 	}
 	return t, nil
+}
+
+func (r accessTokens) RevokeByUserAndClient(ctx context.Context, tenantID, userID, clientID uuid.UUID, at time.Time,
+) (int64, error) {
+	n, err := r.q.RevokeAccessTokensByUserAndClient(ctx, db.RevokeAccessTokensByUserAndClientParams{
+		RevokedAt: optionalTime(at),
+		TenantID:  tenantID,
+		UserID:    optionalID(userID),
+		ClientID:  clientID,
+	})
+	if err != nil {
+		return 0, mapError("revoking access tokens", err)
+	}
+	return n, nil
+}
+
+func (r accessTokens) Revoke(ctx context.Context, tenantID uuid.UUID, id string, at time.Time) error {
+	n, err := r.q.RevokeAccessToken(ctx, db.RevokeAccessTokenParams{RevokedAt: &at, TenantID: tenantID, ID: id})
+	if err != nil {
+		return mapError("revoking access token", err)
+	}
+	if n == 0 {
+		// The token was revoked already, or does not exist.
+		if _, err := r.Get(ctx, tenantID, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r accessTokens) RevokeBySession(ctx context.Context, tenantID, sessionID uuid.UUID, at time.Time) (int64, error) {
+	n, err := r.q.RevokeAccessTokensBySession(ctx, db.RevokeAccessTokensBySessionParams{
+		RevokedAt: &at,
+		TenantID:  tenantID,
+		SessionID: sessionID,
+	})
+	if err != nil {
+		return 0, mapError("revoking the access tokens of a session", err)
+	}
+	return n, nil
 }
 
 func (r accessTokens) RevokeByCode(ctx context.Context, tenantID uuid.UUID, codeHash []byte, at time.Time) (int64, error) {

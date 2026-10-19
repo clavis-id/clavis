@@ -58,7 +58,9 @@ func TestParseAuthorizationRequest(t *testing.T) {
 	if got.ClientID != "app" || got.RedirectURI != "https://app.example.com/callback" ||
 		!slices.Equal(got.Scopes, []string{"openid", "profile"}) || got.State != "af0ifjsldkj" ||
 		got.Nonce != "n-0S6_WzA2Mj" || got.CodeChallenge != challenge || len(got.Prompt) != 0 ||
-		got.MaxAge != -1 || !got.OpenID() {
+		got.MaxAge != -1 || !got.OpenID() || got.LoginHint != "" || got.IDTokenHint != "" ||
+		got.ResponseMode != ResponseModeQuery ||
+		got.Claims.UserInfo != nil || got.Claims.IDToken != nil {
 		t.Errorf("ParseAuthorizationRequest() = %+v", got)
 	}
 
@@ -79,7 +81,10 @@ func TestParseAuthorizationRequest(t *testing.T) {
 			func(r AuthorizationRequest) bool { return r.State == `a b~!"#\` }},
 		{"longest state", func(p url.Values) { p.Set("state", strings.Repeat("s", MaxStateLength)) },
 			func(r AuthorizationRequest) bool { return len(r.State) == MaxStateLength }},
-		{"response_mode query", func(p url.Values) { p.Set("response_mode", "query") }, nil},
+		{"response_mode query", func(p url.Values) { p.Set("response_mode", "query") },
+			func(r AuthorizationRequest) bool { return r.ResponseMode == ResponseModeQuery }},
+		{"response_mode form_post", func(p url.Values) { p.Set("response_mode", "form_post") },
+			func(r AuthorizationRequest) bool { return r.ResponseMode == ResponseModeFormPost }},
 		{"prompt values", func(p url.Values) { p.Set("prompt", "login consent login") },
 			func(r AuthorizationRequest) bool {
 				return slices.Equal(r.Prompt, []string{"login", "consent"}) && r.HasPrompt(PromptLogin)
@@ -95,9 +100,25 @@ func TestParseAuthorizationRequest(t *testing.T) {
 			p.Set("request_uri", "")
 			p.Set("registration", "")
 		}, nil},
+		{"login_hint", func(p url.Values) { p.Set("login_hint", "Ada Lovelace <ada@exämple.com>") },
+			func(r AuthorizationRequest) bool { return r.LoginHint == "Ada Lovelace <ada@exämple.com>" }},
+		{"longest login_hint", func(p url.Values) { p.Set("login_hint", strings.Repeat("a", MaxLoginHintLength)) },
+			func(r AuthorizationRequest) bool { return len(r.LoginHint) == MaxLoginHintLength }},
+		{"id_token_hint", func(p url.Values) { p.Set("id_token_hint", "header.payload.sig-_") },
+			func(r AuthorizationRequest) bool {
+				return r.IDTokenHint == "header.payload.sig-_"
+			}},
+		{"claims", func(p url.Values) {
+			p.Set("claims", `{"userinfo":{"name":{"essential":true},"email":null},"id_token":{"acr":{"values":["a","b"]}}}`)
+		}, func(r AuthorizationRequest) bool {
+			return len(r.Claims.UserInfo) == 2 && r.Claims.UserInfo["name"].Essential &&
+				slices.Equal(r.Claims.IDToken["acr"].Values, []string{"a", "b"})
+		}},
+		{"empty claims object", func(p url.Values) { p.Set("claims", " {} ") },
+			func(r AuthorizationRequest) bool { return r.Claims.UserInfo == nil && r.Claims.IDToken == nil }},
 		{"ignored parameters", func(p url.Values) {
-			p.Set("login_hint", "ada@example.com")
-			p.Set("claims", "{}")
+			p.Set("acr_values", "urn:a urn:b")
+			p.Set("ui_locales", "es")
 			p["unknown"] = []string{"a", "b"}
 		}, nil},
 	}
@@ -161,6 +182,25 @@ func TestParseAuthorizationRequestErrors(t *testing.T) {
 		{"huge max_age", func(p url.Values) { p.Set("max_age", "2147483648") }, ErrorInvalidRequest, "af0ifjsldkj"},
 		{"overflowing max_age", func(p url.Values) { p.Set("max_age", strings.Repeat("9", 40)) }, ErrorInvalidRequest, "af0ifjsldkj"},
 		{"repeated max_age", func(p url.Values) { p["max_age"] = []string{"1", "1"} }, ErrorInvalidRequest, "af0ifjsldkj"},
+		{"repeated login_hint", func(p url.Values) { p["login_hint"] = []string{"a", "b"} }, ErrorInvalidRequest, "af0ifjsldkj"},
+		{"login_hint with a line break", func(p url.Values) { p.Set("login_hint", "ada\n@example.com") }, ErrorInvalidRequest, "af0ifjsldkj"},
+		{"login_hint with invalid UTF-8", func(p url.Values) { p.Set("login_hint", "ada\xff") }, ErrorInvalidRequest, "af0ifjsldkj"},
+		{"long login_hint", func(p url.Values) { p.Set("login_hint", strings.Repeat("a", MaxLoginHintLength+1)) }, ErrorInvalidRequest, "af0ifjsldkj"},
+		{"repeated id_token_hint", func(p url.Values) { p["id_token_hint"] = []string{"a.b.c", "a.b.c"} }, ErrorInvalidRequest, "af0ifjsldkj"},
+		{"id_token_hint with two parts", func(p url.Values) { p.Set("id_token_hint", "a.b") }, ErrorInvalidRequest, "af0ifjsldkj"},
+		{"id_token_hint with an empty part", func(p url.Values) { p.Set("id_token_hint", "a..c") }, ErrorInvalidRequest, "af0ifjsldkj"},
+		{"id_token_hint outside base64url", func(p url.Values) { p.Set("id_token_hint", "a.b+.c") }, ErrorInvalidRequest, "af0ifjsldkj"},
+		{"JSON id_token_hint", func(p url.Values) { p.Set("id_token_hint", `{"payload":"a"}`) }, ErrorInvalidRequest, "af0ifjsldkj"},
+		{"long id_token_hint", func(p url.Values) {
+			p.Set("id_token_hint", "a."+strings.Repeat("b", MaxIDTokenHintLength)+".c")
+		}, ErrorInvalidRequest, "af0ifjsldkj"},
+		{"repeated claims", func(p url.Values) { p["claims"] = []string{"{}", "{}"} }, ErrorInvalidRequest, "af0ifjsldkj"},
+		{"claims that are not JSON", func(p url.Values) { p.Set("claims", "{userinfo}") }, ErrorInvalidRequest, "af0ifjsldkj"},
+		{"null claims", func(p url.Values) { p.Set("claims", "null") }, ErrorInvalidRequest, "af0ifjsldkj"},
+		{"claims array", func(p url.Values) { p.Set("claims", `[{"userinfo":{}}]`) }, ErrorInvalidRequest, "af0ifjsldkj"},
+		{"long claims", func(p url.Values) {
+			p.Set("claims", `{"userinfo":{"`+strings.Repeat("n", MaxClaimsLength)+`":null}}`)
+		}, ErrorInvalidRequest, "af0ifjsldkj"},
 	}
 	for _, tt := range tests {
 		params := validParams()
@@ -176,6 +216,32 @@ func TestParseAuthorizationRequestErrors(t *testing.T) {
 		}
 		if !validDescription(oauthErr.Description) || oauthErr.Error() != oauthErr.Code+": "+oauthErr.Description {
 			t.Errorf("%s: description %q is not a valid error_description", tt.name, oauthErr.Description)
+		}
+	}
+}
+
+// An error after the response mode goes back in that mode; an error about the
+// response mode itself goes back in the default one.
+func TestParseAuthorizationRequestErrorsKeepTheResponseMode(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name string
+		edit func(url.Values)
+		want string
+	}{
+		{"form_post", func(p url.Values) { p.Set("response_mode", "form_post"); p.Del("scope") }, ResponseModeFormPost},
+		{"invalid response mode", func(p url.Values) { p.Set("response_mode", "fragment") }, ""},
+		{"error before the response mode", func(p url.Values) {
+			p.Set("response_mode", "form_post")
+			p["state"] = []string{"a", "b"}
+		}, ""},
+	} {
+		params := validParams()
+		tt.edit(params)
+		got, err := ParseAuthorizationRequest(params)
+		if err == nil || got.ResponseMode != tt.want {
+			t.Errorf("%s: ParseAuthorizationRequest() = %q, %v; want response mode %q and an error", tt.name,
+				got.ResponseMode, err, tt.want)
 		}
 	}
 }
@@ -220,6 +286,8 @@ func FuzzParseAuthorizationRequest(f *testing.F) {
 		"response_type=code&scope=+openid++openid&max_age=007",
 		"response_type=code&scope=openid&request=x&state=s",
 		"client_id=a&client_id=b",
+		"response_type=code&scope=openid&login_hint=ada%40example.com&id_token_hint=a.b.c",
+		`response_type=code&scope=openid&claims={"userinfo":{"name":{"essential":true}},"id_token":{"acr":{"values":["x"]}}}`,
 	} {
 		f.Add(seed)
 	}
@@ -255,6 +323,10 @@ func FuzzParseAuthorizationRequest(f *testing.F) {
 		}
 		if r.HasPrompt(PromptNone) && len(r.Prompt) != 1 {
 			t.Errorf("ParseAuthorizationRequest(%q) accepted prompt %q", query, r.Prompt)
+		}
+		if len(r.LoginHint) > MaxLoginHintLength || !printableText(r.LoginHint) ||
+			len(r.IDTokenHint) > MaxIDTokenHintLength || !compactJWS(r.IDTokenHint) {
+			t.Errorf("ParseAuthorizationRequest(%q) accepted the hints %q and %q", query, r.LoginHint, r.IDTokenHint)
 		}
 	})
 }

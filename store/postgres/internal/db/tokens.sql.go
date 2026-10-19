@@ -13,23 +13,25 @@ import (
 )
 
 const createAccessToken = `-- name: CreateAccessToken :exec
-INSERT INTO access_tokens (id, tenant_id, client_id, user_id, code_hash, scopes, issued_at, expires_at, revoked_at)
-VALUES (
+INSERT INTO access_tokens (
+    id, tenant_id, client_id, user_id, code_hash, scopes, userinfo_claims, issued_at, expires_at, revoked_at
+) VALUES (
     $1, $2, $3, $4, $5, $6,
-    $7, $8, $9
+    $7, $8, $9, $10
 )
 `
 
 type CreateAccessTokenParams struct {
-	ID        string
-	TenantID  uuid.UUID
-	ClientID  uuid.UUID
-	UserID    *uuid.UUID
-	CodeHash  []byte
-	Scopes    []string
-	IssuedAt  time.Time
-	ExpiresAt time.Time
-	RevokedAt *time.Time
+	ID             string
+	TenantID       uuid.UUID
+	ClientID       uuid.UUID
+	UserID         *uuid.UUID
+	CodeHash       []byte
+	Scopes         []string
+	UserinfoClaims []string
+	IssuedAt       time.Time
+	ExpiresAt      time.Time
+	RevokedAt      *time.Time
 }
 
 func (q *Queries) CreateAccessToken(ctx context.Context, arg CreateAccessTokenParams) error {
@@ -40,6 +42,7 @@ func (q *Queries) CreateAccessToken(ctx context.Context, arg CreateAccessTokenPa
 		arg.UserID,
 		arg.CodeHash,
 		arg.Scopes,
+		arg.UserinfoClaims,
 		arg.IssuedAt,
 		arg.ExpiresAt,
 		arg.RevokedAt,
@@ -61,7 +64,7 @@ func (q *Queries) DeleteExpiredAccessTokens(ctx context.Context, now time.Time) 
 }
 
 const getAccessToken = `-- name: GetAccessToken :one
-SELECT id, tenant_id, client_id, user_id, code_hash, scopes, issued_at, expires_at, revoked_at
+SELECT id, tenant_id, client_id, user_id, code_hash, scopes, userinfo_claims, issued_at, expires_at, revoked_at
 FROM access_tokens
 WHERE tenant_id = $1 AND id = $2
 `
@@ -71,9 +74,22 @@ type GetAccessTokenParams struct {
 	ID       string
 }
 
-func (q *Queries) GetAccessToken(ctx context.Context, arg GetAccessTokenParams) (AccessToken, error) {
+type GetAccessTokenRow struct {
+	ID             string
+	TenantID       uuid.UUID
+	ClientID       uuid.UUID
+	UserID         *uuid.UUID
+	CodeHash       []byte
+	Scopes         []string
+	UserinfoClaims []string
+	IssuedAt       time.Time
+	ExpiresAt      time.Time
+	RevokedAt      *time.Time
+}
+
+func (q *Queries) GetAccessToken(ctx context.Context, arg GetAccessTokenParams) (GetAccessTokenRow, error) {
 	row := q.db.QueryRow(ctx, getAccessToken, arg.TenantID, arg.ID)
-	var i AccessToken
+	var i GetAccessTokenRow
 	err := row.Scan(
 		&i.ID,
 		&i.TenantID,
@@ -81,11 +97,32 @@ func (q *Queries) GetAccessToken(ctx context.Context, arg GetAccessTokenParams) 
 		&i.UserID,
 		&i.CodeHash,
 		&i.Scopes,
+		&i.UserinfoClaims,
 		&i.IssuedAt,
 		&i.ExpiresAt,
 		&i.RevokedAt,
 	)
 	return i, err
+}
+
+const revokeAccessToken = `-- name: RevokeAccessToken :execrows
+UPDATE access_tokens
+SET revoked_at = $1
+WHERE tenant_id = $2 AND id = $3 AND revoked_at IS NULL
+`
+
+type RevokeAccessTokenParams struct {
+	RevokedAt *time.Time
+	TenantID  uuid.UUID
+	ID        string
+}
+
+func (q *Queries) RevokeAccessToken(ctx context.Context, arg RevokeAccessTokenParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeAccessToken, arg.RevokedAt, arg.TenantID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const revokeAccessTokensByCode = `-- name: RevokeAccessTokensByCode :execrows
@@ -102,6 +139,63 @@ type RevokeAccessTokensByCodeParams struct {
 
 func (q *Queries) RevokeAccessTokensByCode(ctx context.Context, arg RevokeAccessTokensByCodeParams) (int64, error) {
 	result, err := q.db.Exec(ctx, revokeAccessTokensByCode, arg.RevokedAt, arg.TenantID, arg.CodeHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokeAccessTokensBySession = `-- name: RevokeAccessTokensBySession :execrows
+UPDATE access_tokens
+SET revoked_at = $1
+WHERE access_tokens.tenant_id = $2 AND access_tokens.revoked_at IS NULL
+    AND access_tokens.code_hash IN (
+        SELECT c.hash
+        FROM authorization_codes c
+        WHERE c.tenant_id = $2 AND c.session_id = $3
+            AND NOT EXISTS (
+                SELECT 1
+                FROM refresh_token_families f
+                WHERE f.tenant_id = c.tenant_id AND f.code_hash = c.hash
+            )
+    )
+`
+
+type RevokeAccessTokensBySessionParams struct {
+	RevokedAt *time.Time
+	TenantID  uuid.UUID
+	SessionID uuid.UUID
+}
+
+func (q *Queries) RevokeAccessTokensBySession(ctx context.Context, arg RevokeAccessTokensBySessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeAccessTokensBySession, arg.RevokedAt, arg.TenantID, arg.SessionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokeAccessTokensByUserAndClient = `-- name: RevokeAccessTokensByUserAndClient :execrows
+UPDATE access_tokens
+SET revoked_at = $1
+WHERE tenant_id = $2 AND user_id = $3 AND client_id = $4
+    AND revoked_at IS NULL
+`
+
+type RevokeAccessTokensByUserAndClientParams struct {
+	RevokedAt *time.Time
+	TenantID  uuid.UUID
+	UserID    *uuid.UUID
+	ClientID  uuid.UUID
+}
+
+func (q *Queries) RevokeAccessTokensByUserAndClient(ctx context.Context, arg RevokeAccessTokensByUserAndClientParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeAccessTokensByUserAndClient,
+		arg.RevokedAt,
+		arg.TenantID,
+		arg.UserID,
+		arg.ClientID,
+	)
 	if err != nil {
 		return 0, err
 	}

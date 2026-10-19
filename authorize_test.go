@@ -22,7 +22,8 @@ const testChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
 const testPassword = "correct horse battery"
 
 // newLoginServer returns a server whose tenant, the default one unless a
-// slug is given, has the client "web" and the user ada@example.com.
+// slug is given, has the client "web", which skips consent, and the user
+// ada@example.com.
 func newLoginServer(t testing.TB, issuer, slug string) (*Server, store.Tenant) {
 	t.Helper()
 	cfg := testConfig(t, openStore(t))
@@ -36,10 +37,12 @@ func newLoginServer(t testing.TB, issuer, slug string) (*Server, store.Tenant) {
 		}
 	}
 	if _, _, err := app.CreateClient(t.Context(), s.deps, tn.ID, app.ClientSpec{
-		ClientID:     "web",
-		Name:         "Web App",
-		Type:         store.ClientConfidential,
-		RedirectURIs: []string{"https://app.example.com/callback"},
+		ClientID:               "web",
+		Name:                   "Web App",
+		Type:                   store.ClientConfidential,
+		RedirectURIs:           []string{"https://app.example.com/callback"},
+		PostLogoutRedirectURIs: []string{"https://app.example.com/signed-out"},
+		SkipConsent:            true,
 	}); err != nil {
 		t.Fatalf("CreateClient() unexpected error: %v", err)
 	}
@@ -339,8 +342,11 @@ func TestLoginReplacesTheSession(t *testing.T) {
 	b := newBrowser(t, s.Handler())
 	name := "__Host-clavis-session-" + tn.ID.String()
 	var tokens []string
+	// prompt=login keeps the second request from using the first session.
+	query := authorizeQuery()
+	query.Set("prompt", "login")
 	for range 2 {
-		id := b.startLogin(issuer, authorizeQuery())
+		id := b.startLogin(issuer, query)
 		if res, _ := b.post(issuer+"/login", loginForm(id, testPassword), "same-origin"); res.StatusCode != http.StatusSeeOther {
 			t.Fatalf("login = %d, want 303", res.StatusCode)
 		}
@@ -352,6 +358,151 @@ func TestLoginReplacesTheSession(t *testing.T) {
 	if _, err := s.store.Sessions().GetByTokenHash(t.Context(), tn.ID, oauth.HashToken(tokens[0])); err == nil {
 		t.Error("the first session still exists after the second login")
 	}
+}
+
+func TestSingleSignOn(t *testing.T) {
+	t.Parallel()
+	const issuer = "https://auth.example.com"
+	s, tn := newLoginServer(t, issuer, "")
+	b := newBrowser(t, s.Handler())
+	id := b.startLogin(issuer, authorizeQuery())
+	if res, _ := b.post(issuer+"/login", loginForm(id, testPassword), "same-origin"); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("login = %d, want 303", res.StatusCode)
+	}
+
+	// The session answers the next request, even one that forbids
+	// interaction, without the login page.
+	query := authorizeQuery()
+	query.Set("prompt", "none")
+	res, _ := b.get(issuer + "/oauth2/authorize?" + query.Encode())
+	loc, err := url.Parse(res.Header.Get("Location"))
+	if res.StatusCode != http.StatusSeeOther || err != nil || !strings.HasPrefix(loc.String(), "https://app.example.com/callback?") ||
+		loc.Query().Get("code") == "" || loc.Query().Get("state") != "af0ifjsldkj" {
+		t.Fatalf("authorize with a session = %d to %q, want a code", res.StatusCode, res.Header.Get("Location"))
+	}
+	if res.Header.Get("Cache-Control") != "no-store" || res.Header.Get("Referrer-Policy") != "no-referrer" {
+		t.Errorf("authorization response headers = %v", res.Header)
+	}
+	if _, err := s.store.AuthorizationCodes().Get(t.Context(), tn.ID, oauth.HashToken(loc.Query().Get("code"))); err != nil {
+		t.Errorf("the issued code: %v", err)
+	}
+
+	// Another browser has no session.
+	res, _ = newBrowser(t, s.Handler()).get(issuer + "/oauth2/authorize?" + query.Encode())
+	if loc, err := url.Parse(res.Header.Get("Location")); res.StatusCode != http.StatusSeeOther || err != nil ||
+		loc.Query().Get("error") != "login_required" {
+		t.Errorf("authorize with prompt=none and no session = %d to %q, want login_required", res.StatusCode,
+			res.Header.Get("Location"))
+	}
+
+	// prompt=login shows the login page, filled in with the login hint.
+	query = authorizeQuery()
+	query.Set("prompt", "login")
+	query.Set("login_hint", "Grace@Example.com")
+	id = b.startLogin(issuer, query)
+	if res, page := b.get(issuer + "/login?request=" + id); res.StatusCode != http.StatusOK ||
+		!strings.Contains(page, `value="grace@example.com"`) {
+		t.Errorf("login page with a login hint = %d:\n%s", res.StatusCode, page)
+	}
+}
+
+func TestConsent(t *testing.T) {
+	t.Parallel()
+	const issuer = "https://auth.example.com"
+	s, tn := newLoginServer(t, issuer, "")
+	if _, _, err := app.CreateClient(t.Context(), s.deps, tn.ID, app.ClientSpec{
+		ClientID: "partner", Name: "Partner App", Type: store.ClientConfidential,
+		RedirectURIs: []string{"https://partner.example.com/callback"},
+	}); err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	query := authorizeQuery()
+	query.Set("client_id", "partner")
+	query.Set("redirect_uri", "https://partner.example.com/callback")
+	query.Set("scope", "openid email")
+	b := newBrowser(t, s.Handler())
+	id := b.startLogin(issuer, query)
+	res, _ := b.post(issuer+"/login", loginForm(id, testPassword), "same-origin")
+	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != issuer+"/consent?request="+id {
+		t.Fatalf("login = %d to %q, want the consent page", res.StatusCode, res.Header.Get("Location"))
+	}
+	// Going back to the login page leads to the consent page.
+	if res, _ := b.get(issuer + "/login?request=" + id); res.Header.Get("Location") != issuer+"/consent?request="+id {
+		t.Errorf("login page of a signed-in request = %d to %q", res.StatusCode, res.Header.Get("Location"))
+	}
+
+	res, page := b.get(issuer + "/consent?request=" + id)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("consent page = %d:\n%s", res.StatusCode, page)
+	}
+	for _, want := range []string{"Partner App", "ada@example.com", "Know who you are", "See your email address",
+		`id="allow"`, `id="deny"`, `action="/consent"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("consent page does not contain %q:\n%s", want, page)
+		}
+	}
+	if csp := res.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "form-action 'self' https://partner.example.com;") {
+		t.Errorf("Content-Security-Policy = %q, want the client as a form target", csp)
+	}
+
+	// Another browser cannot see or answer the request.
+	if res, _ := newBrowser(t, s.Handler()).get(issuer + "/consent?request=" + id); res.StatusCode != http.StatusBadRequest {
+		t.Errorf("consent page from another browser = %d, want 400", res.StatusCode)
+	}
+	decide := func(decision, site string) (response, string) {
+		t.Helper()
+		return b.post(issuer+"/consent", url.Values{"request": {id}, "decision": {decision}}, site)
+	}
+	if res, _ := decide("allow", "cross-site"); res.StatusCode != http.StatusForbidden {
+		t.Errorf("cross-site consent = %d, want 403", res.StatusCode)
+	}
+	if res, _ := decide("maybe", "same-origin"); res.StatusCode != http.StatusBadRequest {
+		t.Errorf("consent with an unknown decision = %d, want 400", res.StatusCode)
+	}
+	res, _ = decide("allow", "same-origin")
+	loc, err := url.Parse(res.Header.Get("Location"))
+	if res.StatusCode != http.StatusSeeOther || err != nil || !strings.HasPrefix(loc.String(), "https://partner.example.com/callback?") ||
+		loc.Query().Get("code") == "" || res.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("consent = %d to %q, want a code", res.StatusCode, res.Header.Get("Location"))
+	}
+
+	// The grant answers the next request; prompt=consent asks again, and a
+	// denial goes back to the client.
+	res, _ = b.get(issuer + "/oauth2/authorize?" + query.Encode())
+	if loc, _ := url.Parse(res.Header.Get("Location")); res.StatusCode != http.StatusSeeOther || loc.Query().Get("code") == "" {
+		t.Errorf("authorize with a grant = %d to %q, want a code", res.StatusCode, res.Header.Get("Location"))
+	}
+	query.Set("prompt", "consent")
+	res, _ = b.get(issuer + "/oauth2/authorize?" + query.Encode())
+	loc, err = url.Parse(res.Header.Get("Location"))
+	if res.StatusCode != http.StatusSeeOther || err != nil || loc.Path != "/consent" {
+		t.Fatalf("authorize with prompt=consent = %d to %q, want the consent page", res.StatusCode, res.Header.Get("Location"))
+	}
+	id = loc.Query().Get("request")
+	res, _ = decide("deny", "same-origin")
+	if loc, _ := url.Parse(res.Header.Get("Location")); res.StatusCode != http.StatusSeeOther ||
+		loc.Query().Get("error") != "access_denied" {
+		t.Errorf("denial = %d to %q, want access_denied", res.StatusCode, res.Header.Get("Location"))
+	}
+}
+
+func TestSessionsBelongToOneTenant(t *testing.T) {
+	t.Parallel()
+	const issuer = "https://auth.example.com"
+	s, _ := newLoginServer(t, issuer, "acme")
+	b := newBrowser(t, s.Handler())
+	id := b.startLogin(issuer+"/t/acme", authorizeQuery())
+	if res, _ := b.post(issuer+"/t/acme/login", loginForm(id, testPassword), "same-origin"); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("login = %d, want 303", res.StatusCode)
+	}
+	if _, _, err := app.CreateClient(t.Context(), s.deps, s.defaultTenant.ID, app.ClientSpec{
+		ClientID: "web", Type: store.ClientConfidential, RedirectURIs: []string{"https://app.example.com/callback"},
+	}); err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	// The session of acme does not sign the browser in to the default
+	// tenant.
+	b.startLogin(issuer, authorizeQuery())
 }
 
 func TestTenantLogin(t *testing.T) {
@@ -495,4 +646,44 @@ func TestAuthorizeRejectsHEAD(t *testing.T) {
 	if n, err := s.store.AuthorizationRequests().DeleteExpired(t.Context(), time.Now().Add(time.Hour)); err != nil || n != 0 {
 		t.Errorf("stored requests after HEAD = %d, %v; want none", n, err)
 	}
+}
+
+// OAuth 2.0 Form Post Response Mode, section 2: the browser posts the
+// response to the redirect URI from a page that submits itself.
+func TestFormPostResponseMode(t *testing.T) {
+	t.Parallel()
+	const issuer = "https://auth.example.com"
+	s, _ := newLoginServer(t, issuer, "")
+	b := newBrowser(t, s.Handler())
+	query := authorizeQuery()
+	query.Set("response_mode", "form_post")
+	id := b.startLogin(issuer, query)
+
+	checkFormPost := func(name string, res response, page, field string) {
+		t.Helper()
+		if res.StatusCode != http.StatusOK || res.Header.Get("Location") != "" ||
+			!strings.Contains(page, `<form id="response" method="post" action="https://app.example.com/callback">`) ||
+			!strings.Contains(page, `name="`+field+`"`) || !strings.Contains(page, `name="state" value="af0ifjsldkj"`) ||
+			!strings.Contains(page, `name="iss" value="`+issuer+`"`) {
+			t.Fatalf("%s = %d %v:\n%s", name, res.StatusCode, res.Header, page)
+		}
+		csp := res.Header.Get("Content-Security-Policy")
+		for _, want := range []string{"script-src 'sha256-", "form-action https://app.example.com;", "default-src 'none'"} {
+			if !strings.Contains(csp, want) {
+				t.Errorf("%s: Content-Security-Policy = %q, want %q", name, csp, want)
+			}
+		}
+		if res.Header.Get("Cache-Control") != "no-store" || res.Header.Get("Referrer-Policy") != "no-referrer" {
+			t.Errorf("%s: headers = %v", name, res.Header)
+		}
+	}
+	res, page := b.post(issuer+"/login", loginForm(id, testPassword), "same-origin")
+	checkFormPost("login", res, page, "code")
+
+	// With the session, the response comes at once, and errors too.
+	res, page = b.get(issuer + "/oauth2/authorize?" + query.Encode())
+	checkFormPost("single sign-on", res, page, "code")
+	query.Set("prompt", "login none")
+	res, page = b.get(issuer + "/oauth2/authorize?" + query.Encode())
+	checkFormPost("error", res, page, "error")
 }

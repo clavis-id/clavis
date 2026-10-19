@@ -26,6 +26,11 @@ The design decisions this plan relies on are recorded as ADRs:
 | [0016](../adr/0016-administration-and-the-admin-tenant.md) | Admin API authenticated with OAuth tokens from a reserved `admin` tenant; CLI bootstrap |
 | [0017](../adr/0017-openid-conformance-suite-in-ci.md) | OpenID conformance suite in CI with committed expected failures |
 | [0018](../adr/0018-pkce-exemption-is-a-client-setting.md) | The PKCE exemption for confidential clients is a client setting (supersedes the PKCE policy of 0014) |
+| [0019](../adr/0019-authentication-context-class-references.md) | `acr` values are URIs under `https://clavisid.org/acr/` plus the EAP values `phr` and `phrh`; `acr_values` is voluntary |
+| [0020](../adr/0020-consent-and-grants.md) | Grants per user and client; consent when a scope is new or `prompt=consent`; revoking a grant revokes its tokens |
+| [0021](../adr/0021-refresh-token-rotation.md) | Refresh tokens with `offline_access` or for OAuth requests; one family per code exchange; concurrent refreshes count as reuse; tokens recorded before the step that validates them |
+| [0022](../adr/0022-revocation-and-introspection.md) | Revoking a refresh token revokes its family; clients introspect their own tokens, and resource server clients the access tokens for their API resources |
+| [0023](../adr/0023-logout-and-form-post.md) | Logout asks for confirmation and ends the session's online access; post-logout redirects need an `id_token_hint`; retired keys stay published 15 days; form post responses |
 
 ## Rules for every work item
 

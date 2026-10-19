@@ -59,8 +59,12 @@ type Store interface {
 	AuthorizationCodes() AuthorizationCodes
 	// AccessTokens returns the access token repository.
 	AccessTokens() AccessTokens
+	// RefreshTokens returns the refresh token repository.
+	RefreshTokens() RefreshTokens
 	// APIResources returns the API resource repository.
 	APIResources() APIResources
+	// Grants returns the grant repository.
+	Grants() Grants
 	// Ping reports whether the underlying database is reachable.
 	Ping(ctx context.Context) error
 }
@@ -178,8 +182,12 @@ type Client struct {
 	// PKCEExempt lets a confidential client send authorization requests
 	// without PKCE.
 	PKCEExempt bool
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	// ResourceServerFor lists the identifiers of the API resources whose
+	// server the client is. It may introspect the access tokens issued for
+	// them (ADR 0022).
+	ResourceServerFor []string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // TokenLifetimes holds the lifetimes of the tokens issued to a client. A zero
@@ -345,8 +353,29 @@ type AuthorizationRequest struct {
 	// no PKCE challenge.
 	CodeChallenge       string
 	CodeChallengeMethod string
-	CreatedAt           time.Time
-	ExpiresAt           time.Time
+	// LoginHint is the email address to suggest on the sign-in form, or
+	// empty.
+	LoginHint string
+	// HintSubject is the user who alone may answer the request, named by its
+	// id_token_hint or by the sub claim it requests with a value, or the zero
+	// UUID. It is not a reference: the user may have been deleted since.
+	HintSubject uuid.UUID
+	// UserInfoClaims and IDTokenClaims name the claims that the request asks
+	// for individually, for the userinfo response and the ID token.
+	UserInfoClaims []string
+	IDTokenClaims  []string
+	// ForceConsent reports whether the request carries prompt=consent, which
+	// asks for consent even when a grant covers the request (ADR 0020).
+	ForceConsent bool
+	// SessionID is the session of the user who authenticated for the
+	// request, which waits for the user's consent, or the zero UUID until
+	// then. It is not a reference: the session may have ended since.
+	SessionID uuid.UUID
+	// ResponseMode is how the response goes back to the client: query or
+	// form_post (OAuth 2.0 Form Post Response Mode).
+	ResponseMode string
+	CreatedAt    time.Time
+	ExpiresAt    time.Time
 }
 
 // AuthorizationRequests stores authorization requests. Every method works
@@ -358,6 +387,12 @@ type AuthorizationRequests interface {
 	// Get returns the request of a tenant with the given ID, or ErrNotFound.
 	// It returns expired requests too; callers check ExpiresAt.
 	Get(ctx context.Context, tenantID uuid.UUID, id string) (AuthorizationRequest, error)
+	// SetSession records the session of the user who authenticated for the
+	// request of a tenant with the given ID. A request gets a session once:
+	// SetSession returns ErrConflict when the request has one already, so of
+	// several concurrent callers exactly one succeeds, and ErrNotFound when
+	// there is no such request.
+	SetSession(ctx context.Context, tenantID uuid.UUID, id string, sessionID uuid.UUID) error
 	// Delete removes the request of a tenant with the given ID, or returns
 	// ErrNotFound. When several callers delete the same request at once,
 	// exactly one succeeds, which makes a request single use.
@@ -399,6 +434,10 @@ type Sessions interface {
 	// hash, or ErrNotFound. It returns expired sessions too; callers check
 	// the expiry times.
 	GetByTokenHash(ctx context.Context, tenantID uuid.UUID, tokenHash []byte) (Session, error)
+	// Touch records that the session of a tenant with the given ID was used
+	// at lastSeenAt and moves its IdleExpiresAt to idleExpiresAt. It returns
+	// ErrNotFound when there is no such session.
+	Touch(ctx context.Context, tenantID, id uuid.UUID, lastSeenAt, idleExpiresAt time.Time) error
 	// Delete removes the session of a tenant with the given ID, or returns
 	// ErrNotFound.
 	Delete(ctx context.Context, tenantID, id uuid.UUID) error
@@ -429,8 +468,12 @@ type AuthorizationCode struct {
 	AuthTime            time.Time
 	AMR                 []string
 	ACR                 string
-	CreatedAt           time.Time
-	ExpiresAt           time.Time
+	// UserInfoClaims and IDTokenClaims are those of the authorization
+	// request.
+	UserInfoClaims []string
+	IDTokenClaims  []string
+	CreatedAt      time.Time
+	ExpiresAt      time.Time
 	// RedeemedAt is when the code was exchanged for tokens, or zero. Create
 	// ignores it; Redeem sets it.
 	RedeemedAt time.Time
@@ -451,6 +494,17 @@ type AuthorizationCodes interface {
 	// already, so of several concurrent callers exactly one succeeds, and
 	// ErrNotFound when there is no such code.
 	Redeem(ctx context.Context, tenantID uuid.UUID, hash []byte, at time.Time) error
+	// DeleteByUserAndClient removes the codes of a tenant that were issued to
+	// the client for the user, and returns how many were removed.
+	DeleteByUserAndClient(ctx context.Context, tenantID, userID, clientID uuid.UUID) (int64, error)
+	// DeleteBySession removes the codes of a tenant that were issued in the
+	// session with the given ID and not redeemed yet, and returns how many
+	// were removed. Redeemed codes stay, so that replays are still detected.
+	DeleteBySession(ctx context.Context, tenantID, sessionID uuid.UUID) (int64, error)
+	// MoveSession moves the codes of a tenant that were issued in the session
+	// with the ID from to the session with the ID to, and returns how many it
+	// moved.
+	MoveSession(ctx context.Context, tenantID, from, to uuid.UUID) (int64, error)
 	// DeleteExpired removes the codes of every tenant whose ExpiresAt is not
 	// after before, and returns how many were removed. Callers keep expired
 	// codes for a while by passing a time in the past.
@@ -467,12 +521,15 @@ type AccessToken struct {
 	ClientID uuid.UUID
 	// UserID is the zero UUID for a token that a client obtained for itself.
 	UserID uuid.UUID
-	// CodeHash is the hash of the authorization code the token was issued
-	// for, or nil.
-	CodeHash  []byte
-	Scopes    []string
-	IssuedAt  time.Time
-	ExpiresAt time.Time
+	// CodeHash is the hash of the authorization code that the token derives
+	// from, directly or through refresh tokens, or nil.
+	CodeHash []byte
+	Scopes   []string
+	// UserInfoClaims names the claims that the authorization request asked
+	// for individually, which the userinfo response includes.
+	UserInfoClaims []string
+	IssuedAt       time.Time
+	ExpiresAt      time.Time
 	// RevokedAt is when the token was revoked, or zero.
 	RevokedAt time.Time
 }
@@ -487,12 +544,114 @@ type AccessTokens interface {
 	// Get returns the token of a tenant with the given ID, or ErrNotFound.
 	// It returns expired and revoked tokens too.
 	Get(ctx context.Context, tenantID uuid.UUID, id string) (AccessToken, error)
+	// Revoke revokes the token of a tenant with the given ID at the given
+	// time, or returns ErrNotFound. A revoked token keeps the time of its
+	// first revocation.
+	Revoke(ctx context.Context, tenantID uuid.UUID, id string, at time.Time) error
+	// RevokeBySession revokes, at the given time, the tokens of a tenant
+	// that are not revoked yet and derive from a code issued in the session
+	// with the given ID that started no refresh token family, and returns
+	// how many it revoked. These are the session's online access: tokens of
+	// a refresh token family are offline access, which outlives the session
+	// (ADR 0021). Codes that were deleted are not found.
+	RevokeBySession(ctx context.Context, tenantID, sessionID uuid.UUID, at time.Time) (int64, error)
 	// RevokeByCode revokes, at the given time, the tokens of a tenant that
 	// were issued for the code with the given hash and are not revoked yet,
 	// and returns how many it revoked.
 	RevokeByCode(ctx context.Context, tenantID uuid.UUID, codeHash []byte, at time.Time) (int64, error)
+	// RevokeByUserAndClient revokes, at the given time, the tokens of a
+	// tenant that were issued to the client for the user and are not revoked
+	// yet, and returns how many it revoked.
+	RevokeByUserAndClient(ctx context.Context, tenantID, userID, clientID uuid.UUID, at time.Time) (int64, error)
 	// DeleteExpired removes the tokens of every tenant whose ExpiresAt is not
 	// after now, and returns how many were removed.
+	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
+}
+
+// RefreshTokenFamily is the chain of refresh tokens that one authorization
+// grant yields (ADR 0014, ADR 0021). Each refresh replaces the current token
+// of the family with a successor; presenting a replaced token revokes the
+// whole family. The family keeps what its tokens grant.
+type RefreshTokenFamily struct {
+	// ID is a version 7 UUID assigned on creation.
+	ID       uuid.UUID
+	TenantID uuid.UUID
+	// ClientID is the ID of the client record.
+	ClientID uuid.UUID
+	UserID   uuid.UUID
+	// SessionID is the session in which the user authenticated, or the zero
+	// UUID. It is not a reference: the family can outlive the session.
+	SessionID uuid.UUID
+	// CodeHash is the hash of the authorization code that the family was
+	// issued for, or nil.
+	CodeHash []byte
+	Scopes   []string
+	AuthTime time.Time
+	AMR      []string
+	ACR      string
+	// UserInfoClaims and IDTokenClaims are those of the authorization
+	// request.
+	UserInfoClaims []string
+	IDTokenClaims  []string
+	CreatedAt      time.Time
+	// IdleExpiresAt is when the family ends unless its current token is
+	// used, and ExpiresAt is when it ends regardless.
+	IdleExpiresAt time.Time
+	ExpiresAt     time.Time
+	// RevokedAt is when the family was revoked, or zero. Create ignores it.
+	RevokedAt time.Time
+}
+
+// RefreshToken is a refresh token of a family. The token itself is never
+// stored.
+type RefreshToken struct {
+	// Hash is the SHA-256 hash of the token, which identifies it.
+	Hash      []byte
+	TenantID  uuid.UUID
+	FamilyID  uuid.UUID
+	IssuedAt  time.Time
+	ExpiresAt time.Time
+	// RotatedAt is when the token was replaced by its successor, or zero.
+	// Create and Rotate ignore it for the tokens they insert.
+	RotatedAt time.Time
+}
+
+// RefreshTokens stores refresh tokens and their families. Every method works
+// within one tenant, except DeleteExpired.
+type RefreshTokens interface {
+	// Create inserts the family f with its first token t, which must belong
+	// to f. It returns ErrConflict when the ID of f or the hash of t is in
+	// use, ErrNotFound when the client or the user does not exist in the
+	// tenant, and ErrInvalidArgument when t does not belong to f.
+	Create(ctx context.Context, f RefreshTokenFamily, t RefreshToken) error
+	// Get returns the token of a tenant with the given hash and its family,
+	// or ErrNotFound. It returns rotated, expired and revoked tokens too;
+	// callers check RotatedAt and the times of the token and the family.
+	Get(ctx context.Context, tenantID uuid.UUID, hash []byte) (RefreshToken, RefreshTokenFamily, error)
+	// Rotate replaces the token of a tenant with the given hash by next,
+	// which must belong to the same family. In one transaction it marks the
+	// token as rotated at next.IssuedAt, moves the IdleExpiresAt of the
+	// family to next.ExpiresAt and inserts next. It returns ErrConflict when
+	// the token was rotated already, so of several concurrent callers exactly
+	// one succeeds, or when the family was revoked, and ErrNotFound when the
+	// family of next has no token with that hash.
+	Rotate(ctx context.Context, tenantID uuid.UUID, hash []byte, next RefreshToken) error
+	// RevokeFamily revokes the family of a tenant with the given ID at the
+	// given time, or returns ErrNotFound. A revoked family keeps the time of
+	// its first revocation.
+	RevokeFamily(ctx context.Context, tenantID, id uuid.UUID, at time.Time) error
+	// RevokeByCode revokes, at the given time, the families of a tenant that
+	// were issued for the code with the given hash and are not revoked yet,
+	// and returns how many it revoked.
+	RevokeByCode(ctx context.Context, tenantID uuid.UUID, codeHash []byte, at time.Time) (int64, error)
+	// RevokeByUserAndClient revokes, at the given time, the families of a
+	// tenant that were issued to the client for the user and are not revoked
+	// yet, and returns how many it revoked.
+	RevokeByUserAndClient(ctx context.Context, tenantID, userID, clientID uuid.UUID, at time.Time) (int64, error)
+	// DeleteExpired removes the tokens of every tenant whose ExpiresAt is not
+	// after now, then the families whose ExpiresAt or IdleExpiresAt is not
+	// after now, with any tokens they still have. It returns how many
+	// families were removed.
 	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
 }
 
@@ -529,4 +688,35 @@ type APIResources interface {
 	// Delete removes the resource of a tenant with the given ID, or returns
 	// ErrNotFound.
 	Delete(ctx context.Context, tenantID, id uuid.UUID) error
+}
+
+// Grant records the scopes that a user allowed a client (ADR 0020). A tenant
+// has at most one grant per user and client.
+type Grant struct {
+	// ID is a version 7 UUID assigned on creation.
+	ID       uuid.UUID
+	TenantID uuid.UUID
+	UserID   uuid.UUID
+	// ClientID is the ID of the client record.
+	ClientID  uuid.UUID
+	Scopes    []string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// Grants stores grants. Every method works within one tenant.
+type Grants interface {
+	// Get returns the grant of a tenant for the user and client, or
+	// ErrNotFound.
+	Get(ctx context.Context, tenantID, userID, clientID uuid.UUID) (Grant, error)
+	// Put stores g as the grant of its user and client. When they have a
+	// grant already, Put replaces its scopes and update time, and keeps its
+	// ID and creation time. It returns ErrNotFound when the user or the
+	// client does not exist in the tenant.
+	Put(ctx context.Context, g Grant) error
+	// List returns the grants of a user of a tenant, oldest first.
+	List(ctx context.Context, tenantID, userID uuid.UUID) ([]Grant, error)
+	// Delete removes the grant of a tenant for the user and client, or
+	// returns ErrNotFound.
+	Delete(ctx context.Context, tenantID, userID, clientID uuid.UUID) error
 }

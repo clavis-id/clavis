@@ -161,19 +161,20 @@ tenant is not reachable under `/t/default`.
 | `/.well-known/openid-configuration` | OpenID Connect Discovery 1.0 | 1 (implemented) |
 | `/.well-known/oauth-authorization-server` | RFC 8414 | 1 (implemented) |
 | `/oauth2/authorize` | RFC 6749, OAuth 2.1, PKCE (RFC 7636), RFC 9207 | 1 (authorization code flow implemented) |
-| `/oauth2/token` | RFC 6749, OAuth 2.1, PKCE (RFC 7636), RFC 9068 | 1 (authorization code and client credentials implemented) |
+| `/oauth2/token` | RFC 6749, OAuth 2.1, PKCE (RFC 7636), RFC 9068 | 1 (authorization code, refresh token and client credentials implemented) |
 | `/oauth2/jwks` | RFC 7517 | 0 (implemented) |
 | `/oauth2/userinfo` | OpenID Connect Core 1.0, RFC 6750 | 1 (implemented) |
-| `/oauth2/revoke` | RFC 7009 | 1 |
-| `/oauth2/introspect` | RFC 7662 | 1 |
-| `/oauth2/logout` | OpenID Connect RP-Initiated Logout 1.0 | 1 |
+| `/oauth2/revoke` | RFC 7009 | 1 (implemented) |
+| `/oauth2/introspect` | RFC 7662 | 1 (implemented) |
+| `/oauth2/logout` | OpenID Connect RP-Initiated Logout 1.0 | 1 (implemented) |
 | `/oauth2/par` | RFC 9126 | 2 |
 | `/oauth2/device_authorization` | RFC 8628 | 2 |
 | `/oauth2/register` | RFC 7591 (fallback to CIMD) | 3 |
 | `/oauth2/bc-authorize` | OpenID CIBA Core 1.0 | 3 |
 
-The hosted UI adds `/login` per tenant, the sign-in page of a stored authorization request,
-and `/assets/` at the issuer of the default tenant, the stylesheet and other static files
+The hosted UI adds, per tenant, `/login`, the sign-in page of a stored authorization request,
+`/consent`, its consent page, and `/logout`, where the sign-out confirmation posts; and
+`/assets/` at the issuer of the default tenant, the stylesheet and other static files
 shared by every tenant. Asset names include a hash of their content, so they are cached for a
 year.
 
@@ -198,30 +199,51 @@ year.
   record by additional data). Rotated every 30 days by default; a successor is published at
   least 24 hours before it signs (publish-ahead plus the one-hour check interval), keys of a
   newly enabled algorithm are published ahead the same way, and a retired key stays in the
-  JWKS for 48 hours. The JWK set is cached in memory for one minute. See ADR 0011.
+  JWKS for 15 days, so ID tokens of any live session can serve as `id_token_hint`. The JWK set
+  is cached in memory for one minute. See ADRs 0011 and 0023.
 - **Tokens:** see ADR 0014.
   - The token endpoint authenticates the client first (`client_secret_basic`,
     `client_secret_post`, or `none` for public clients; one method per request) and then
-    serves the `authorization_code` and `client_credentials` grants.
+    serves the `authorization_code`, `refresh_token` and `client_credentials` grants.
   - Access tokens are RS256 JWTs per RFC 9068 (`typ` `at+jwt`), valid for 10 minutes by
     default. Their `aud` lists the API resources whose scopes they grant, plus the issuer when
     they grant OpenID Connect scopes, because the issuer serves userinfo. Each token is
     recorded by its `jti`, so it can be revoked before it expires.
-  - ID tokens are RS256 JWTs with `auth_time`, `amr`, `nonce` and `at_hash`; the profile claims
-    come from userinfo (OpenID Connect Core 1.0, section 5.4).
-  - A code is redeemed once. Presenting it again fails and revokes the access tokens issued
-    for it. The token request must name the code's redirect URI when the authorization request
+  - ID tokens are RS256 JWTs with `auth_time`, `acr`, `amr`, `nonce` and `at_hash`; the profile
+    claims come from userinfo (OpenID Connect Core 1.0, section 5.4).
+  - The `claims` parameter adds individual claims about the user to the ID token or the
+    userinfo response (section 5.5), only from scopes the client may request.
+  - `acr` values are URIs under `https://clavisid.org/acr/`, with the EAP values `phr` and
+    `phrh` for phishing-resistant methods (ADR 0019). A password sign-in has
+    `https://clavisid.org/acr/password`. `acr_values` is a voluntary request; an essential
+    `acr` that Clavis cannot produce fails with `access_denied`.
+  - A code is redeemed once. Presenting it again fails and revokes the access tokens and
+    refresh token families issued for it. The token request must name the code's redirect URI when the authorization request
     did, and must carry `code_verifier` exactly when the authorization request carried a
     challenge (RFC 9700, section 4.8.2).
   - API resources are registered per tenant with an absolute URI and the scopes they define;
     a scope belongs to one resource, and OpenID Connect scopes to none.
   - Userinfo accepts the access token in the `Authorization` header or a form body, never in
     the query, and rejects revoked tokens and tokens of disabled or deleted users.
-  - Refresh tokens (opaque, rotated on every use, with reuse detection that revokes the whole
-    family) arrive in Phase 1, milestone 2; until then `offline_access` is not granted. Client
-    secrets are generated by Clavis and stored hashed.
-  - The token and userinfo endpoints allow cross-origin requests without credentials, for
-    browser-based clients.
+  - Refresh tokens are opaque 256-bit values stored as SHA-256 hashes (ADR 0021). The code
+    exchange issues one when the client may use the `refresh_token` grant and an OpenID
+    Connect request was granted `offline_access`; an OAuth request needs only the grant.
+    Each code exchange starts a family. Every refresh replaces the token, and presenting a
+    replaced token, even in two concurrent refreshes, revokes the family and the access
+    tokens that derive from its code. A family ends after 7 days without a refresh or 30
+    days in all, by default. A refresh may narrow the scope of the access token, and its ID
+    token keeps the original authentication without a `nonce`.
+  - Client secrets are generated by Clavis and stored hashed.
+  - Revocation (RFC 7009) and introspection (RFC 7662) authenticate the client like the token
+    endpoint (ADR 0022). Revoking a refresh token, current or replaced, revokes its family and
+    the access tokens issued from it; revoking an access token revokes that token only; an
+    unknown token answers 200 and a token of another client `unauthorized_client`.
+    Introspection is for confidential clients: a client sees its own tokens, and a client
+    registered as the server of API resources (`--resource-server`) sees the access tokens
+    issued for them, with only those audiences and scopes. Every other token, and any token
+    that is not active, answers `"active": false`.
+  - The token, revocation and userinfo endpoints allow cross-origin requests without
+    credentials, for browser-based clients.
 - **Clients:** confidential or public (RFC 6749, section 2.1). A client ID is never a UUID,
   the form of user identifiers, so the sub of a token a client obtains for itself cannot match
   a user's (RFC 9068, section 5). Redirect URIs are registered in full; wildcards, fragments and `http` outside loopback interfaces are rejected. Authorization
@@ -241,18 +263,58 @@ year.
     finished in another. A request is single use.
   - Requests that use the request object, `request_uri`, dynamic registration or a response
     type other than `code` are rejected with the matching error.
+  - Responses go back in the query, or, with `response_mode=form_post`, from a page whose
+    form posts them to the redirect URI (OAuth 2.0 Form Post Response Mode). The page runs
+    one script, allowed by its hash, and its form may submit only to the client's origin
+    (ADR 0023).
+  - `id_token_hint` must be an ID token that the tenant issued to the client; it may have
+    expired. Only that user's session or sign-in answers the request, and the same holds for
+    a `sub` claim that the `claims` parameter requests with a value (OpenID Connect Core 1.0,
+    section 5.5.1). A `login_hint` that is an email address fills in the sign-in form.
 - **Authorization codes:** 256 random bits, stored as a SHA-256 hash, valid for 60 seconds,
   bound to the client, the redirect URI, the PKCE challenge, the nonce, the scopes and the
   session (ADR 0014).
 - **Cleanup:** every 10 minutes, each instance deletes expired authorization requests,
-  sessions and access token records, and codes that expired more than an hour ago, so a
-  replayed code is still recognized for a while. An authorization request, which needs no authentication, is gone
+  sessions, access token records and refresh tokens, and codes that expired more than 25 hours
+  ago, so a replayed code is still recognized for a while and a logout still finds the access
+  tokens issued from it. An authorization request, which needs no authentication, is gone
   within 20 minutes of its creation.
 - **Browser sessions:** one server-side session per sign-in, stored as the SHA-256 hash of a
   256-bit cookie named `__Host-clavis-session-<tenant ID>`, so tenants on one host never share
   a session. Sessions end after 24 hours without use or 14 days in all, and a new sign-in
-  replaces the browser's previous session. Every Clavis cookie is `Secure`, `HttpOnly` and
+  replaces the browser's previous session: the same user's new session takes over its online
+  access, and another user's sign-in ends it (ADR 0023). Every Clavis cookie is `Secure`, `HttpOnly` and
   `SameSite=Lax`, with `Path=/`.
+  - Single sign-on: a session answers the authorization requests of every client of its
+    tenant without the login page, while its user is active and the request needs no
+    consent. Each use moves its idle expiry.
+  - A new sign-in is needed for `prompt=login`, `max_age=0`, an authentication older than
+    `max_age`, or an `id_token_hint` of another user. Until account selection exists,
+    `prompt=select_account` shows the sign-in form too. With `prompt=none`, a request that
+    needs a sign-in fails with `login_required`.
+  - RP-initiated logout (ADR 0023): a browser with an active session confirms on a page,
+    which posts only from Clavis itself; so does a `POST` without the session cookie, which a
+    cross-site `POST` does not carry. Logout ends the session, its pending codes and the
+    access tokens of its codes that started no refresh token family; refresh token families
+    are offline access and stay. The browser returns to `post_logout_redirect_uri`, with
+    `state`, only when the request has an `id_token_hint` that the tenant issued to a client
+    (it may have expired), `client_id` names that client if present, and the URI is
+    registered for it exactly. Otherwise the page says why, and the browser stays at
+    Clavis.
+- **Consent:** see ADR 0020. A grant records the scopes a user allowed a client.
+  - After the user authenticates, a request needs consent when it asks for a scope that the
+    grant lacks (a claim requested individually counts as its scope, and `offline_access`
+    counts exactly when the client gets a refresh token, ADR 0021) or carries
+    `prompt=consent`. Clients that skip consent by policy, for first-party applications,
+    need it only for `prompt=consent`. With `prompt=none`, a request that needs consent
+    fails with `consent_required`.
+  - The consent page names the client, the account and each scope. Allowing adds the
+    request's scopes to the grant and issues the code; denying answers `access_denied`.
+  - The decision must come from the browser that started the request, with the session that
+    authenticated it; the form is protected like the sign-in form.
+  - `clavis grants list|revoke` lists and revokes the grants of a user. Revoking a grant
+    revokes the client's refresh and access tokens for the user and deletes its unexchanged
+    codes, and the next request asks again.
 - **Hosted pages:** rendered on the server with templ, without scripts. They send a Content
   Security Policy that allows only same-origin stylesheets and images, forbids framing, and
   lets forms submit only to Clavis and, on the login page, to the origin of the client's

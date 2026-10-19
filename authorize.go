@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"uuid"
 
@@ -19,8 +21,9 @@ import (
 // Paths of the hosted pages, relative to a tenant's issuer, and of the
 // static assets, relative to the issuer of the default tenant.
 const (
-	loginPath  = "/login"
-	assetsPath = "/assets/"
+	loginPath   = "/login"
+	consentPath = "/consent"
+	assetsPath  = "/assets/"
 )
 
 // maxFormBytes bounds the body of the forms Clavis accepts.
@@ -40,10 +43,12 @@ const sessionCookiePrefix = "__Host-clavis-session-"
 const tokenLength = 43
 
 // handleAuthorize serves the authorization endpoint (RFC 6749, section
-// 3.1; OpenID Connect Core 1.0, section 3.1.2.1). A valid request is stored
-// and the browser goes on to the login page; an invalid one either goes back
-// to the client with an error or, when the client or redirect URI cannot be
-// trusted, ends on an error page.
+// 3.1; OpenID Connect Core 1.0, section 3.1.2.1). When the browser's session
+// answers a valid request, the browser goes back to the client with a code;
+// otherwise the request is stored and the browser goes on to the login page,
+// or to the consent page when the session's user must allow the client.
+// An invalid request either goes back to the client with an error or, when
+// the client or redirect URI cannot be trusted, ends on an error page.
 func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request, t tenant) {
 	// The mux sends HEAD to GET routes, but a HEAD request has no use for a
 	// stored authorization request.
@@ -58,11 +63,12 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request, t tenan
 			"The sign-in request is malformed. Return to the application and try again.")
 		return
 	}
-	id, err := app.StartAuthorization(r.Context(), s.deps, t.authorizationTenant(), params, s.bindBrowser(w, r))
+	a, err := app.StartAuthorization(r.Context(), s.deps, s.signer, t.authorizationTenant(), params,
+		s.bindBrowser(w, r), sessionHash(r, t.ID))
 	var redirect *app.RedirectError
 	switch {
 	case errors.As(err, &redirect):
-		seeOther(w, redirect.URI)
+		s.respond(w, r, redirect.Response)
 	case errors.Is(err, oauth.ErrInvalidAuthorizationTarget):
 		// The message holds only fixed text, never request input.
 		s.errorPage(w, r, http.StatusBadRequest, "Invalid sign-in request",
@@ -70,9 +76,19 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request, t tenan
 				"). Return to the application and try again.")
 	case err != nil:
 		s.internalError(w, r, "starting the authorization", err)
+	case a.Response.RedirectURI != "":
+		s.respond(w, r, a.Response)
+	case a.Consent:
+		seeOther(w, pageURL(t, consentPath, a.RequestID))
 	default:
-		seeOther(w, t.issuer+loginPath+"?"+url.Values{"request": {id}}.Encode())
+		seeOther(w, pageURL(t, loginPath, a.RequestID))
 	}
+}
+
+// pageURL returns the URL of a hosted page of a stored authorization
+// request.
+func pageURL(t tenant, path, requestID string) string {
+	return t.issuer + path + "?" + url.Values{"request": {requestID}}.Encode()
 }
 
 // authorizationParams returns the parameters of an authorization request:
@@ -100,7 +116,12 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request, t tenan
 		s.authorizationRequestError(w, r, err)
 		return
 	}
-	s.loginPage(w, r, t, p, "", "")
+	if p.Request.SessionID != uuid.Nil() {
+		// The user signed in already, for example before going back a page.
+		seeOther(w, pageURL(t, consentPath, p.Request.ID))
+		return
+	}
+	s.loginPage(w, r, t, p, p.Request.LoginHint, "")
 }
 
 // handleLogin checks the credentials posted from the sign-in form. On
@@ -147,7 +168,92 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, t tenant) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
-	seeOther(w, login.RedirectURI)
+	if login.Consent {
+		seeOther(w, pageURL(t, consentPath, p.Request.ID))
+		return
+	}
+	s.respond(w, r, login.Response)
+}
+
+// handleConsentPage asks the signed-in user to allow or deny the client of
+// a stored authorization request (ADR 0020).
+func (s *Server) handleConsentPage(w http.ResponseWriter, r *http.Request, t tenant) {
+	c, err := app.FindConsent(r.Context(), s.deps, t.ID, r.URL.Query().Get("request"), bindingHash(r),
+		sessionHash(r, t.ID))
+	if err != nil {
+		s.authorizationRequestError(w, r, err)
+		return
+	}
+	scopes := make([]string, len(c.Scopes))
+	for i, scope := range c.Scopes {
+		scopes[i] = ui.ScopeDescription(scope.Scope, scope.Resource)
+	}
+	// The decision redirects to the client, which form-action must allow.
+	var targets []string
+	if target := ui.FormTarget(c.Request.RedirectURI); target != "" {
+		targets = append(targets, target)
+	}
+	ui.SetPageHeaders(w.Header(), ui.ContentSecurityPolicy(true, targets...))
+	s.render(w, r, http.StatusOK, ui.Consent(ui.ConsentPage{
+		Layout:     s.layout(),
+		ClientName: c.Client.Name,
+		Account:    c.User.Email,
+		Scopes:     scopes,
+		Action:     t.path + consentPath,
+		RequestID:  c.Request.ID,
+	}))
+}
+
+// handleConsent records the decision posted from the consent page and sends
+// the browser back to the client.
+func (s *Server) handleConsent(w http.ResponseWriter, r *http.Request, t tenant) {
+	if err := s.crossOrigin.Check(r); err != nil {
+		s.errorPage(w, r, http.StatusForbidden, "Request blocked",
+			"The consent form was submitted from another site.")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
+	err := r.ParseForm()
+	decision := r.PostForm.Get("decision")
+	if err != nil || decision != "allow" && decision != "deny" {
+		s.errorPage(w, r, http.StatusBadRequest, "Invalid consent request",
+			"The consent form is malformed. Return to the application and try again.")
+		return
+	}
+	c, err := app.FindConsent(r.Context(), s.deps, t.ID, r.PostForm.Get("request"), bindingHash(r), sessionHash(r, t.ID))
+	if err != nil {
+		s.authorizationRequestError(w, r, err)
+		return
+	}
+	resp, err := app.CompleteConsent(r.Context(), s.deps, t.authorizationTenant(), c, decision == "allow")
+	if err != nil {
+		s.authorizationRequestError(w, r, err)
+		return
+	}
+	s.respond(w, r, resp)
+}
+
+// respond sends the browser back to the client with an authorization
+// response: a redirect in the query response mode, or a page that posts the
+// response in the form_post response mode (OAuth 2.0 Form Post Response
+// Mode, section 2).
+func (s *Server) respond(w http.ResponseWriter, r *http.Request, resp app.AuthorizationResponse) {
+	if !resp.FormPost {
+		seeOther(w, resp.URI())
+		return
+	}
+	fields := make([]ui.Field, 0, len(resp.Params))
+	for _, name := range slices.Sorted(maps.Keys(resp.Params)) {
+		for _, value := range resp.Params[name] {
+			fields = append(fields, ui.Field{Name: name, Value: value})
+		}
+	}
+	ui.SetPageHeaders(w.Header(), ui.FormPostContentSecurityPolicy(ui.FormTarget(resp.RedirectURI)))
+	s.render(w, r, http.StatusOK, ui.FormPost(ui.FormPostPage{
+		Layout: s.layout(),
+		Action: resp.RedirectURI,
+		Fields: fields,
+	}))
 }
 
 // loginPage renders the sign-in form. Its policy lets the form submission

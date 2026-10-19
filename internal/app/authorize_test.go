@@ -40,12 +40,17 @@ func newAuthzFixture(t *testing.T) authzFixture {
 	f.d = d
 	tn := newTenantForClients(t, d)
 	f.tenant = AuthorizationTenant{ID: tn.ID, Issuer: testIssuer}
+	// The clients skip consent, which only the tests of consent need; the
+	// partner client asks for it (ADR 0020).
 	for _, spec := range []ClientSpec{
-		{ClientID: "web", Name: "Web app", Type: store.ClientConfidential,
-			RedirectURIs: []string{"https://app.example.com/callback", "https://app.example.com/other?x=1"}},
-		{ClientID: "spa", Type: store.ClientPublic, RedirectURIs: []string{"http://127.0.0.1/callback"}},
-		{ClientID: "legacy", Type: store.ClientConfidential, PKCEExempt: true,
+		{ClientID: "web", Name: "Web app", Type: store.ClientConfidential, SkipConsent: true,
+			RedirectURIs:           []string{"https://app.example.com/callback", "https://app.example.com/other?x=1"},
+			PostLogoutRedirectURIs: []string{"https://app.example.com/signed-out"}},
+		{ClientID: "spa", Type: store.ClientPublic, SkipConsent: true, RedirectURIs: []string{"http://127.0.0.1/callback"}},
+		{ClientID: "legacy", Type: store.ClientConfidential, PKCEExempt: true, SkipConsent: true,
 			RedirectURIs: []string{"https://legacy.example.com/callback"}},
+		{ClientID: "partner", Name: "Partner app", Type: store.ClientConfidential,
+			RedirectURIs: []string{"https://partner.example.com/callback"}},
 		{ClientID: "service", Type: store.ClientConfidential, GrantTypes: []string{oauth.GrantTypeClientCredentials},
 			Scopes: []string{"api:read"}},
 	} {
@@ -82,11 +87,11 @@ var testBinding = oauth.HashToken("browser")
 
 func (f authzFixture) start(t *testing.T, params url.Values) PendingAuthorization {
 	t.Helper()
-	id, err := StartAuthorization(t.Context(), f.d, f.tenant, params, testBinding)
-	if err != nil {
-		t.Fatalf("StartAuthorization() unexpected error: %v", err)
+	a, err := StartAuthorization(t.Context(), f.d, fakeSigner{}, f.tenant, params, testBinding, nil)
+	if err != nil || a.RequestID == "" || a.Response.RedirectURI != "" {
+		t.Fatalf("StartAuthorization() = %+v, %v; want a stored request", a, err)
 	}
-	p, err := FindAuthorizationRequest(t.Context(), f.d, f.tenant.ID, id, testBinding)
+	p, err := FindAuthorizationRequest(t.Context(), f.d, f.tenant.ID, a.RequestID, testBinding)
 	if err != nil {
 		t.Fatalf("FindAuthorizationRequest() unexpected error: %v", err)
 	}
@@ -137,12 +142,12 @@ func TestStartAuthorizationAcceptedVariants(t *testing.T) {
 	for _, tt := range tests {
 		params := webRequest()
 		tt.edit(params)
-		id, err := StartAuthorization(t.Context(), f.d, f.tenant, params, testBinding)
+		a, err := StartAuthorization(t.Context(), f.d, fakeSigner{}, f.tenant, params, testBinding, nil)
 		if err != nil {
 			t.Errorf("%s: StartAuthorization() unexpected error: %v", tt.name, err)
 			continue
 		}
-		p, err := FindAuthorizationRequest(t.Context(), f.d, f.tenant.ID, id, testBinding)
+		p, err := FindAuthorizationRequest(t.Context(), f.d, f.tenant.ID, a.RequestID, testBinding)
 		if err != nil || !tt.check(p.Request) {
 			t.Errorf("%s: stored request = %+v, %v", tt.name, p.Request, err)
 		}
@@ -167,7 +172,7 @@ func TestStartAuthorizationShowsTargetErrors(t *testing.T) {
 	} {
 		params := webRequest()
 		edit(params)
-		_, err := StartAuthorization(t.Context(), f.d, f.tenant, params, testBinding)
+		_, err := StartAuthorization(t.Context(), f.d, fakeSigner{}, f.tenant, params, testBinding, nil)
 		var redirect *RedirectError
 		if !errors.Is(err, oauth.ErrInvalidAuthorizationTarget) || errors.As(err, &redirect) {
 			t.Errorf("%s: StartAuthorization() = %v, want ErrInvalidAuthorizationTarget", name, err)
@@ -203,7 +208,7 @@ func TestStartAuthorizationRedirectsErrors(t *testing.T) {
 	for _, tt := range tests {
 		params := webRequest()
 		tt.edit(params)
-		_, err := StartAuthorization(t.Context(), f.d, f.tenant, params, testBinding)
+		_, err := StartAuthorization(t.Context(), f.d, fakeSigner{}, f.tenant, params, testBinding, nil)
 		if tt.code == "" {
 			// The service client has no redirect URIs, so its error is
 			// shown rather than redirected.
@@ -219,9 +224,9 @@ func TestStartAuthorizationRedirectsErrors(t *testing.T) {
 			t.Errorf("%s: StartAuthorization() = %v, want a redirected %s", tt.name, err, tt.code)
 			continue
 		}
-		u, err := url.Parse(redirect.URI)
-		if err != nil || !strings.HasPrefix(redirect.URI, params.Get("redirect_uri")+"?") {
-			t.Errorf("%s: redirect to %q, want the registered redirect URI", tt.name, redirect.URI)
+		u, err := url.Parse(redirect.Response.URI())
+		if err != nil || !strings.HasPrefix(redirect.Response.URI(), params.Get("redirect_uri")+"?") {
+			t.Errorf("%s: redirect to %q, want the registered redirect URI", tt.name, redirect.Response.URI())
 			continue
 		}
 		q := u.Query()
@@ -240,9 +245,9 @@ func TestErrorResponseKeepsTheRedirectQuery(t *testing.T) {
 	params := webRequest()
 	params.Set("redirect_uri", "https://app.example.com/other?x=1")
 	params.Set("response_type", "token")
-	_, err := StartAuthorization(t.Context(), f.d, f.tenant, params, testBinding)
+	_, err := StartAuthorization(t.Context(), f.d, fakeSigner{}, f.tenant, params, testBinding, nil)
 	var redirect *RedirectError
-	if !errors.As(err, &redirect) || !strings.HasPrefix(redirect.URI, "https://app.example.com/other?x=1&") {
+	if !errors.As(err, &redirect) || !strings.HasPrefix(redirect.Response.URI(), "https://app.example.com/other?x=1&") {
 		t.Errorf("StartAuthorization() = %v, want a redirect that keeps x=1", err)
 	}
 }
@@ -302,9 +307,9 @@ func TestCompletePasswordLogin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompletePasswordLogin() unexpected error: %v", err)
 	}
-	u, err := url.Parse(login.RedirectURI)
-	if err != nil || !strings.HasPrefix(login.RedirectURI, "https://app.example.com/callback?") {
-		t.Fatalf("RedirectURI = %q", login.RedirectURI)
+	u, err := url.Parse(login.Response.URI())
+	if err != nil || !strings.HasPrefix(login.Response.URI(), "https://app.example.com/callback?") {
+		t.Fatalf("RedirectURI = %q", login.Response.URI())
 	}
 	q := u.Query()
 	if q.Get("state") != "af0ifjsldkj" || q.Get("iss") != testIssuer || len(q) != 3 {
@@ -377,7 +382,7 @@ func TestCompletePasswordLoginWithoutStateOrPKCE(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompletePasswordLogin() unexpected error: %v", err)
 	}
-	u, _ := url.Parse(login.RedirectURI)
+	u, _ := url.Parse(login.Response.URI())
 	if q := u.Query(); q.Has("state") || q.Get("code") == "" {
 		t.Errorf("response parameters = %v, want a code without state", q)
 	}
@@ -427,7 +432,7 @@ func TestAuthorizationReportsStoreFailures(t *testing.T) {
 	p := f.start(t, webRequest())
 	f.d.Store = failingAuthzStore{f.d.Store}
 	var redirect *RedirectError
-	if _, err := StartAuthorization(t.Context(), f.d, f.tenant, webRequest(), testBinding); !errors.Is(err, errUnavailable) ||
+	if _, err := StartAuthorization(t.Context(), f.d, fakeSigner{}, f.tenant, webRequest(), testBinding, nil); !errors.Is(err, errUnavailable) ||
 		errors.As(err, &redirect) {
 		t.Errorf("StartAuthorization() = %v, want the store error", err)
 	}
@@ -448,7 +453,7 @@ func TestPurgeExpired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompletePasswordLogin() unexpected error: %v", err)
 	}
-	u, _ := url.Parse(login.RedirectURI)
+	u, _ := url.Parse(login.Response.URI())
 	codeHash := oauth.HashToken(u.Query().Get("code"))
 	sessionHash := oauth.HashToken(login.SessionToken)
 	exists := func() (request, code, session bool) {
@@ -465,10 +470,10 @@ func TestPurgeExpired(t *testing.T) {
 		{0, true, true, true},
 		// The request has expired; the code has too, but it is retained.
 		{AuthorizationRequestLifetime, false, true, true},
-		{AuthorizationCodeLifetime + AuthorizationCodeRetention - time.Second, false, true, true},
-		{AuthorizationCodeLifetime + AuthorizationCodeRetention, false, false, true},
 		// The session ends after a day without use.
-		{SessionIdleTimeout, false, false, false},
+		{SessionIdleTimeout, false, true, false},
+		{AuthorizationCodeLifetime + AuthorizationCodeRetention - time.Second, false, true, false},
+		{AuthorizationCodeLifetime + AuthorizationCodeRetention, false, false, false},
 	} {
 		*f.now = start.Add(step.after)
 		if err := PurgeExpired(t.Context(), f.d); err != nil {
@@ -513,4 +518,55 @@ func TestPurgeExpiredGoesOnAfterAFailure(t *testing.T) {
 	if _, err := f.d.Store.Sessions().GetByTokenHash(t.Context(), f.tenant.ID, oauth.HashToken(login.SessionToken)); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("the expired session = %v, want it deleted despite the failure", err)
 	}
+}
+
+// OAuth 2.0 Form Post Response Mode, section 2: every response to a
+// form_post request goes back as a form post, whether it carries a code or
+// an error, and whether it comes at once or after the sign-in or consent.
+func TestFormPostResponseMode(t *testing.T) {
+	t.Parallel()
+	f := newAuthzFixture(t)
+	formPost := func(name string, resp AuthorizationResponse, want string) {
+		t.Helper()
+		if !resp.FormPost || resp.RedirectURI == "" || resp.Params.Get(want) == "" ||
+			resp.Params.Get("state") != "af0ifjsldkj" || resp.Params.Get("iss") != testIssuer {
+			t.Errorf("%s: response = %+v, want a form post with %s, state and iss", name, resp, want)
+		}
+	}
+	params := with(webRequest(), "response_mode", "form_post")
+
+	login, err := CompletePasswordLogin(t.Context(), f.d, f.h, f.tenant, f.start(t, params), "ada@example.com",
+		"correct horse", nil)
+	if err != nil {
+		t.Fatalf("CompletePasswordLogin() unexpected error: %v", err)
+	}
+	formPost("after the sign-in", login.Response, "code")
+	if login.Response.RedirectURI != "https://app.example.com/callback" {
+		t.Errorf("RedirectURI = %q, want the registered redirect URI without the response", login.Response.RedirectURI)
+	}
+	sessionHash := oauth.HashToken(login.SessionToken)
+
+	a, err := f.startWith(t, params, sessionHash)
+	if err != nil {
+		t.Fatalf("StartAuthorization() with a session unexpected error: %v", err)
+	}
+	formPost("single sign-on", a.Response, "code")
+
+	var redirect *RedirectError
+	_, err = f.startWith(t, with(with(webRequest(), "response_mode", "form_post"), "prompt", "none"), nil)
+	if !errors.As(err, &redirect) {
+		t.Fatalf("StartAuthorization() with prompt=none and no session = %v, want a *RedirectError", err)
+	}
+	formPost("error", redirect.Response, "error")
+
+	p, consentSession := f.loginForConsent(t, with(partnerRequest(), "response_mode", "form_post"))
+	c, err := FindConsent(t.Context(), f.d, f.tenant.ID, p.Request.ID, testBinding, consentSession)
+	if err != nil {
+		t.Fatalf("FindConsent() unexpected error: %v", err)
+	}
+	denied, err := CompleteConsent(t.Context(), f.d, f.tenant, c, false)
+	if err != nil {
+		t.Fatalf("CompleteConsent() unexpected error: %v", err)
+	}
+	formPost("denied consent", denied, "error")
 }

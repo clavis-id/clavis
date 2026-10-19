@@ -2,6 +2,8 @@ package ui
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -148,5 +150,137 @@ func TestError(t *testing.T) {
 	if page := b.String(); !strings.Contains(page, "<title>Request expired</title>") ||
 		!strings.Contains(page, "Return to &lt;the application&gt;.") || strings.Contains(page, "<form") {
 		t.Errorf("Error() rendered:\n%s", page)
+	}
+}
+
+func TestConsentEscapesItsInput(t *testing.T) {
+	t.Parallel()
+	var b bytes.Buffer
+	err := Consent(ConsentPage{
+		Layout:     Layout{Stylesheet: "/assets/clavis-0123456789ab.css"},
+		ClientName: `<script>alert(1)</script>`,
+		Account:    `ada@example.com<img src=x>`,
+		Scopes:     []string{ScopeDescription("openid", ""), ScopeDescription("orders:read", `<b>Orders</b>`)},
+		Action:     "/consent",
+		RequestID:  `"><img src=x>`,
+	}).Render(t.Context(), &b)
+	if err != nil {
+		t.Fatalf("Render() unexpected error: %v", err)
+	}
+	page := b.String()
+	for _, unsafe := range []string{"<script>", "<img", "<b>"} {
+		if strings.Contains(page, unsafe) {
+			t.Errorf("the page contains %q unescaped:\n%s", unsafe, page)
+		}
+	}
+	for _, want := range []string{
+		`<title>Allow access</title>`, `action="/consent"`, `id="allow"`, `id="deny"`, `name="decision"`,
+		"<li>Know who you are</li>", "orders:read",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the page does not contain %q:\n%s", want, page)
+		}
+	}
+}
+
+func TestFormPostEscapesItsInputAndRunsOnlyItsScript(t *testing.T) {
+	t.Parallel()
+	var b bytes.Buffer
+	err := FormPost(FormPostPage{
+		Layout: Layout{Stylesheet: "/assets/clavis-0123456789ab.css"},
+		Action: "https://app.example.com/callback?x=1&y=2",
+		Fields: []Field{{"code", "abc"}, {"state", `"><script>alert(1)</script>`}},
+	}).Render(t.Context(), &b)
+	if err != nil {
+		t.Fatalf("Render() unexpected error: %v", err)
+	}
+	page := b.String()
+	if strings.Count(page, "<script>") != 1 || strings.Contains(page, "alert(1)</script>") {
+		t.Errorf("the page has a script besides its own, or input unescaped:\n%s", page)
+	}
+	for _, want := range []string{
+		`<form id="response" method="post" action="https://app.example.com/callback?x=1&amp;y=2">`,
+		`<input type="hidden" name="code" value="abc">`, `name="state"`, `id="continue"`,
+		"<script>" + formPostScript + "</script>",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the page does not contain %q:\n%s", want, page)
+		}
+	}
+
+	// The policy allows the page's script by its hash, and the form only to
+	// the client.
+	sum := sha256.Sum256([]byte(formPostScript))
+	policy := FormPostContentSecurityPolicy("https://app.example.com")
+	for _, want := range []string{
+		"script-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "';",
+		"form-action https://app.example.com;", "default-src 'none'", "frame-ancestors 'none'",
+	} {
+		if !strings.Contains(policy, want) {
+			t.Errorf("FormPostContentSecurityPolicy() = %q, want %q", policy, want)
+		}
+	}
+	if policy := FormPostContentSecurityPolicy(""); !strings.Contains(policy, "form-action 'none';") {
+		t.Errorf("FormPostContentSecurityPolicy(\"\") = %q, want no form target", policy)
+	}
+	if strings.Contains(ContentSecurityPolicy(true), "script-src") {
+		t.Error("ContentSecurityPolicy() allows scripts")
+	}
+}
+
+func TestLogoutPagesEscapeTheirInput(t *testing.T) {
+	t.Parallel()
+	var b bytes.Buffer
+	err := Logout(LogoutPage{
+		Layout:     Layout{Stylesheet: "/assets/clavis-0123456789ab.css"},
+		Account:    `ada@example.com<img src=x>`,
+		ClientName: `<script>alert(1)</script>`,
+		Problem:    "post_logout_redirect_uri <b>needs</b> an id_token_hint",
+		Action:     "/logout",
+		Fields:     []Field{{"state", `"><img src=x>`}},
+	}).Render(t.Context(), &b)
+	if err != nil {
+		t.Fatalf("Render() unexpected error: %v", err)
+	}
+	page := b.String()
+	for _, unsafe := range []string{"<script>", "<img", "<b>"} {
+		if strings.Contains(page, unsafe) {
+			t.Errorf("the page contains %q unescaped:\n%s", unsafe, page)
+		}
+	}
+	for _, want := range []string{
+		"<title>Sign out</title>", `action="/logout"`, `id="logout"`, `name="state"`, `role="alert"`,
+		"cannot be completed as sent", "To stay signed in, close this page.",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the page does not contain %q:\n%s", want, page)
+		}
+	}
+
+	b.Reset()
+	if err := SignedOut(SignedOutPage{}).Render(t.Context(), &b); err != nil {
+		t.Fatalf("Render() unexpected error: %v", err)
+	}
+	if page := b.String(); !strings.Contains(page, "<title>You are signed out</title>") ||
+		strings.Contains(page, "<form") || strings.Contains(page, `role="alert"`) {
+		t.Errorf("SignedOut() rendered:\n%s", page)
+	}
+}
+
+func TestScopeDescription(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct{ scope, resource, want string }{
+		{"openid", "", "Know who you are"},
+		{"profile", "", "See your name and profile"},
+		{"email", "", "See your email address"},
+		{"address", "", "See your postal address"},
+		{"phone", "", "See your phone number"},
+		{"offline_access", "", "Keep access while you are signed out"},
+		{"orders:read", "Orders", "Use Orders (orders:read)"},
+		{"unknown", "", "unknown"},
+	} {
+		if got := ScopeDescription(tt.scope, tt.resource); got != tt.want {
+			t.Errorf("ScopeDescription(%q, %q) = %q, want %q", tt.scope, tt.resource, got, tt.want)
+		}
 	}
 }

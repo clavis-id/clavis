@@ -88,6 +88,9 @@ func newClientsCommand(environ []string) *cobra.Command {
 	f.BoolVar(&spec.SkipConsent, "skip-consent", false, "do not ask users for consent (first-party clients)")
 	f.BoolVar(&spec.PKCEExempt, "pkce-exempt", false,
 		"accept authorization requests without PKCE (confidential clients that validate the nonce)")
+	f.StringArrayVar(&spec.ResourceServerFor, "resource-server", nil,
+		"identifier of a registered API resource whose server the client is, which lets it introspect\n"+
+			"the access tokens issued for that resource; repeat for several")
 
 	list := &cobra.Command{
 		Use:   "list",
@@ -226,6 +229,7 @@ func showClient(out io.Writer, t store.Tenant, c store.Client) error {
 	row("Redirect URIs", c.RedirectURIs...)
 	row("Post-logout redirect URIs", c.PostLogoutRedirectURIs...)
 	row("Scopes", c.Scopes...)
+	row("Resource server for", c.ResourceServerFor...)
 	row("PKCE", pkce)
 	row("Consent", consent)
 	row("Access token lifetime", lifetime(c.Lifetimes.AccessToken))

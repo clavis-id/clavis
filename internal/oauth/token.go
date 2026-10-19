@@ -137,12 +137,13 @@ func ParseClientCredentials(authorization string, form url.Values) (ClientCreden
 }
 
 // TokenRequest holds the parameters of a token request (RFC 6749, sections
-// 4.1.3 and 4.4.2) other than client authentication.
+// 4.1.3, 4.4.2 and 6) other than client authentication.
 type TokenRequest struct {
 	GrantType    string
 	Code         string
 	RedirectURI  string
 	CodeVerifier string
+	RefreshToken string
 	// Scopes holds the requested scopes in order, without duplicates; it is
 	// empty when the request has no scope parameter.
 	Scopes []string
@@ -160,6 +161,7 @@ func ParseTokenRequest(form url.Values) (TokenRequest, error) {
 		{"code", &r.Code},
 		{"redirect_uri", &r.RedirectURI},
 		{"code_verifier", &r.CodeVerifier},
+		{"refresh_token", &r.RefreshToken},
 	}
 	for _, f := range fields {
 		value, ok := single(form, f.name)
@@ -189,6 +191,25 @@ func ParseTokenRequest(form url.Values) (TokenRequest, error) {
 		r.Scopes = append(r.Scopes, token)
 	}
 	return r, nil
+}
+
+// ParseTokenReference reads the token that a revocation request (RFC 7009,
+// section 2.1) or an introspection request (RFC 7662, section 2.1) names.
+// The request may send token_type_hint once; Clavis tells token types apart
+// by their form and ignores the hint, as both specifications allow. Errors
+// are *Error values with the code invalid_request.
+func ParseTokenReference(form url.Values) (string, error) {
+	token, ok := single(form, "token")
+	switch {
+	case !ok:
+		return "", invalidRequest("token is repeated")
+	case token == "":
+		return "", invalidRequest("token is missing")
+	}
+	if _, ok := single(form, "token_type_hint"); !ok {
+		return "", invalidRequest("token_type_hint is repeated")
+	}
+	return token, nil
 }
 
 // VerifyPKCE reports whether verifier matches an S256 code challenge (RFC
