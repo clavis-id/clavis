@@ -52,7 +52,7 @@ func newRootCommand(environ []string) *cobra.Command {
 	}
 	root.AddCommand(newServeCommand(environ), newMigrateCommand(environ), newTenantsCommand(environ),
 		newClientsCommand(environ), newResourcesCommand(environ), newUsersCommand(environ),
-		newGrantsCommand(environ), newKeysCommand(), newVersionCommand())
+		newGrantsCommand(environ), newEmailCommand(environ), newKeysCommand(), newVersionCommand())
 	return root
 }
 
@@ -127,6 +127,10 @@ func serve(ctx context.Context, configPath string, environ []string, logOutput i
 	if err != nil {
 		return err
 	}
+	sender, err := cfg.Email.Sender(logger)
+	if err != nil {
+		return err
+	}
 
 	info := version.Get()
 	tel, err := telemetry.Setup(ctx, telemetry.Config{
@@ -169,6 +173,7 @@ func serve(ctx context.Context, configPath string, environ []string, logOutput i
 			MaxConcurrentHashes:      cfg.Passwords.MaxConcurrentHashes,
 			RefuseArgon2idInFIPSMode: !cfg.Passwords.FIPSMigrateArgon2id,
 		},
+		Email: sender,
 	})
 	if err != nil {
 		return err

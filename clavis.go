@@ -19,10 +19,12 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
+	"clavisid.org/clavis/email"
 	"clavisid.org/clavis/internal/app"
 	"clavisid.org/clavis/internal/authn/password"
 	"clavisid.org/clavis/internal/issuer"
 	"clavisid.org/clavis/internal/keys"
+	"clavisid.org/clavis/internal/mailer"
 	"clavisid.org/clavis/internal/oidc"
 	"clavisid.org/clavis/internal/ui"
 	"clavisid.org/clavis/kek"
@@ -84,6 +86,14 @@ type Config struct {
 	// Passwords configures password hashing. Zero fields take their
 	// defaults.
 	Passwords PasswordPolicy
+
+	// Email delivers the messages Clavis sends to users, such as
+	// verification codes (ADR 0024). Clavis queues each message and sends it
+	// in the background, so responses do not wait for delivery. When nil,
+	// the features that need email are unavailable. email.NewSMTP sends
+	// through an SMTP server; email.NewConsole writes messages to the log
+	// and is for development only.
+	Email email.Sender
 }
 
 // PasswordPolicy configures password hashing (ADR 0015). Zero fields take
@@ -178,6 +188,7 @@ type Server struct {
 	logger        *slog.Logger
 	tracer        trace.TracerProvider
 	meter         metric.MeterProvider
+	mailer        *mailer.Mailer // nil without Config.Email
 	handler       http.Handler
 	wellKnown     http.Handler
 
@@ -189,8 +200,8 @@ type Server struct {
 // New validates cfg, prepares the store (creating the default tenant and its
 // signing keys on first use) and returns a ready-to-use Server.
 //
-// New starts signing key rotation and the cleanup of expired records in the
-// background. Call Close to stop them when the Server is no longer needed;
+// New starts signing key rotation, the cleanup of expired records and, with
+// Config.Email, email delivery in the background. Call Close to stop them when the Server is no longer needed;
 // canceling ctx stops them too.
 // Background work never outlives ctx, so ctx must live as long as the Server
 // is in use.
@@ -254,6 +265,14 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	if err := manager.RotateAll(ctx); err != nil {
 		return nil, fmt.Errorf("clavis: preparing signing keys: %w", err)
 	}
+	var mail *mailer.Mailer
+	if cfg.Email != nil {
+		if _, ok := cfg.Email.(*email.Console); ok {
+			logger.LogAttrs(ctx, slog.LevelWarn, "the console email driver writes messages, including codes "+
+				"and links that grant access, to the log; use it only for development")
+		}
+		mail = mailer.New(cfg.Email, logger)
+	}
 	bgCtx, stop := context.WithCancel(ctx) //nolint:gosec // stop is kept in the Server and called by Close.
 	s := &Server{
 		issuer:        iss,
@@ -268,6 +287,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		logger:        logger,
 		tracer:        tracer,
 		meter:         meter,
+		mailer:        mail,
 		stop:          stop,
 	}
 	s.wellKnown = allowGet(s.instrument(http.MethodGet+" "+oidc.AuthorizationServerMetadataPath,
@@ -275,6 +295,9 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	s.handler = s.routes()
 	s.work.Go(func() { manager.Run(bgCtx) })
 	s.work.Go(func() { s.runCleanup(bgCtx) })
+	if s.mailer != nil {
+		s.work.Go(func() { s.mailer.Run(bgCtx) })
+	}
 	return s, nil
 }
 
