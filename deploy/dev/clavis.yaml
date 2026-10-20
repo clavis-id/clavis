@@ -24,6 +24,18 @@ keys:
 #   max_concurrent_hashes: 0     # 0 means one per CPU
 #   fips_migrate_argon2id: true
 
+# Email delivery (ADR 0024). Disabled unless a driver is set. For local
+# testing, a server such as Mailpit on localhost needs no TLS:
+# email:
+#   driver: smtp               # or console, which only writes messages to the log
+#   from: "Clavis <no-reply@localhost>"
+#   smtp:
+#     host: localhost
+#     port: 1025
+#     tls: none                # starttls (default) or implicit elsewhere
+#     username: ""             # with a password, or CLAVIS_EMAIL_SMTP_PASSWORD
+#     timeout: 30s
+
 log:
   level: debug
   format: text

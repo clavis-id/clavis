@@ -1,0 +1,32 @@
+package emailtmpl
+
+// page is the HTML body of a message. Mail clients ignore style sheets, so
+// the styles are inline, and the page has no images or scripts.
+templ page(c Content) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ c.Subject }</title>
+		</head>
+		<body style="margin:0;padding:24px;background:#f4f4f5;color:#18181b;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+			<div style="max-width:480px;margin:0 auto;padding:24px;background:#ffffff;border-radius:8px;">
+				for _, p := range c.Paragraphs {
+					<p style="margin:0 0 16px;line-height:1.5;">{ p }</p>
+				}
+				if c.Code != "" {
+					<p style="margin:0 0 16px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:28px;font-weight:600;letter-spacing:4px;">{ c.Code }</p>
+				}
+				if c.LinkURL != "" {
+					<p style="margin:0 0 16px;">
+						<a href={ templ.SafeURL(c.LinkURL) } style="display:inline-block;padding:10px 16px;background:#2563eb;color:#ffffff;border-radius:6px;text-decoration:none;">{ c.LinkText }</a>
+					</p>
+				}
+				if c.Footer != "" {
+					<p style="margin:24px 0 0;font-size:12px;line-height:1.5;color:#71717a;">{ c.Footer }</p>
+				}
+			</div>
+		</body>
+	</html>
+}

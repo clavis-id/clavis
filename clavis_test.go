@@ -13,11 +13,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
+	"clavisid.org/clavis/email"
 	"clavisid.org/clavis/internal/app"
 	"clavisid.org/clavis/internal/issuer"
 	"clavisid.org/clavis/internal/keys"
@@ -392,5 +394,36 @@ func TestJWKSCachingFitsPublishAhead(t *testing.T) {
 	if jwksMaxAge+keys.JWKSCacheTTL >= keys.MinPublishAhead {
 		t.Errorf("JWK set caching (%s + %s) is not shorter than keys.MinPublishAhead (%s)",
 			jwksMaxAge, keys.JWKSCacheTTL, keys.MinPublishAhead)
+	}
+}
+
+// ADR 0024: with Config.Email, New starts the delivery of queued messages,
+// and the console driver warns that it writes messages to the log.
+func TestNewStartsEmailDelivery(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var logs syncBuffer
+		cfg := testConfig(t, openStore(t))
+		cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+		cfg.Email = email.NewConsole(cfg.Logger)
+		s := mustNew(t, cfg)
+		if !strings.Contains(logs.String(), "the console email driver writes messages") {
+			t.Errorf("New() logs no warning about the console driver:\n%s", logs.String())
+		}
+		msg := email.Message{To: "ada@example.com", Subject: "Your code", Text: "Your code is 123456."}
+		if err := s.mailer.Enqueue(t.Context(), msg); err != nil {
+			t.Fatalf("Enqueue() unexpected error: %v", err)
+		}
+		synctest.Wait()
+		if !strings.Contains(logs.String(), "email not sent: the console driver") {
+			t.Errorf("the queued message did not reach the sender:\n%s", logs.String())
+		}
+		if err := s.Close(); err != nil {
+			t.Errorf("Close() unexpected error: %v", err)
+		}
+	})
+
+	// Without Config.Email there is no mailer.
+	if s := newTestServer(t, openStore(t)); s.mailer != nil {
+		t.Error("New() without Config.Email started a mailer")
 	}
 }

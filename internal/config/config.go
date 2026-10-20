@@ -12,6 +12,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
@@ -25,6 +26,7 @@ import (
 	"github.com/knadh/koanf/providers/rawbytes"
 	"github.com/knadh/koanf/v2"
 
+	"clavisid.org/clavis/email"
 	"clavisid.org/clavis/internal/authn/password"
 	"clavisid.org/clavis/internal/issuer"
 	"clavisid.org/clavis/internal/keys"
@@ -51,6 +53,8 @@ type Config struct {
 	Keys Keys `koanf:"keys"`
 	// Passwords configures password hashing.
 	Passwords Passwords `koanf:"passwords"`
+	// Email configures how Clavis sends email to users.
+	Email Email `koanf:"email"`
 	// Telemetry configures traces and metrics.
 	Telemetry Telemetry `koanf:"telemetry"`
 	// Log configures structured logging.
@@ -163,6 +167,94 @@ type Passwords struct {
 	FIPSMigrateArgon2id bool `koanf:"fips_migrate_argon2id"`
 }
 
+// Drivers of the email section.
+const (
+	EmailDriverSMTP    = "smtp"
+	EmailDriverConsole = "console"
+)
+
+// Email configures email delivery (ADR 0024). Without a driver Clavis sends
+// no email, and the features that need it are unavailable.
+type Email struct {
+	// Driver is smtp, or console, which writes messages to the log instead
+	// of sending them and is for development only. Empty disables email.
+	Driver string `koanf:"driver"`
+	// From is the sender of every message, such as
+	// "Clavis <no-reply@example.com>".
+	From string `koanf:"from"`
+	// SMTP configures the smtp driver.
+	SMTP SMTP `koanf:"smtp"`
+}
+
+// SMTP configures the smtp email driver.
+type SMTP struct {
+	Host string `koanf:"host"`
+	// Port is the TCP port. 0 uses the default of the TLS mode: 587, 465 or
+	// 25.
+	Port int `koanf:"port"`
+	// TLS is starttls, implicit, or none, which is allowed only for a
+	// loopback host and without credentials.
+	TLS string `koanf:"tls"`
+	// Username and Password authenticate Clavis to the server. The password
+	// is never logged; prefer the CLAVIS_EMAIL_SMTP_PASSWORD environment
+	// variable to the file.
+	Username string `koanf:"username"`
+	Password string `koanf:"password"`
+	// Timeout bounds each connection.
+	Timeout time.Duration `koanf:"timeout"`
+}
+
+// smtpConfig returns the SMTP sender configuration that e describes.
+func (e Email) smtpConfig() email.SMTPConfig {
+	return email.SMTPConfig{
+		Host:     e.SMTP.Host,
+		Port:     e.SMTP.Port,
+		TLS:      email.TLSMode(e.SMTP.TLS),
+		Username: e.SMTP.Username,
+		Password: e.SMTP.Password,
+		From:     e.From,
+		Timeout:  e.SMTP.Timeout,
+	}
+}
+
+// validate reports the problems in the email section.
+func (e Email) validate() []error {
+	switch e.Driver {
+	case "", EmailDriverConsole:
+		return nil
+	case EmailDriverSMTP:
+	default:
+		return []error{fmt.Errorf("email.driver: must be smtp, console or empty, got %q", e.Driver)}
+	}
+	_, err := email.NewSMTP(e.smtpConfig())
+	var problems interface{ Unwrap() []error }
+	if err == nil || !errors.As(err, &problems) {
+		return nil
+	}
+	errs := make([]error, 0, len(problems.Unwrap()))
+	for _, p := range problems.Unwrap() {
+		if strings.HasPrefix(p.Error(), "from:") {
+			errs = append(errs, errors.New("email."+p.Error()))
+		} else {
+			errs = append(errs, errors.New("email.smtp."+p.Error()))
+		}
+	}
+	return errs
+}
+
+// Sender returns the sender that e describes, which writes to logger for the
+// console driver, or nil when email is disabled.
+func (e Email) Sender(logger *slog.Logger) (email.Sender, error) {
+	switch e.Driver {
+	case EmailDriverSMTP:
+		return email.NewSMTP(e.smtpConfig())
+	case EmailDriverConsole:
+		return email.NewConsole(logger), nil
+	default:
+		return nil, nil
+	}
+}
+
 // Argon2id sets the cost of argon2id hashes.
 type Argon2id struct {
 	// MemoryKiB is the memory of one hash, in KiB.
@@ -239,6 +331,9 @@ func Default() Config {
 			MaxConcurrentHashes: defaultPasswords.MaxConcurrent,
 			FIPSMigrateArgon2id: defaultPasswords.FIPSMigrateArgon2id,
 		},
+		Email: Email{
+			SMTP: SMTP{TLS: string(email.TLSStartTLS), Timeout: email.DefaultSMTPTimeout},
+		},
 		Telemetry: Telemetry{
 			Tracing: Tracing{SampleRatio: 1},
 			Metrics: Metrics{Address: "127.0.0.1:9464"},
@@ -279,6 +374,12 @@ func LoadDatabase(path string, environ []string) (Result, error) {
 // their passwords.
 func LoadPasswords(path string, environ []string) (Result, error) {
 	return load(path, environ, Config.validatePasswords)
+}
+
+// LoadEmail reads the same sources as Load but validates only the issuer and
+// the email and log sections, for commands that check email delivery.
+func LoadEmail(path string, environ []string) (Result, error) {
+	return load(path, environ, Config.validateEmail)
 }
 
 // load reads the file at path, if any, and builds the configuration checked
@@ -389,7 +490,18 @@ func (c Config) Validate() error {
 	}
 	errs = append(errs, c.Keys.validate()...)
 	errs = append(errs, c.Passwords.validate()...)
+	errs = append(errs, c.Email.validate()...)
 	errs = append(errs, c.Telemetry.validate()...)
+	return joinProblems(errs)
+}
+
+// validateEmail reports the problems in the issuer and the email and log
+// sections.
+func (c Config) validateEmail() error {
+	errs := append(c.Email.validate(), c.Log.validate()...)
+	if _, err := issuer.Parse(c.Issuer); err != nil {
+		errs = append(errs, fmt.Errorf("issuer: %w", err))
+	}
 	return joinProblems(errs)
 }
 

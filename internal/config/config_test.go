@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+
+	"clavisid.org/clavis/email"
 )
 
 func writeFile(t *testing.T, content string) string {
@@ -281,6 +284,14 @@ func TestEnvKeysCoverEveryField(t *testing.T) {
 		"CLAVIS_PASSWORDS_PBKDF2_ITERATIONS":     "passwords.pbkdf2_iterations",
 		"CLAVIS_PASSWORDS_MAX_CONCURRENT_HASHES": "passwords.max_concurrent_hashes",
 		"CLAVIS_PASSWORDS_FIPS_MIGRATE_ARGON2ID": "passwords.fips_migrate_argon2id",
+		"CLAVIS_EMAIL_DRIVER":                    "email.driver",
+		"CLAVIS_EMAIL_FROM":                      "email.from",
+		"CLAVIS_EMAIL_SMTP_HOST":                 "email.smtp.host",
+		"CLAVIS_EMAIL_SMTP_PORT":                 "email.smtp.port",
+		"CLAVIS_EMAIL_SMTP_TLS":                  "email.smtp.tls",
+		"CLAVIS_EMAIL_SMTP_USERNAME":             "email.smtp.username",
+		"CLAVIS_EMAIL_SMTP_PASSWORD":             "email.smtp.password",
+		"CLAVIS_EMAIL_SMTP_TIMEOUT":              "email.smtp.timeout",
 		"CLAVIS_TELEMETRY_TRACING_ENABLED":       "telemetry.tracing.enabled",
 		"CLAVIS_TELEMETRY_TRACING_ENDPOINT":      "telemetry.tracing.endpoint",
 		"CLAVIS_TELEMETRY_TRACING_SAMPLE_RATIO":  "telemetry.tracing.sample_ratio",
@@ -291,6 +302,73 @@ func TestEnvKeysCoverEveryField(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, envKeys(reflect.TypeFor[Config](), "")); diff != "" {
 		t.Errorf("envKeys() mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestEmail(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.DiscardHandler)
+	base := []string{"CLAVIS_KEYS_ENCRYPTION_KEY=" + testKey}
+
+	// Email is off unless a driver is chosen; the console driver is never a
+	// default (ADR 0024).
+	res, err := Load("", base)
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	if s, err := res.Config.Email.Sender(logger); s != nil || err != nil {
+		t.Errorf("Sender() without a driver = %v, %v; want none", s, err)
+	}
+
+	res, err = Load("", append(base, "CLAVIS_EMAIL_DRIVER=console"))
+	if err != nil {
+		t.Fatalf("Load() with the console driver unexpected error: %v", err)
+	}
+	if s, err := res.Config.Email.Sender(logger); err != nil {
+		t.Errorf("Sender() for the console driver error: %v", err)
+	} else if _, ok := s.(*email.Console); !ok {
+		t.Errorf("Sender() for the console driver = %T", s)
+	}
+
+	res, err = Load("", append(base, "CLAVIS_EMAIL_DRIVER=smtp", "CLAVIS_EMAIL_FROM=Clavis <no-reply@example.com>",
+		"CLAVIS_EMAIL_SMTP_HOST=smtp.example.com", "CLAVIS_EMAIL_SMTP_USERNAME=clavis",
+		"CLAVIS_EMAIL_SMTP_PASSWORD=s3cret-password"))
+	if err != nil {
+		t.Fatalf("Load() with the smtp driver unexpected error: %v", err)
+	}
+	if s, err := res.Config.Email.Sender(logger); err != nil {
+		t.Errorf("Sender() for the smtp driver error: %v", err)
+	} else if _, ok := s.(*email.SMTP); !ok {
+		t.Errorf("Sender() for the smtp driver = %T", s)
+	}
+
+	for name, tt := range map[string]struct {
+		environ []string
+		want    []string
+	}{
+		"unknown driver": {[]string{"CLAVIS_EMAIL_DRIVER=sendmail"}, []string{"email.driver"}},
+		"smtp without a host or sender": {[]string{"CLAVIS_EMAIL_DRIVER=smtp"},
+			[]string{"email.smtp.host", "email.from"}},
+		"plain text to a remote host": {[]string{"CLAVIS_EMAIL_DRIVER=smtp", "CLAVIS_EMAIL_FROM=a@example.com",
+			"CLAVIS_EMAIL_SMTP_HOST=smtp.example.com", "CLAVIS_EMAIL_SMTP_TLS=none"},
+			[]string{"email.smtp.tls: none is allowed only for a loopback host"}},
+		"password without a username": {[]string{"CLAVIS_EMAIL_DRIVER=smtp", "CLAVIS_EMAIL_FROM=a@example.com",
+			"CLAVIS_EMAIL_SMTP_HOST=smtp.example.com", "CLAVIS_EMAIL_SMTP_PASSWORD=s3cret-password"},
+			[]string{"email.smtp.username and password"}},
+	} {
+		_, err := Load("", append(append([]string(nil), base...), tt.environ...))
+		if err == nil {
+			t.Errorf("%s: Load() succeeded, want an error", name)
+			continue
+		}
+		for _, want := range tt.want {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: Load() error %q does not mention %q", name, err, want)
+			}
+		}
+		if strings.Contains(err.Error(), "s3cret-password") {
+			t.Errorf("%s: Load() error %q contains the password", name, err)
+		}
 	}
 }
 
