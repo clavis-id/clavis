@@ -22,6 +22,7 @@ import (
 	"clavisid.org/clavis/email"
 	"clavisid.org/clavis/internal/app"
 	"clavisid.org/clavis/internal/authn/password"
+	"clavisid.org/clavis/internal/i18n"
 	"clavisid.org/clavis/internal/issuer"
 	"clavisid.org/clavis/internal/keys"
 	"clavisid.org/clavis/internal/mailer"
@@ -182,6 +183,7 @@ type Server struct {
 	signer        tokenSigner
 	passwords     *password.Hasher
 	assets        *ui.Assets
+	catalogs      *i18n.Catalogs
 	crossOrigin   *http.CrossOriginProtection
 	deps          app.Deps
 	defaultTenant store.Tenant
@@ -228,6 +230,10 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("clavis: invalid Passwords: %w", err)
 	}
 	assets, err := ui.NewAssets()
+	if err != nil {
+		return nil, fmt.Errorf("clavis: %w", err)
+	}
+	catalogs, err := i18n.Load()
 	if err != nil {
 		return nil, fmt.Errorf("clavis: %w", err)
 	}
@@ -281,6 +287,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		signer:        tokenSigner{manager},
 		passwords:     passwords,
 		assets:        assets,
+		catalogs:      catalogs,
 		crossOrigin:   http.NewCrossOriginProtection(),
 		deps:          deps,
 		defaultTenant: tenant,
@@ -382,6 +389,7 @@ func (s *Server) routes() http.Handler {
 	s.handleTenant(mux, http.MethodGet, oidc.EndSessionPath, s.handleEndSession)
 	s.handleTenant(mux, http.MethodPost, oidc.EndSessionPath, s.handleEndSession)
 	s.handleTenant(mux, http.MethodPost, logoutPath, s.handleLogout)
+	s.handleTenant(mux, http.MethodGet, brandingPath+"{name}", s.handleLogo)
 	// Assets are the same for every tenant and are not instrumented, like
 	// the probes.
 	mux.HandleFunc(http.MethodGet+" "+assetsPath+"{name}", s.handleAsset)

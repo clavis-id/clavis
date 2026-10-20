@@ -1,6 +1,8 @@
 // Package oidc implements the OpenID Connect layer of Clavis.
 package oidc
 
+import "clavisid.org/clavis/internal/i18n"
+
 // Endpoint paths relative to a tenant's issuer.
 const (
 	AuthorizationPath = "/oauth2/authorize"
@@ -52,12 +54,23 @@ type Metadata struct {
 	ClaimsSupported               []string `json:"claims_supported"`
 	ACRValuesSupported            []string `json:"acr_values_supported"`
 	CodeChallengeMethodsSupported []string `json:"code_challenge_methods_supported"`
+	// UILocalesSupported lists the languages of the hosted pages (ADR 0025).
+	UILocalesSupported []string `json:"ui_locales_supported"`
 	// AuthorizationResponseIssParameterSupported announces the iss parameter
 	// in authorization responses (RFC 9207, section 3).
 	AuthorizationResponseIssParameterSupported bool `json:"authorization_response_iss_parameter_supported"`
 	ClaimsParameterSupported                   bool `json:"claims_parameter_supported"`
 	RequestParameterSupported                  bool `json:"request_parameter_supported"`
 	RequestURIParameterSupported               bool `json:"request_uri_parameter_supported"`
+}
+
+// uiLocales returns the supported locales as BCP 47 tags.
+func uiLocales() []string {
+	var tags []string
+	for _, l := range i18n.Supported() {
+		tags = append(tags, string(l))
+	}
+	return tags
 }
 
 // NewMetadata returns the metadata of the tenant whose issuer is issuer.
@@ -97,6 +110,7 @@ func NewMetadata(issuer string) Metadata {
 		// RFC 8414, section 2: without this field, clients cannot tell that
 		// PKCE is supported. Only S256 is (ADR 0018).
 		CodeChallengeMethodsSupported:              []string{"S256"},
+		UILocalesSupported:                         uiLocales(),
 		AuthorizationResponseIssParameterSupported: true,
 		ClaimsParameterSupported:                   true,
 	}

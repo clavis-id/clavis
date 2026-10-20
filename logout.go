@@ -5,6 +5,9 @@ import (
 	"net/url"
 
 	"clavisid.org/clavis/internal/app"
+	"clavisid.org/clavis/internal/i18n"
+	"clavisid.org/clavis/internal/oauth"
+	"clavisid.org/clavis/internal/oidc"
 	"clavisid.org/clavis/internal/ui"
 )
 
@@ -13,8 +16,9 @@ import (
 const logoutPath = "/logout"
 
 // logoutParams names the parameters of a logout request that the
-// confirmation page carries to logoutPath.
-var logoutParams = []string{"id_token_hint", "client_id", "post_logout_redirect_uri", "state"}
+// confirmation page carries to logoutPath, and that its language selector
+// sends again to the end session endpoint.
+var logoutParams = []string{"id_token_hint", "client_id", "post_logout_redirect_uri", "state", "ui_locales"}
 
 // handleEndSession serves the end session endpoint (OpenID Connect
 // RP-Initiated Logout 1.0, section 2), with GET or POST. A browser with an
@@ -29,8 +33,8 @@ func (s *Server) handleEndSession(w http.ResponseWriter, r *http.Request, t tena
 	}
 	params, err := authorizationParams(w, r)
 	if err != nil {
-		s.errorPage(w, r, http.StatusBadRequest, "Invalid sign-out request",
-			"The sign-out request is malformed. Return to the application and try again.")
+		s.errorPage(w, r, t, s.locale(w, r, "", ""), http.StatusBadRequest, i18n.ErrorInvalidSignOutTitle,
+			i18n.ErrorMalformedSignOut)
 		return
 	}
 	l, err := app.StartLogout(r.Context(), s.deps, s.signer, t.authorizationTenant(), params, sessionHash(r, t.ID))
@@ -45,22 +49,28 @@ func (s *Server) handleEndSession(w http.ResponseWriter, r *http.Request, t tena
 		s.logout(w, r, t, params)
 		return
 	}
-	var fields []ui.Field
-	if l.Problem == "" {
-		for _, name := range logoutParams {
-			if value := params.Get(name); value != "" {
+	// A request with a problem is confirmed without its parameters, so the
+	// user stays at Clavis; the language goes on in any case.
+	var request, fields []ui.Field
+	for _, name := range logoutParams {
+		if value := params.Get(name); value != "" {
+			request = append(request, ui.Field{Name: name, Value: value})
+			if l.Problem == "" || name == "ui_locales" {
 				fields = append(fields, ui.Field{Name: name, Value: value})
 			}
 		}
 	}
+	layout := s.layout(r, t, s.locale(w, r, params.Get(ui.LocaleParam), oauth.UILocales(params)))
+	layout.Languages = &ui.LanguageSelector{Method: http.MethodPost, Action: t.path + oidc.EndSessionPath,
+		Fields: request}
 	// Browsers apply form-action to the redirect that follows the form.
 	var targets []string
 	if target := ui.FormTarget(l.RedirectURI); target != "" {
 		targets = append(targets, target)
 	}
-	ui.SetPageHeaders(w.Header(), ui.ContentSecurityPolicy(true, targets...))
+	ui.SetPageHeaders(w.Header(), layout.ContentSecurityPolicy(true, targets...))
 	s.render(w, r, http.StatusOK, ui.Logout(ui.LogoutPage{
-		Layout:     s.layout(),
+		Layout:     layout,
 		Account:    l.Account,
 		ClientName: l.Client.Name,
 		Problem:    l.Problem,
@@ -72,14 +82,14 @@ func (s *Server) handleEndSession(w http.ResponseWriter, r *http.Request, t tena
 // handleLogout signs the user out after the confirmation page.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, t tenant) {
 	if err := s.crossOrigin.Check(r); err != nil {
-		s.errorPage(w, r, http.StatusForbidden, "Request blocked",
-			"The sign-out form was submitted from another site.")
+		s.errorPage(w, r, t, s.locale(w, r, "", ""), http.StatusForbidden, i18n.ErrorBlockedTitle,
+			i18n.ErrorCrossSiteSignOutForm)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
 	if err := r.ParseForm(); err != nil {
-		s.errorPage(w, r, http.StatusBadRequest, "Invalid sign-out request",
-			"The sign-out form is malformed. Return to the application and try again.")
+		s.errorPage(w, r, t, s.locale(w, r, "", ""), http.StatusBadRequest, i18n.ErrorInvalidSignOutTitle,
+			i18n.ErrorMalformedSignOutForm)
 		return
 	}
 	s.logout(w, r, t, r.PostForm)
@@ -109,6 +119,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request, t tenant, params
 		seeOther(w, uri)
 		return
 	}
-	ui.SetPageHeaders(w.Header(), ui.ContentSecurityPolicy(false))
-	s.render(w, r, http.StatusOK, ui.SignedOut(ui.SignedOutPage{Layout: s.layout(), Problem: l.Problem}))
+	layout := s.layout(r, t, s.locale(w, r, "", oauth.UILocales(params)))
+	ui.SetPageHeaders(w.Header(), layout.ContentSecurityPolicy(false))
+	s.render(w, r, http.StatusOK, ui.SignedOut(ui.SignedOutPage{Layout: layout, Problem: l.Problem}))
 }

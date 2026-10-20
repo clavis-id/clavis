@@ -59,7 +59,7 @@ func TestParseAuthorizationRequest(t *testing.T) {
 		!slices.Equal(got.Scopes, []string{"openid", "profile"}) || got.State != "af0ifjsldkj" ||
 		got.Nonce != "n-0S6_WzA2Mj" || got.CodeChallenge != challenge || len(got.Prompt) != 0 ||
 		got.MaxAge != -1 || !got.OpenID() || got.LoginHint != "" || got.IDTokenHint != "" ||
-		got.ResponseMode != ResponseModeQuery ||
+		got.ResponseMode != ResponseModeQuery || got.UILocales != "" ||
 		got.Claims.UserInfo != nil || got.Claims.IDToken != nil {
 		t.Errorf("ParseAuthorizationRequest() = %+v", got)
 	}
@@ -116,9 +116,12 @@ func TestParseAuthorizationRequest(t *testing.T) {
 		}},
 		{"empty claims object", func(p url.Values) { p.Set("claims", " {} ") },
 			func(r AuthorizationRequest) bool { return r.Claims.UserInfo == nil && r.Claims.IDToken == nil }},
+		{"ui_locales", func(p url.Values) { p.Set("ui_locales", "es-419 en") },
+			func(r AuthorizationRequest) bool { return r.UILocales == "es-419 en" }},
+		{"unusable ui_locales are ignored", func(p url.Values) { p.Set("ui_locales", "es\x00") },
+			func(r AuthorizationRequest) bool { return r.UILocales == "" }},
 		{"ignored parameters", func(p url.Values) {
 			p.Set("acr_values", "urn:a urn:b")
-			p.Set("ui_locales", "es")
 			p["unknown"] = []string{"a", "b"}
 		}, nil},
 	}
@@ -329,4 +332,24 @@ func FuzzParseAuthorizationRequest(f *testing.F) {
 			t.Errorf("ParseAuthorizationRequest(%q) accepted the hints %q and %q", query, r.LoginHint, r.IDTokenHint)
 		}
 	})
+}
+
+func TestUILocales(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		values []string
+		want   string
+	}{
+		{nil, ""},
+		{[]string{"es-419 en"}, "es-419 en"},
+		{[]string{"es", "en"}, ""},
+		{[]string{strings.Repeat("a", MaxUILocalesLength)}, strings.Repeat("a", MaxUILocalesLength)},
+		{[]string{strings.Repeat("a", MaxUILocalesLength+1)}, ""},
+		{[]string{"es\nen"}, ""},
+		{[]string{"español"}, ""},
+	} {
+		if got := UILocales(url.Values{"ui_locales": tt.values}); got != tt.want {
+			t.Errorf("UILocales(%q) = %q, want %q", tt.values, got, tt.want)
+		}
+	}
 }
