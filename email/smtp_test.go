@@ -65,6 +65,7 @@ type fakeSMTP struct {
 	user     string // offers and requires AUTH PLAIN when set
 	password string
 	rcptCode string // replies to RCPT with this, such as "550 5.1.1 no such user"
+	rcptDrop bool   // closes the connection on RCPT
 
 	mu  sync.Mutex
 	got []received
@@ -127,7 +128,7 @@ func (s *fakeSMTP) serve(conn net.Conn) {
 		verb, arg, _ := strings.Cut(line, " ")
 		switch strings.ToUpper(verb) {
 		case "EHLO", "HELO":
-			ext := []string{"250-127.0.0.1", "250-8BITMIME"}
+			ext := []string{"250-127.0.0.1", "250-8BITMIME", "250-ENHANCEDSTATUSCODES"}
 			if s.startTLS && !secure {
 				ext = append(ext, "250-STARTTLS")
 			}
@@ -169,6 +170,9 @@ func (s *fakeSMTP) serve(conn net.Conn) {
 			msg.from = arg
 			reply("250 2.1.0 ok")
 		case "RCPT":
+			if s.rcptDrop {
+				return
+			}
 			if s.rcptCode != "" {
 				reply(s.rcptCode)
 				continue
@@ -308,22 +312,36 @@ func TestSMTPRequiresTLS(t *testing.T) {
 	}
 }
 
+// Errors keep the server's reply codes but never the recipient's address,
+// which the server's reply text and go-mail's error both contain, because
+// the mailer logs them.
 func TestSMTPReportsRejections(t *testing.T) {
 	t.Parallel()
-	for code, permanent := range map[string]bool{
-		"550 5.1.1 no such user":        true,
-		"451 4.3.0 try again later":     false,
-		"452 4.2.2 mailbox temporarily": false,
+	for name, tt := range map[string]struct {
+		srv       *fakeSMTP
+		permanent bool
+		want      string
+	}{
+		"no such user": {&fakeSMTP{rcptCode: "550 5.1.1 <ada@example.com>: no such user"}, true,
+			"RCPT TO command: 550 5.1.1"},
+		"try again later": {&fakeSMTP{rcptCode: "451 4.3.0 <ada@example.com>: try again later"}, false,
+			"RCPT TO command: 451 4.3.0"},
+		"mailbox full": {&fakeSMTP{rcptCode: "452 4.2.2 mailbox temporarily full"}, false,
+			"RCPT TO command: 452 4.2.2"},
+		"connection dropped": {&fakeSMTP{rcptDrop: true}, false,
+			"RCPT TO command: failed without a reply from the server"},
 	} {
-		srv := &fakeSMTP{rcptCode: code}
-		port := srv.start(t)
+		port := tt.srv.start(t)
 		s, err := NewSMTP(SMTPConfig{Host: "127.0.0.1", Port: port, TLS: TLSNone, From: "no-reply@example.com"})
 		if err != nil {
 			t.Fatalf("NewSMTP() unexpected error: %v", err)
 		}
 		err = s.Send(t.Context(), testMessage())
-		if err == nil || errors.Is(err, ErrRejected) != permanent {
-			t.Errorf("Send() after RCPT %q = %v, want rejected %v", code, err, permanent)
+		switch {
+		case err == nil || errors.Is(err, ErrRejected) != tt.permanent:
+			t.Errorf("%s: Send() = %v, want rejected %v", name, err, tt.permanent)
+		case !strings.Contains(err.Error(), tt.want) || strings.Contains(err.Error(), "ada@"):
+			t.Errorf("%s: Send() = %q, want %q and no address", name, err, tt.want)
 		}
 	}
 }
@@ -385,6 +403,12 @@ func TestNewSMTPValidates(t *testing.T) {
 	for name, edit := range map[string]func(*SMTPConfig){
 		"no host":                func(c *SMTPConfig) { c.Host = "" },
 		"host with a space":      func(c *SMTPConfig) { c.Host = "smtp example.com" },
+		"host with a port":       func(c *SMTPConfig) { c.Host = "smtp.example.com:587" },
+		"address with a port":    func(c *SMTPConfig) { c.Host = "[2001:db8::1]:587" },
+		"IPv4 in brackets":       func(c *SMTPConfig) { c.Host = "[192.0.2.1]" },
+		"IPv6 with a zone":       func(c *SMTPConfig) { c.Host = "fe80::1%eth0" },
+		"empty label":            func(c *SMTPConfig) { c.Host = "smtp..example.com" },
+		"long label":             func(c *SMTPConfig) { c.Host = strings.Repeat("a", 64) + ".example.com" },
 		"port out of range":      func(c *SMTPConfig) { c.Port = 70000 },
 		"unknown TLS mode":       func(c *SMTPConfig) { c.TLS = "ssl" },
 		"plain text to a remote": func(c *SMTPConfig) { c.TLS = TLSNone },
@@ -404,10 +428,37 @@ func TestNewSMTPValidates(t *testing.T) {
 	}
 }
 
+// go-mail joins the host and the port with a colon, so an IPv6 address needs
+// its brackets there, and the TLS server name has none.
+func TestNewSMTPAcceptsHostNamesAndAddresses(t *testing.T) {
+	t.Parallel()
+	for host, want := range map[string][2]string{
+		"smtp.example.com":    {"smtp.example.com", "smtp.example.com"},
+		"mail_relay.internal": {"mail_relay.internal", "mail_relay.internal"},
+		"192.0.2.1":           {"192.0.2.1", "192.0.2.1"},
+		"2001:db8::1":         {"[2001:db8::1]", "2001:db8::1"},
+		"[2001:db8::1]":       {"[2001:db8::1]", "2001:db8::1"},
+	} {
+		s, err := NewSMTP(SMTPConfig{Host: host, From: "no-reply@example.com"})
+		if err != nil {
+			t.Errorf("NewSMTP() with host %q: %v", host, err)
+			continue
+		}
+		if got := [2]string{s.cfg.Host, s.cfg.TLSConfig.ServerName}; got != want {
+			t.Errorf("NewSMTP() with host %q: host and server name %q, want %q", host, got, want)
+		}
+	}
+	for _, host := range []string{"::1", "[::1]"} {
+		if _, err := NewSMTP(SMTPConfig{Host: host, TLS: TLSNone, From: "no-reply@example.com"}); err != nil {
+			t.Errorf("NewSMTP() in plain text to %q: %v", host, err)
+		}
+	}
+}
+
 func TestLoopback(t *testing.T) {
 	t.Parallel()
 	for host, want := range map[string]bool{
-		"localhost": true, "127.0.0.1": true, "127.1.2.3": true, "::1": true, "[::1]": true,
+		"localhost": true, "127.0.0.1": true, "127.1.2.3": true, "::1": true,
 		"localhost.example.com": false, "10.0.0.1": false, "smtp.example.com": false, "": false,
 	} {
 		if got := loopback(host); got != want {
