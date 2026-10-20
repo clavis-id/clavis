@@ -34,6 +34,11 @@ updates:
       # work with the suite or the runner: MongoDB 8.3 refuses to start on
       # Linux 6.19 and newer kernels.
       - dependency-name: mongo
+      # The suite images move with the release pinned in run.sh (runner scripts,
+      # plans and expected results). Dependabot also cannot read
+      # registry.gitlab.com without credentials, which failed every run.
+      - dependency-name: openid/conformance-suite
+      - dependency-name: openid/conformance-suite/nginx
 
   - package-ecosystem: pip
     directory: "/conformance"

@@ -2,7 +2,7 @@
 # run.sh, which builds Clavis, provides the variables below and cleans up.
 #
 # Every image is pinned by digest. The suite images and the runner scripts in
-# run.sh must come from the same suite release.
+# run.sh must come from the same suite release, so Dependabot ignores them.
 name: clavis-conformance
 
 services:
