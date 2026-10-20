@@ -201,8 +201,8 @@ type Server struct {
 // signing keys on first use) and returns a ready-to-use Server.
 //
 // New starts signing key rotation, the cleanup of expired records and, with
-// Config.Email, email delivery in the background. Call Close to stop them when the Server is no longer needed;
-// canceling ctx stops them too.
+// Config.Email, email delivery in the background. Call Close to stop them
+// when the Server is no longer needed; canceling ctx stops them too.
 // Background work never outlives ctx, so ctx must live as long as the Server
 // is in use.
 func New(ctx context.Context, cfg Config) (*Server, error) {
