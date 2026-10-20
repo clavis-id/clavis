@@ -76,6 +76,16 @@ type AuthorizationRequest struct {
 	ForceConsent        bool
 	SessionID           *uuid.UUID
 	ResponseMode        string
+	UiLocales           string
+}
+
+type Branding struct {
+	TenantID  uuid.UUID
+	Theme     []byte
+	Logo      []byte
+	LogoType  string
+	LogoHash  string
+	UpdatedAt time.Time
 }
 
 type Client struct {

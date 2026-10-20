@@ -84,6 +84,10 @@ func Run(t *testing.T, open OpenFunc) {
 		t.Parallel()
 		runGrants(t, open)
 	})
+	t.Run("Brandings", func(t *testing.T) {
+		t.Parallel()
+		runBrandings(t, open)
+	})
 }
 
 func runTenants(t *testing.T, open OpenFunc) {

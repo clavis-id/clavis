@@ -65,6 +65,8 @@ type Store interface {
 	APIResources() APIResources
 	// Grants returns the grant repository.
 	Grants() Grants
+	// Brandings returns the branding repository.
+	Brandings() Brandings
 	// Ping reports whether the underlying database is reachable.
 	Ping(ctx context.Context) error
 }
@@ -374,8 +376,11 @@ type AuthorizationRequest struct {
 	// ResponseMode is how the response goes back to the client: query or
 	// form_post (OAuth 2.0 Form Post Response Mode).
 	ResponseMode string
-	CreatedAt    time.Time
-	ExpiresAt    time.Time
+	// UILocales is the request's ui_locales parameter, the user's preferred
+	// languages for the hosted pages, or empty (ADR 0025).
+	UILocales string
+	CreatedAt time.Time
+	ExpiresAt time.Time
 }
 
 // AuthorizationRequests stores authorization requests. Every method works
@@ -719,4 +724,96 @@ type Grants interface {
 	// Delete removes the grant of a tenant for the user and client, or
 	// returns ErrNotFound.
 	Delete(ctx context.Context, tenantID, userID, clientID uuid.UUID) error
+}
+
+// Branding is how the hosted pages of a tenant look (ADR 0025).
+type Branding struct {
+	TenantID uuid.UUID
+	Theme    Theme
+	// LogoType is the media type of the tenant's logo, such as image/png,
+	// or empty when the tenant has no logo. LogoHash identifies the logo's
+	// content.
+	LogoType  string
+	LogoHash  string
+	UpdatedAt time.Time
+}
+
+// Theme holds the values that a tenant gives to the CSS custom properties
+// of the hosted pages. Empty values keep the defaults.
+type Theme struct {
+	// Light and Dark are the colors of the light and dark color schemes.
+	Light ThemeColors `json:"light,omitzero"`
+	Dark  ThemeColors `json:"dark,omitzero"`
+	// Radius is the corner radius in CSS pixels, or nil for the default.
+	Radius *int `json:"radius,omitzero"`
+}
+
+// ThemeColors are the colors of one color scheme, each as #rrggbb.
+type ThemeColors struct {
+	Accent     string `json:"accent,omitzero"`
+	AccentText string `json:"accent_text,omitzero"`
+	Background string `json:"background,omitzero"`
+	Surface    string `json:"surface,omitzero"`
+	Text       string `json:"text,omitzero"`
+	Muted      string `json:"muted,omitzero"`
+	Border     string `json:"border,omitzero"`
+	Error      string `json:"error,omitzero"`
+}
+
+// ThemeColor is one color of a ThemeColors, named as in its JSON form.
+type ThemeColor struct {
+	Name  string
+	Value string
+}
+
+// List returns the colors of c with their names, in a fixed order.
+func (c ThemeColors) List() []ThemeColor {
+	return []ThemeColor{
+		{"accent", c.Accent}, {"accent_text", c.AccentText}, {"background", c.Background},
+		{"surface", c.Surface}, {"text", c.Text}, {"muted", c.Muted}, {"border", c.Border}, {"error", c.Error},
+	}
+}
+
+// Set sets the color named name, as List names it, and reports whether
+// that name exists.
+func (c *ThemeColors) Set(name, value string) bool {
+	field, ok := map[string]*string{
+		"accent": &c.Accent, "accent_text": &c.AccentText, "background": &c.Background, "surface": &c.Surface,
+		"text": &c.Text, "muted": &c.Muted, "border": &c.Border, "error": &c.Error,
+	}[name]
+	if ok {
+		*field = value
+	}
+	return ok
+}
+
+// Logo is the image that a tenant's hosted pages show.
+type Logo struct {
+	// ContentType is the media type, such as image/png.
+	ContentType string
+	Data        []byte
+	// Hash identifies the content, for example in the logo's URL.
+	Hash string
+}
+
+// Brandings stores the branding of tenants, at most one per tenant. A
+// tenant without a stored branding uses the defaults.
+type Brandings interface {
+	// Get returns the branding of a tenant, without its logo's data, or
+	// ErrNotFound.
+	Get(ctx context.Context, tenantID uuid.UUID) (Branding, error)
+	// GetLogo returns the logo of a tenant, or ErrNotFound when it has
+	// none.
+	GetLogo(ctx context.Context, tenantID uuid.UUID) (Logo, error)
+	// PutTheme sets the theme of a tenant and keeps its logo. It returns
+	// ErrNotFound for an unknown tenant.
+	PutTheme(ctx context.Context, tenantID uuid.UUID, theme Theme, updatedAt time.Time) error
+	// PutLogo sets the logo of a tenant and keeps its theme. It returns
+	// ErrNotFound for an unknown tenant.
+	PutLogo(ctx context.Context, tenantID uuid.UUID, logo Logo, updatedAt time.Time) error
+	// DeleteLogo removes the logo of a tenant and keeps its theme. It
+	// returns ErrNotFound when the tenant has no logo.
+	DeleteLogo(ctx context.Context, tenantID uuid.UUID, updatedAt time.Time) error
+	// Delete removes the branding of a tenant, or returns ErrNotFound.
+	Delete(ctx context.Context, tenantID uuid.UUID) error
 }
