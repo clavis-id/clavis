@@ -37,7 +37,8 @@ Three questions remain open:
   one-minute limit on each attempt. The queue holds 256 messages in memory; a full queue drops
   the message and logs an error. Messages are never stored, so codes never reach the database,
   and a restart loses the messages not sent yet: the user asks for another. Logs never show the
-  content of a message.
+  content or the recipient of a message: an SMTP failure is described by its step and the
+  server's reply codes, not by the reply text, which often quotes the address.
 - **Configuration.** The `email` section chooses the driver: `smtp`, `console`, or none, the
   default, which disables email and the features that need it. The console driver is never
   chosen implicitly, and the server logs a warning when it starts with it.

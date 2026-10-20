@@ -76,8 +76,9 @@ func NewSMTP(c SMTPConfig) (*SMTP, error) {
 		c.Port = map[TLSMode]int{TLSStartTLS: 587, TLSImplicit: 465, TLSNone: 25}[c.TLS]
 	}
 	var errs []error
-	if c.Host == "" || strings.ContainsAny(c.Host, " \t\r\n/") {
-		errs = append(errs, errors.New("host: required, a host name or an IP address"))
+	name, ok := hostName(c.Host)
+	if !ok {
+		errs = append(errs, errors.New("host: required, a host name or an IP address, without a port"))
 	}
 	if c.Port < 1 || c.Port > 65535 {
 		errs = append(errs, fmt.Errorf("port: must be between 1 and 65535, got %d", c.Port))
@@ -87,7 +88,7 @@ func NewSMTP(c SMTPConfig) (*SMTP, error) {
 	case TLSNone:
 		// ADR 0024: plain text only to this machine, and never with
 		// credentials.
-		if !loopback(c.Host) {
+		if !loopback(name) {
 			errs = append(errs, errors.New("tls: none is allowed only for a loopback host"))
 		}
 		if c.Username != "" || c.Password != "" {
@@ -114,21 +115,55 @@ func NewSMTP(c SMTPConfig) (*SMTP, error) {
 	} else {
 		c.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
-	c.TLSConfig.ServerName = c.Host
+	c.TLSConfig.ServerName = name
 	c.TLSConfig.MinVersion = max(c.TLSConfig.MinVersion, tls.VersionTLS12)
+	// go-mail joins the host and the port with a colon.
+	c.Host = name
+	if strings.Contains(name, ":") {
+		c.Host = "[" + name + "]"
+	}
 	return &SMTP{cfg: c, from: from}, nil
 }
 
-// loopback reports whether host names this machine.
+// hostName returns host without the brackets around an IPv6 address, and
+// reports whether host is a host name or an IP address. A port in host is a
+// common mistake that would only show when a message is sent.
+func hostName(host string) (string, bool) {
+	if inner, ok := strings.CutPrefix(host, "["); ok {
+		inner, ok = strings.CutSuffix(inner, "]")
+		ip, err := netip.ParseAddr(inner)
+		return inner, ok && err == nil && ip.Is6() && ip.Zone() == ""
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return host, ip.Zone() == ""
+	}
+	if host == "" || len(host) > 253 {
+		return "", false
+	}
+	for label := range strings.SplitSeq(host, ".") {
+		if label == "" || len(label) > 63 || strings.IndexFunc(label, notHostNameRune) >= 0 {
+			return "", false
+		}
+	}
+	return host, true
+}
+
+func notHostNameRune(r rune) bool {
+	return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_'
+}
+
+// loopback reports whether host, without brackets, names this machine.
 func loopback(host string) bool {
 	if host == "localhost" {
 		return true
 	}
-	ip, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	ip, err := netip.ParseAddr(host)
 	return err == nil && ip.IsLoopback()
 }
 
-// Send delivers m. A permanent refusal by the server wraps ErrRejected.
+// Send delivers m. A permanent refusal by the server, a 5xx reply, wraps
+// ErrRejected. Errors describe the server's reply by its codes, without the
+// recipient's address, so they can be logged.
 func (s *SMTP) Send(ctx context.Context, m Message) error {
 	if err := m.Validate(); err != nil {
 		return err
@@ -194,10 +229,28 @@ func (s *SMTP) Send(ctx context.Context, m Message) error {
 	}
 	if err := client.DialAndSendWithContext(ctx, msg); err != nil {
 		var sendErr *gomail.SendError
-		if errors.As(err, &sendErr) && !sendErr.IsTemp() {
-			return fmt.Errorf("%w: %w", ErrRejected, err)
+		switch {
+		case !errors.As(err, &sendErr):
+			// Connection, TLS and authentication failures, which do not
+			// involve the recipient.
+			return fmt.Errorf("email: sending through %s: %w", s.cfg.Host, err)
+		case sendErr.ErrorCode() >= 500:
+			return fmt.Errorf("%w: %s", ErrRejected, sendFailure(sendErr))
+		default:
+			// A 4xx reply, or a failure without a reply such as a dropped
+			// connection: a later attempt can succeed.
+			return fmt.Errorf("email: sending through %s: %s", s.cfg.Host, sendFailure(sendErr))
 		}
-		return fmt.Errorf("email: sending through %s: %w", s.cfg.Host, err)
 	}
 	return nil
+}
+
+// sendFailure describes a failed transaction by its step and the server's
+// reply codes. The text of e lists the recipient, and so does the reply that
+// it quotes; leaving both out keeps addresses out of the log.
+func sendFailure(e *gomail.SendError) string {
+	if e.ErrorCode() == 0 {
+		return e.Reason.String() + ": failed without a reply from the server"
+	}
+	return strings.TrimSpace(fmt.Sprintf("%s: %d %s", e.Reason, e.ErrorCode(), e.EnhancedStatusCode()))
 }
