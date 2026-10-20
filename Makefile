@@ -15,7 +15,7 @@ TOOL_MODULES = $(wildcard tools/*/go.mod)
 COVER_PROFILE ?= coverage.out
 # Security-critical packages must keep at least COVER_FLOOR percent coverage.
 COVER_FLOOR ?= 80
-COVER_FLOOR_PKGS = ./email ./internal/authn/password ./internal/issuer ./internal/keys ./internal/oauth ./internal/oidc ./kek
+COVER_FLOOR_PKGS = ./email ./internal/authn/password ./internal/i18n ./internal/issuer ./internal/keys ./internal/oauth ./internal/oidc ./kek
 FUZZTIME ?= 30s
 
 # Container images, pinned by digest. sqlc runs in Docker because its
