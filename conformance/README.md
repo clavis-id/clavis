@@ -92,5 +92,5 @@ Plans are added as the plan for Phase 1 lands their features (see
              -o requirements.txt requirements.in'
   ```
 
-Dependabot proposes updates for the images, except MongoDB, which moves with the suite, and
-for the Python dependencies.
+Dependabot proposes updates for the images, except the suite images and MongoDB, which move
+with the suite release, and for the Python dependencies.
