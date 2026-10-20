@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -11,6 +12,7 @@ import (
 	"clavisid.org/clavis/email"
 	"clavisid.org/clavis/internal/config"
 	"clavisid.org/clavis/internal/emailtmpl"
+	"clavisid.org/clavis/internal/i18n"
 )
 
 // testEmailTimeout bounds the delivery of a test message.
@@ -26,7 +28,7 @@ func newEmailCommand(environ []string) *cobra.Command {
 	}
 	cmd.PersistentFlags().StringVar(&configPath, "config", "", "path to the YAML configuration file")
 
-	var to string
+	var to, locale string
 	test := &cobra.Command{
 		Use:   "test",
 		Short: "Send a test message",
@@ -47,7 +49,15 @@ func newEmailCommand(environ []string) *cobra.Command {
 			case sender == nil:
 				return errors.New("email is disabled: set email.driver to smtp, or to console for development")
 			}
-			msg, err := emailtmpl.Render(ctx, to, emailtmpl.TestMessage(cfg.Issuer))
+			l, ok := i18n.ParseLocale(locale)
+			if !ok {
+				return fmt.Errorf("--locale %q: want one of %s", locale, supportedLocales())
+			}
+			catalogs, err := i18n.Load()
+			if err != nil {
+				return err
+			}
+			msg, err := emailtmpl.Render(ctx, to, emailtmpl.TestMessage(catalogs.Printer(l), cfg.Issuer))
 			if err != nil {
 				return fmt.Errorf("--to: %w", err)
 			}
@@ -64,6 +74,16 @@ func newEmailCommand(environ []string) *cobra.Command {
 	}
 	test.Flags().StringVar(&to, "to", "", "address to send the test message to (required)")
 	_ = test.MarkFlagRequired("to")
+	test.Flags().StringVar(&locale, "locale", string(i18n.Default), "language of the test message: "+supportedLocales())
 	cmd.AddCommand(test)
 	return cmd
+}
+
+// supportedLocales lists the supported locales for help and error messages.
+func supportedLocales() string {
+	var names []string
+	for _, l := range i18n.Supported() {
+		names = append(names, string(l))
+	}
+	return strings.Join(names, ", ")
 }

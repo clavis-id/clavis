@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"clavisid.org/clavis/email"
+	"clavisid.org/clavis/internal/i18n"
 )
 
 func content() Content {
@@ -75,10 +76,24 @@ func TestRenderRejectsInvalidContent(t *testing.T) {
 	}
 }
 
+// The test message exists in every locale, with no placeholder left.
 func TestTestMessage(t *testing.T) {
 	t.Parallel()
-	m, err := Render(t.Context(), "ops@example.com", TestMessage("https://auth.example.com"))
-	if err != nil || m.Subject != "Clavis test message" || !strings.Contains(m.Text, "Issuer: https://auth.example.com") {
-		t.Errorf("the test message = %+v, %v", m, err)
+	catalogs, err := i18n.Load()
+	if err != nil {
+		t.Fatalf("i18n.Load() unexpected error: %v", err)
+	}
+	for locale, want := range map[i18n.Locale][2]string{
+		i18n.English: {"Clavis test message", "Issuer: https://auth.example.com"},
+		i18n.Spanish: {"Mensaje de prueba de Clavis", "Emisor: https://auth.example.com"},
+	} {
+		m, err := Render(t.Context(), "ops@example.com", TestMessage(catalogs.Printer(locale), "https://auth.example.com"))
+		if err != nil || m.Subject != want[0] || !strings.Contains(m.Text, want[1]) ||
+			!strings.Contains(m.HTML, `<html lang="`+string(locale)+`">`) || strings.ContainsAny(m.Text+m.HTML, "{}") {
+			t.Errorf("the %s test message = %+v, %v", locale, m, err)
+		}
+	}
+	if len(i18n.Supported()) != 2 {
+		t.Error("a locale was added: add its test message here")
 	}
 }

@@ -25,6 +25,13 @@ func TestEmailTest(t *testing.T) {
 		t.Errorf("email test with the console driver = %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
 	}
 
+	// The message exists in every locale.
+	code, _, stderr = run([]string{"CLAVIS_EMAIL_DRIVER=console", "CLAVIS_ISSUER=https://auth.example.com"},
+		"--to", "ops@example.com", "--locale", "es")
+	if code != 0 || !strings.Contains(stderr, "Mensaje de prueba de Clavis") {
+		t.Errorf("email test in Spanish = %d\nstderr: %s", code, stderr)
+	}
+
 	// A server that refuses the connection.
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -47,6 +54,8 @@ func TestEmailTest(t *testing.T) {
 		"invalid recipient":    {[]string{"CLAVIS_EMAIL_DRIVER=console"}, []string{"--to", "ops"}, "--to:"},
 		"invalid email config": {[]string{"CLAVIS_EMAIL_DRIVER=smtp"}, []string{"--to", "ops@example.com"}, "email.smtp.host"},
 		"delivery failure":     {smtp, []string{"--to", "ops@example.com"}, "sending the test message"},
+		"unsupported locale": {[]string{"CLAVIS_EMAIL_DRIVER=console"}, []string{"--to", "ops@example.com", "--locale", "fr"},
+			"--locale \"fr\": want one of en, es"},
 	} {
 		code, _, stderr := run(tt.environ, tt.args...)
 		if code != 1 || !strings.Contains(stderr, tt.want) {
