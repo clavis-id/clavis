@@ -88,6 +88,10 @@ func Run(t *testing.T, open OpenFunc) {
 		t.Parallel()
 		runBrandings(t, open)
 	})
+	t.Run("EmailVerifications", func(t *testing.T) {
+		t.Parallel()
+		runEmailVerifications(t, open)
+	})
 }
 
 func runTenants(t *testing.T, open OpenFunc) {
@@ -95,6 +99,7 @@ func runTenants(t *testing.T, open OpenFunc) {
 		t.Parallel()
 		tenants := open(t).Tenants()
 		want := newTenant("acme")
+		want.SignupEnabled = true
 		mustCreate(t, tenants, want)
 
 		got, err := tenants.Get(t.Context(), want.ID)
@@ -147,6 +152,50 @@ func runTenants(t *testing.T, open OpenFunc) {
 		}
 		if err := tenants.Delete(t.Context(), missing); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("Delete() error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("Update", func(t *testing.T) {
+		t.Parallel()
+		tenants := open(t).Tenants()
+		tn := newTenant("acme")
+		mustCreate(t, tenants, tn)
+		other := newTenant("other")
+		mustCreate(t, tenants, other)
+
+		// The slug and the creation time never change.
+		update := tn
+		update.Slug = "renamed"
+		update.Name = "Acme Corporation"
+		update.SignupEnabled = true
+		update.CreatedAt = tn.CreatedAt.Add(-time.Hour)
+		update.UpdatedAt = tn.UpdatedAt.Add(time.Hour)
+		if err := tenants.Update(t.Context(), update); err != nil {
+			t.Fatalf("Update() unexpected error: %v", err)
+		}
+		want := tn
+		want.Name, want.SignupEnabled, want.UpdatedAt = update.Name, true, update.UpdatedAt
+		got, err := tenants.GetBySlug(t.Context(), tn.Slug)
+		if err != nil {
+			t.Fatalf("GetBySlug() unexpected error: %v", err)
+		}
+		if diff := cmp.Diff(normalize(want), got); diff != "" {
+			t.Errorf("tenant after Update() mismatch (-want +got):\n%s", diff)
+		}
+		if got, err := tenants.Get(t.Context(), other.ID); err != nil || got.SignupEnabled || got.Name != other.Name {
+			t.Errorf("Update() changed another tenant: %+v, %v", got, err)
+		}
+
+		update.SignupEnabled = false
+		if err := tenants.Update(t.Context(), update); err != nil {
+			t.Fatalf("Update() unexpected error: %v", err)
+		}
+		if got, err := tenants.Get(t.Context(), tn.ID); err != nil || got.SignupEnabled {
+			t.Errorf("tenant after disabling signup = %+v, %v; want SignupEnabled false", got, err)
+		}
+		missing := newTenant("missing")
+		if err := tenants.Update(t.Context(), missing); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Update() of an unknown tenant = %v, want ErrNotFound", err)
 		}
 	})
 

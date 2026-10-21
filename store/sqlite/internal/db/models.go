@@ -108,6 +108,21 @@ type Client struct {
 	ResourceServerFor                   string
 }
 
+type EmailVerification struct {
+	ID                     string
+	TenantID               string
+	Purpose                string
+	Email                  string
+	CodeHash               []byte
+	LinkHash               []byte
+	BindingHash            []byte
+	AuthorizationRequestID string
+	Attempts               int64
+	VerifiedAt             sql.NullInt64
+	CreatedAt              int64
+	ExpiresAt              int64
+}
+
 type Grant struct {
 	ID        string
 	TenantID  string
@@ -183,11 +198,12 @@ type SigningKey struct {
 }
 
 type Tenant struct {
-	ID        string
-	Slug      string
-	Name      string
-	CreatedAt int64
-	UpdatedAt int64
+	ID            string
+	Slug          string
+	Name          string
+	CreatedAt     int64
+	UpdatedAt     int64
+	SignupEnabled int64
 }
 
 type User struct {

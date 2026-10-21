@@ -13,16 +13,17 @@ import (
 )
 
 const createTenant = `-- name: CreateTenant :exec
-INSERT INTO tenants (id, slug, name, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO tenants (id, slug, name, signup_enabled, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6)
 `
 
 type CreateTenantParams struct {
-	ID        uuid.UUID
-	Slug      string
-	Name      string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID            uuid.UUID
+	Slug          string
+	Name          string
+	SignupEnabled bool
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 func (q *Queries) CreateTenant(ctx context.Context, arg CreateTenantParams) error {
@@ -30,6 +31,7 @@ func (q *Queries) CreateTenant(ctx context.Context, arg CreateTenantParams) erro
 		arg.ID,
 		arg.Slug,
 		arg.Name,
+		arg.SignupEnabled,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
@@ -50,7 +52,7 @@ func (q *Queries) DeleteTenant(ctx context.Context, id uuid.UUID) (int64, error)
 }
 
 const getTenant = `-- name: GetTenant :one
-SELECT id, slug, name, created_at, updated_at
+SELECT id, slug, name, created_at, updated_at, signup_enabled
 FROM tenants
 WHERE id = $1
 `
@@ -64,12 +66,13 @@ func (q *Queries) GetTenant(ctx context.Context, id uuid.UUID) (Tenant, error) {
 		&i.Name,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SignupEnabled,
 	)
 	return i, err
 }
 
 const getTenantBySlug = `-- name: GetTenantBySlug :one
-SELECT id, slug, name, created_at, updated_at
+SELECT id, slug, name, created_at, updated_at, signup_enabled
 FROM tenants
 WHERE slug = $1
 `
@@ -83,12 +86,13 @@ func (q *Queries) GetTenantBySlug(ctx context.Context, slug string) (Tenant, err
 		&i.Name,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SignupEnabled,
 	)
 	return i, err
 }
 
 const listTenants = `-- name: ListTenants :many
-SELECT id, slug, name, created_at, updated_at
+SELECT id, slug, name, created_at, updated_at, signup_enabled
 FROM tenants
 WHERE id > $1
 ORDER BY id
@@ -115,6 +119,7 @@ func (q *Queries) ListTenants(ctx context.Context, arg ListTenantsParams) ([]Ten
 			&i.Name,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SignupEnabled,
 		); err != nil {
 			return nil, err
 		}
@@ -124,4 +129,30 @@ func (q *Queries) ListTenants(ctx context.Context, arg ListTenantsParams) ([]Ten
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateTenant = `-- name: UpdateTenant :execrows
+UPDATE tenants
+SET name = $1, signup_enabled = $2, updated_at = $3
+WHERE id = $4
+`
+
+type UpdateTenantParams struct {
+	Name          string
+	SignupEnabled bool
+	UpdatedAt     time.Time
+	ID            uuid.UUID
+}
+
+func (q *Queries) UpdateTenant(ctx context.Context, arg UpdateTenantParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateTenant,
+		arg.Name,
+		arg.SignupEnabled,
+		arg.UpdatedAt,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

@@ -56,6 +56,7 @@ type Store struct {
 	resources   apiResources
 	grants      grants
 	brandings   brandings
+	emailVerifs emailVerifications
 }
 
 var _ store.Store = (*Store)(nil)
@@ -115,6 +116,7 @@ func New(ctx context.Context, pool *pgxpool.Pool, opts ...Option) (*Store, error
 		resources:   apiResources{q: q},
 		grants:      grants{q: q},
 		brandings:   brandings{q: q},
+		emailVerifs: emailVerifications{q: q},
 	}
 	if err := s.Ping(ctx); err != nil {
 		return nil, err
@@ -215,17 +217,21 @@ func (s *Store) Grants() store.Grants { return s.grants }
 // Brandings returns the branding repository.
 func (s *Store) Brandings() store.Brandings { return s.brandings }
 
+// EmailVerifications returns the email verification repository.
+func (s *Store) EmailVerifications() store.EmailVerifications { return s.emailVerifs }
+
 type tenants struct {
 	q *db.Queries
 }
 
 func (r tenants) Create(ctx context.Context, t store.Tenant) error {
 	err := r.q.CreateTenant(ctx, db.CreateTenantParams{
-		ID:        t.ID,
-		Slug:      t.Slug,
-		Name:      t.Name,
-		CreatedAt: t.CreatedAt,
-		UpdatedAt: t.UpdatedAt,
+		ID:            t.ID,
+		Slug:          t.Slug,
+		Name:          t.Name,
+		SignupEnabled: t.SignupEnabled,
+		CreatedAt:     t.CreatedAt,
+		UpdatedAt:     t.UpdatedAt,
 	})
 	return mapError("creating tenant", err)
 }
@@ -262,6 +268,22 @@ func (r tenants) List(ctx context.Context, after uuid.UUID, limit int) ([]store.
 	return out, nil
 }
 
+func (r tenants) Update(ctx context.Context, t store.Tenant) error {
+	n, err := r.q.UpdateTenant(ctx, db.UpdateTenantParams{
+		Name:          t.Name,
+		SignupEnabled: t.SignupEnabled,
+		UpdatedAt:     t.UpdatedAt,
+		ID:            t.ID,
+	})
+	if err != nil {
+		return mapError("updating tenant", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("postgres: updating tenant: %w", store.ErrNotFound)
+	}
+	return nil
+}
+
 func (r tenants) Delete(ctx context.Context, id uuid.UUID) error {
 	n, err := r.q.DeleteTenant(ctx, id)
 	if err != nil {
@@ -275,11 +297,12 @@ func (r tenants) Delete(ctx context.Context, id uuid.UUID) error {
 
 func tenantFromRow(row db.Tenant) store.Tenant {
 	return store.Tenant{
-		ID:        row.ID,
-		Slug:      row.Slug,
-		Name:      row.Name,
-		CreatedAt: row.CreatedAt.UTC(),
-		UpdatedAt: row.UpdatedAt.UTC(),
+		ID:            row.ID,
+		Slug:          row.Slug,
+		Name:          row.Name,
+		SignupEnabled: row.SignupEnabled,
+		CreatedAt:     row.CreatedAt.UTC(),
+		UpdatedAt:     row.UpdatedAt.UTC(),
 	}
 }
 

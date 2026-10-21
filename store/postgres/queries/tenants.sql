@@ -1,23 +1,28 @@
 -- name: CreateTenant :exec
-INSERT INTO tenants (id, slug, name, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5);
+INSERT INTO tenants (id, slug, name, signup_enabled, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6);
 
 -- name: GetTenant :one
-SELECT id, slug, name, created_at, updated_at
+SELECT id, slug, name, created_at, updated_at, signup_enabled
 FROM tenants
 WHERE id = $1;
 
 -- name: GetTenantBySlug :one
-SELECT id, slug, name, created_at, updated_at
+SELECT id, slug, name, created_at, updated_at, signup_enabled
 FROM tenants
 WHERE slug = $1;
 
 -- name: ListTenants :many
-SELECT id, slug, name, created_at, updated_at
+SELECT id, slug, name, created_at, updated_at, signup_enabled
 FROM tenants
 WHERE id > sqlc.arg(after)
 ORDER BY id
 LIMIT sqlc.arg(page_size);
+
+-- name: UpdateTenant :execrows
+UPDATE tenants
+SET name = sqlc.arg(name), signup_enabled = sqlc.arg(signup_enabled), updated_at = sqlc.arg(updated_at)
+WHERE id = sqlc.arg(id);
 
 -- name: DeleteTenant :execrows
 DELETE FROM tenants
