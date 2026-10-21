@@ -74,6 +74,16 @@ type AuthorizationRequest struct {
 	ForceConsent        int64
 	SessionID           sql.NullString
 	ResponseMode        string
+	UiLocales           string
+}
+
+type Branding struct {
+	TenantID  string
+	Theme     string
+	Logo      []byte
+	LogoType  string
+	LogoHash  string
+	UpdatedAt int64
 }
 
 type Client struct {

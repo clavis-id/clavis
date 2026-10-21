@@ -55,6 +55,7 @@ type Store struct {
 	refresh     refreshTokens
 	resources   apiResources
 	grants      grants
+	brandings   brandings
 }
 
 var _ store.Store = (*Store)(nil)
@@ -113,6 +114,7 @@ func New(ctx context.Context, pool *pgxpool.Pool, opts ...Option) (*Store, error
 		refresh:     refreshTokens{pool: pool, q: q},
 		resources:   apiResources{q: q},
 		grants:      grants{q: q},
+		brandings:   brandings{q: q},
 	}
 	if err := s.Ping(ctx); err != nil {
 		return nil, err
@@ -209,6 +211,9 @@ func (s *Store) APIResources() store.APIResources { return s.resources }
 
 // Grants returns the grant repository.
 func (s *Store) Grants() store.Grants { return s.grants }
+
+// Brandings returns the branding repository.
+func (s *Store) Brandings() store.Brandings { return s.brandings }
 
 type tenants struct {
 	q *db.Queries

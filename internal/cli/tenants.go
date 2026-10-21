@@ -69,7 +69,7 @@ func newTenantsCommand(environ []string) *cobra.Command {
 	}
 	remove.Flags().BoolVar(&confirmed, "yes", false, "confirm the deletion")
 
-	cmd.AddCommand(create, list, remove)
+	cmd.AddCommand(create, list, remove, newThemeCommand(environ, &configPath))
 	return cmd
 }
 

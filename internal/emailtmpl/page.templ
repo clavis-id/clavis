@@ -4,7 +4,7 @@ package emailtmpl
 // the styles are inline, and the page has no images or scripts.
 templ page(c Content) {
 	<!DOCTYPE html>
-	<html lang="en">
+	<html lang={ c.lang() }>
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>

@@ -93,7 +93,8 @@ clavis/
     authn/               Authenticators: password, passkeys, TOTP, magic link, upstream IdPs
     keys/                Signing key lifecycle, rotation, envelope encryption at rest
     adminapi/            Admin REST handlers generated from api/openapi.yaml
-    ui/                  templ components, static assets, i18n catalogs
+    ui/                  templ components, static assets, tenant themes
+    i18n/                Message catalogs (English, Spanish) and locale selection
     emailtmpl/           Email templates: plain text with an HTML alternative
     mailer/              Background email delivery with retries
     webhook/             Outbound event delivery (Standard Webhooks)
@@ -324,7 +325,12 @@ year.
   lets forms submit only to Clavis and, on the login page, to the origin of the client's
   redirect URI, because browsers apply `form-action` to the redirect after a sign-in. The
   sign-in form is protected by `http.CrossOriginProtection`, and pages are never cached and
-  send no referrer.
+  send no referrer. A tenant's theme is a `style` element allowed by its hash, built only from
+  validated colors and a radius, and its logo is a validated PNG, JPEG or WebP image served by
+  Clavis (ADR 0025).
+- **Languages:** pages and emails come from embedded catalogs in English and Spanish. The
+  language is the one the user picked on the page, then the request's `ui_locales`, then the
+  browser's (ADR 0025).
 - **Email:** see ADR 0024. Requests queue messages, and background workers send them, so a
   response takes the same time whether or not a message goes out. Messages stay in memory and
   are retried twice. SMTP requires STARTTLS or implicit TLS with a verified certificate;

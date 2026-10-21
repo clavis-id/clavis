@@ -2,14 +2,29 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
+
+	"clavisid.org/clavis/internal/i18n"
+	"clavisid.org/clavis/store"
 )
+
+// testLayout returns the layout of a page in locale l.
+func testLayout(t testing.TB, l i18n.Locale) Layout {
+	t.Helper()
+	catalogs, err := i18n.Load()
+	if err != nil {
+		t.Fatalf("i18n.Load() unexpected error: %v", err)
+	}
+	return Layout{Stylesheet: "/assets/clavis-0123456789ab.css", Text: catalogs.Printer(l)}
+}
 
 func TestAssets(t *testing.T) {
 	t.Parallel()
@@ -56,7 +71,7 @@ func TestContentSecurityPolicy(t *testing.T) {
 		{true, nil, "form-action 'self';"},
 		{true, []string{"https://app.example.com"}, "form-action 'self' https://app.example.com;"},
 	} {
-		got := ContentSecurityPolicy(tt.allowSelf, tt.targets...)
+		got := Layout{}.ContentSecurityPolicy(tt.allowSelf, tt.targets...)
 		if !strings.Contains(got, tt.want) {
 			t.Errorf("ContentSecurityPolicy(%v, %q) = %q, want it to contain %q", tt.allowSelf, tt.targets, got, tt.want)
 		}
@@ -113,7 +128,7 @@ func TestLoginEscapesItsInput(t *testing.T) {
 	t.Parallel()
 	var b bytes.Buffer
 	err := Login(LoginPage{
-		Layout:     Layout{Stylesheet: "/assets/clavis-0123456789ab.css"},
+		Layout:     testLayout(t, i18n.English),
 		ClientName: `<script>alert(1)</script>`,
 		Action:     "/login",
 		RequestID:  `"><img src=x>`,
@@ -143,7 +158,8 @@ func TestLoginEscapesItsInput(t *testing.T) {
 func TestError(t *testing.T) {
 	t.Parallel()
 	var b bytes.Buffer
-	err := Error(ErrorPage{Title: "Request expired", Message: "Return to <the application>."}).Render(t.Context(), &b)
+	err := Error(ErrorPage{Layout: testLayout(t, i18n.English), Title: "Request expired",
+		Message: "Return to <the application>."}).Render(t.Context(), &b)
 	if err != nil {
 		t.Fatalf("Render() unexpected error: %v", err)
 	}
@@ -155,14 +171,16 @@ func TestError(t *testing.T) {
 
 func TestConsentEscapesItsInput(t *testing.T) {
 	t.Parallel()
+	english := testLayout(t, i18n.English).Text
 	var b bytes.Buffer
 	err := Consent(ConsentPage{
-		Layout:     Layout{Stylesheet: "/assets/clavis-0123456789ab.css"},
+		Layout:     testLayout(t, i18n.English),
 		ClientName: `<script>alert(1)</script>`,
 		Account:    `ada@example.com<img src=x>`,
-		Scopes:     []string{ScopeDescription("openid", ""), ScopeDescription("orders:read", `<b>Orders</b>`)},
-		Action:     "/consent",
-		RequestID:  `"><img src=x>`,
+		Scopes: []string{ScopeDescription(english, "openid", ""),
+			ScopeDescription(english, "orders:read", `<b>Orders</b>`)},
+		Action:    "/consent",
+		RequestID: `"><img src=x>`,
 	}).Render(t.Context(), &b)
 	if err != nil {
 		t.Fatalf("Render() unexpected error: %v", err)
@@ -187,7 +205,7 @@ func TestFormPostEscapesItsInputAndRunsOnlyItsScript(t *testing.T) {
 	t.Parallel()
 	var b bytes.Buffer
 	err := FormPost(FormPostPage{
-		Layout: Layout{Stylesheet: "/assets/clavis-0123456789ab.css"},
+		Layout: testLayout(t, i18n.English),
 		Action: "https://app.example.com/callback?x=1&y=2",
 		Fields: []Field{{"code", "abc"}, {"state", `"><script>alert(1)</script>`}},
 	}).Render(t.Context(), &b)
@@ -211,7 +229,7 @@ func TestFormPostEscapesItsInputAndRunsOnlyItsScript(t *testing.T) {
 	// The policy allows the page's script by its hash, and the form only to
 	// the client.
 	sum := sha256.Sum256([]byte(formPostScript))
-	policy := FormPostContentSecurityPolicy("https://app.example.com")
+	policy := Layout{}.FormPostContentSecurityPolicy("https://app.example.com")
 	for _, want := range []string{
 		"script-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "';",
 		"form-action https://app.example.com;", "default-src 'none'", "frame-ancestors 'none'",
@@ -220,10 +238,10 @@ func TestFormPostEscapesItsInputAndRunsOnlyItsScript(t *testing.T) {
 			t.Errorf("FormPostContentSecurityPolicy() = %q, want %q", policy, want)
 		}
 	}
-	if policy := FormPostContentSecurityPolicy(""); !strings.Contains(policy, "form-action 'none';") {
+	if policy := (Layout{}).FormPostContentSecurityPolicy(""); !strings.Contains(policy, "form-action 'none';") {
 		t.Errorf("FormPostContentSecurityPolicy(\"\") = %q, want no form target", policy)
 	}
-	if strings.Contains(ContentSecurityPolicy(true), "script-src") {
+	if strings.Contains(Layout{}.ContentSecurityPolicy(true), "script-src") {
 		t.Error("ContentSecurityPolicy() allows scripts")
 	}
 }
@@ -232,7 +250,7 @@ func TestLogoutPagesEscapeTheirInput(t *testing.T) {
 	t.Parallel()
 	var b bytes.Buffer
 	err := Logout(LogoutPage{
-		Layout:     Layout{Stylesheet: "/assets/clavis-0123456789ab.css"},
+		Layout:     testLayout(t, i18n.English),
 		Account:    `ada@example.com<img src=x>`,
 		ClientName: `<script>alert(1)</script>`,
 		Problem:    "post_logout_redirect_uri <b>needs</b> an id_token_hint",
@@ -258,7 +276,7 @@ func TestLogoutPagesEscapeTheirInput(t *testing.T) {
 	}
 
 	b.Reset()
-	if err := SignedOut(SignedOutPage{}).Render(t.Context(), &b); err != nil {
+	if err := SignedOut(SignedOutPage{Layout: testLayout(t, i18n.English)}).Render(t.Context(), &b); err != nil {
 		t.Fatalf("Render() unexpected error: %v", err)
 	}
 	if page := b.String(); !strings.Contains(page, "<title>You are signed out</title>") ||
@@ -269,6 +287,10 @@ func TestLogoutPagesEscapeTheirInput(t *testing.T) {
 
 func TestScopeDescription(t *testing.T) {
 	t.Parallel()
+	english, spanish := testLayout(t, i18n.English).Text, testLayout(t, i18n.Spanish).Text
+	if got := ScopeDescription(spanish, "email", ""); got != "Ver tu dirección de correo electrónico" {
+		t.Errorf("ScopeDescription() in Spanish = %q", got)
+	}
 	for _, tt := range []struct{ scope, resource, want string }{
 		{"openid", "", "Know who you are"},
 		{"profile", "", "See your name and profile"},
@@ -279,8 +301,137 @@ func TestScopeDescription(t *testing.T) {
 		{"orders:read", "Orders", "Use Orders (orders:read)"},
 		{"unknown", "", "unknown"},
 	} {
-		if got := ScopeDescription(tt.scope, tt.resource); got != tt.want {
+		if got := ScopeDescription(english, tt.scope, tt.resource); got != tt.want {
 			t.Errorf("ScopeDescription(%q, %q) = %q, want %q", tt.scope, tt.resource, got, tt.want)
+		}
+	}
+}
+
+func TestThemeStyle(t *testing.T) {
+	t.Parallel()
+	if got := ThemeStyle(store.Theme{}); got != "" {
+		t.Errorf("ThemeStyle() of the default theme = %q, want empty", got)
+	}
+	radius, tooLarge := 6, 65
+	got := ThemeStyle(store.Theme{
+		Light:  store.ThemeColors{Accent: "#0b5cad", AccentText: "#FFFFFF", Text: "red;}body{display:none"},
+		Dark:   store.ThemeColors{Background: "#0d1117", Border: "#30363d}"},
+		Radius: &radius,
+	})
+	want := ":root{--clavis-radius:6px}" +
+		"@media not all and (prefers-color-scheme: dark){:root{--clavis-accent:#0b5cad;--clavis-accent-text:#FFFFFF;}}" +
+		"@media (prefers-color-scheme: dark){:root{--clavis-background:#0d1117;}}"
+	if got != want {
+		t.Errorf("ThemeStyle() =\n%s\nwant\n%s", got, want)
+	}
+	if got := ThemeStyle(store.Theme{Radius: &tooLarge}); got != "" {
+		t.Errorf("ThemeStyle() with a radius out of bounds = %q, want empty", got)
+	}
+}
+
+// A page with a tenant theme allows exactly its style element, and shows
+// the tenant's logo.
+func TestBrandedPage(t *testing.T) {
+	t.Parallel()
+	l := testLayout(t, i18n.English)
+	l.Theme = ThemeStyle(store.Theme{Light: store.ThemeColors{Accent: "#0b5cad"}})
+	l.LogoURL, l.TenantName = "/t/acme/branding/logo-0123456789ab.png", `Acme "Corp"`
+	var b bytes.Buffer
+	if err := SignedOut(SignedOutPage{Layout: l}).Render(t.Context(), &b); err != nil {
+		t.Fatalf("Render() unexpected error: %v", err)
+	}
+	page := b.String()
+	for _, want := range []string{
+		"<style>" + l.Theme + "</style>",
+		`<img class="logo" src="/t/acme/branding/logo-0123456789ab.png" alt="Acme &#34;Corp&#34;">`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the page does not contain %q:\n%s", want, page)
+		}
+	}
+	sum := sha256.Sum256([]byte(l.Theme))
+	hash := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+	if csp := l.ContentSecurityPolicy(false); !strings.Contains(csp, "style-src 'self' "+hash+";") {
+		t.Errorf("ContentSecurityPolicy() = %q, want the theme's hash in style-src", csp)
+	}
+	if csp := l.FormPostContentSecurityPolicy(""); !strings.Contains(csp, "style-src 'self' "+hash+";") {
+		t.Errorf("FormPostContentSecurityPolicy() = %q, want the theme's hash in style-src", csp)
+	}
+	if csp := (Layout{}).ContentSecurityPolicy(false); !strings.Contains(csp, "style-src 'self';") {
+		t.Errorf("ContentSecurityPolicy() without a theme = %q, want only the page's origin in style-src", csp)
+	}
+}
+
+func TestLanguageSelector(t *testing.T) {
+	t.Parallel()
+	l := testLayout(t, i18n.Spanish)
+	l.Languages = &LanguageSelector{Method: http.MethodGet, Action: "/login", Fields: []Field{{"request", `"><x`}}}
+	var b bytes.Buffer
+	if err := Error(ErrorPage{Layout: l, Title: "t", Message: "m"}).Render(t.Context(), &b); err != nil {
+		t.Fatalf("Render() unexpected error: %v", err)
+	}
+	page := b.String()
+	for _, want := range []string{
+		`<html lang="es">`,
+		`<nav class="languages" aria-label="Idioma"><form method="GET" action="/login">`,
+		`<input type="hidden" name="request" value="&#34;&gt;&lt;x">`,
+		`<button type="submit" class="link" name="clavis_locale" value="en" lang="en">English</button>`,
+		`<button type="submit" class="link" lang="es" disabled aria-current="true">Español</button>`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the page does not contain %q:\n%s", want, page)
+		}
+	}
+
+	b.Reset()
+	l.Languages = nil
+	if err := Error(ErrorPage{Layout: l, Title: "t", Message: "m"}).Render(t.Context(), &b); err != nil {
+		t.Fatalf("Render() unexpected error: %v", err)
+	}
+	if strings.Contains(b.String(), "languages") {
+		t.Errorf("a page without a selector shows one:\n%s", b.String())
+	}
+}
+
+// Every page renders in every locale without a key or a placeholder in
+// place of a message.
+func TestEveryPageInEveryLocale(t *testing.T) {
+	t.Parallel()
+	for _, locale := range i18n.Supported() {
+		l := testLayout(t, locale)
+		l.Languages = &LanguageSelector{Method: http.MethodGet, Action: "/login"}
+		for name, page := range map[string]interface {
+			Render(context.Context, io.Writer) error
+		}{
+			"login": Login(LoginPage{Layout: l, ClientName: "Shop", Action: "/login", RequestID: "r",
+				Error: l.T(i18n.LoginInvalidCredentials)}),
+			"consent": Consent(ConsentPage{Layout: l, ClientName: "Shop", Account: "ada@example.com",
+				Scopes: []string{ScopeDescription(l.Text, "openid", ""), ScopeDescription(l.Text, "orders:read", "Orders")},
+				Action: "/consent", RequestID: "r"}),
+			"form post": FormPost(FormPostPage{Layout: l, Action: "https://app.example.com/cb"}),
+			"logout": Logout(LogoutPage{Layout: l, Account: "ada@example.com", ClientName: "Shop",
+				Problem: "state is repeated", Action: "/logout"}),
+			"signed out": SignedOut(SignedOutPage{Layout: l, Problem: "state is repeated"}),
+			"error": Error(ErrorPage{Layout: l, Title: l.T(i18n.ErrorExpiredSignInTitle),
+				Message: l.T(i18n.ErrorRejectedSignIn, "problem", "redirect_uri is not registered")}),
+		} {
+			var b bytes.Buffer
+			if err := page.Render(t.Context(), &b); err != nil {
+				t.Fatalf("%s, %s: Render() unexpected error: %v", locale, name, err)
+			}
+			text := b.String()
+			if !strings.Contains(text, `<html lang="`+string(locale)+`">`) {
+				t.Errorf("%s, %s: the page is not marked as %s", locale, name, locale)
+			}
+			// Only the form post script holds braces, and its page has none.
+			if i := strings.IndexAny(text, "{}"); i >= 0 {
+				t.Errorf("%s, %s: a placeholder is left at %q", locale, name, text[max(0, i-20):min(len(text), i+20)])
+			}
+			if key := regexp.MustCompile(`\b[a-z_]+\.[a-z_]+(\.[a-z_]+)?\b`).FindString(
+				regexp.MustCompile(`"[^"]*"`).ReplaceAllString(text, `""`)); key != "" &&
+				!strings.Contains(key, "example.com") {
+				t.Errorf("%s, %s: a key is shown instead of its message: %q", locale, name, key)
+			}
 		}
 	}
 }

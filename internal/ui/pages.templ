@@ -1,39 +1,92 @@
 package ui
 
-// layout is the frame of every hosted page.
+import "clavisid.org/clavis/internal/i18n"
+
+// layout is the frame of every hosted page: the tenant's theme and logo,
+// the title, and the language selector when the page has one. ThemeStyle
+// writes only validated values into the style element, and the page's
+// Content Security Policy allows exactly that element by its hash.
 templ layout(l Layout, title string) {
 	<!DOCTYPE html>
-	<html lang="en">
+	<html lang={ string(l.Text.Locale()) }>
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<meta name="referrer" content="no-referrer"/>
 			<title>{ title }</title>
 			<link rel="stylesheet" href={ templ.SafeURL(l.Stylesheet) }/>
+			if l.Theme != "" {
+				@templ.Raw("<style>" + l.Theme + "</style>")
+			}
 		</head>
 		<body>
 			<main class="card">
+				if l.LogoURL != "" {
+					<img class="logo" src={ templ.SafeURL(l.LogoURL) } alt={ l.TenantName }/>
+				}
 				<h1>{ title }</h1>
 				{ children... }
+				if l.Languages != nil {
+					@languages(l)
+				}
 			</main>
 		</body>
 	</html>
 }
 
+// languages renders the language selector: one button per locale, which
+// sends the page's own request again with the chosen locale.
+templ languages(l Layout) {
+	<nav class="languages" aria-label={ l.T(i18n.LanguageLabel) }>
+		<form method={ l.Languages.Method } action={ templ.SafeURL(l.Languages.Action) }>
+			for _, f := range l.Languages.Fields {
+				<input type="hidden" name={ f.Name } value={ f.Value }/>
+			}
+			for _, locale := range i18n.Supported() {
+				if locale == l.Text.Locale() {
+					<button type="submit" class="link" lang={ string(locale) } disabled aria-current="true">{ locale.Name() }</button>
+				} else {
+					<button type="submit" class="link" name={ LocaleParam } value={ string(locale) } lang={ string(locale) }>{ locale.Name() }</button>
+				}
+			}
+		</form>
+	</nav>
+}
+
+// message renders a message whose placeholders hold markup, such as a name
+// in bold.
+templ message(parts []i18n.Part, values map[string]templ.Component) {
+	for _, part := range parts {
+		if part.Placeholder == "" {
+			{ part.Text }
+		} else if value, ok := values[part.Placeholder]; ok {
+			@value
+		} else {
+			{ "{" + part.Placeholder + "}" }
+		}
+	}
+}
+
+templ strong(s string) {
+	<strong>{ s }</strong>
+}
+
 // Login renders the password sign-in form.
 templ Login(p LoginPage) {
-	@layout(p.Layout, "Sign in") {
-		<p class="lead">to continue to <strong>{ p.ClientName }</strong></p>
+	@layout(p.Layout, p.T(i18n.LoginTitle)) {
+		<p class="lead">
+			@message(p.Text.Parts(i18n.LoginLead), map[string]templ.Component{"client": strong(p.ClientName)})
+		</p>
 		if p.Error != "" {
 			<p class="error" role="alert">{ p.Error }</p>
 		}
 		<form method="post" action={ templ.SafeURL(p.Action) }>
 			<input type="hidden" name="request" value={ p.RequestID }/>
-			<label for="email">Email</label>
+			<label for="email">{ p.T(i18n.LoginEmail) }</label>
 			<input id="email" name="email" type="email" autocomplete="username" required autofocus value={ p.Email }/>
-			<label for="password">Password</label>
+			<label for="password">{ p.T(i18n.LoginPassword) }</label>
 			<input id="password" name="password" type="password" autocomplete="current-password" required/>
-			<button id="submit" type="submit">Sign in</button>
+			<button id="submit" type="submit">{ p.T(i18n.LoginSubmit) }</button>
 		</form>
 	}
 }
@@ -41,9 +94,14 @@ templ Login(p LoginPage) {
 // Consent renders the page where the user allows or denies a client
 // (ADR 0020).
 templ Consent(p ConsentPage) {
-	@layout(p.Layout, "Allow access") {
-		<p class="lead"><strong>{ p.ClientName }</strong> wants to access the account <strong>{ p.Account }</strong>.</p>
-		<p>It asks to:</p>
+	@layout(p.Layout, p.T(i18n.ConsentTitle)) {
+		<p class="lead">
+			@message(p.Text.Parts(i18n.ConsentLead), map[string]templ.Component{
+				"client":  strong(p.ClientName),
+				"account": strong(p.Account),
+			})
+		</p>
+		<p>{ p.T(i18n.ConsentAsks) }</p>
 		<ul class="scopes">
 			for _, scope := range p.Scopes {
 				<li>{ scope }</li>
@@ -51,8 +109,8 @@ templ Consent(p ConsentPage) {
 		</ul>
 		<form method="post" action={ templ.SafeURL(p.Action) }>
 			<input type="hidden" name="request" value={ p.RequestID }/>
-			<button id="allow" type="submit" name="decision" value="allow">Allow</button>
-			<button id="deny" class="secondary" type="submit" name="decision" value="deny">Deny</button>
+			<button id="allow" type="submit" name="decision" value="allow">{ p.T(i18n.ConsentAllow) }</button>
+			<button id="deny" class="secondary" type="submit" name="decision" value="deny">{ p.T(i18n.ConsentDeny) }</button>
 		</form>
 	}
 }
@@ -63,12 +121,12 @@ templ Consent(p ConsentPage) {
 // formPostScript, which the page's Content Security Policy allows by its
 // hash.
 templ FormPost(p FormPostPage) {
-	@layout(p.Layout, "Returning to the application") {
+	@layout(p.Layout, p.T(i18n.FormPostTitle)) {
 		<form id="response" method="post" action={ templ.SafeURL(p.Action) }>
 			for _, f := range p.Fields {
 				<input type="hidden" name={ f.Name } value={ f.Value }/>
 			}
-			<button id="continue" type="submit">Continue</button>
+			<button id="continue" type="submit">{ p.T(i18n.FormPostContinue) }</button>
 		</form>
 		@templ.Raw("<script>" + formPostScript + "</script>")
 	}
@@ -77,40 +135,43 @@ templ FormPost(p FormPostPage) {
 // Logout renders the page where the user confirms signing out. To stay
 // signed in, the user closes the page.
 templ Logout(p LogoutPage) {
-	@layout(p.Layout, "Sign out") {
+	@layout(p.Layout, p.T(i18n.LogoutTitle)) {
 		if p.ClientName != "" {
-			<p class="lead"><strong>{ p.ClientName }</strong> asks you to sign out.</p>
+			<p class="lead">
+				@message(p.Text.Parts(i18n.LogoutLead), map[string]templ.Component{"client": strong(p.ClientName)})
+			</p>
 		}
 		if p.Account != "" {
-			<p>You are signed in as <strong>{ p.Account }</strong>.</p>
+			<p>
+				@message(p.Text.Parts(i18n.LogoutAccount), map[string]templ.Component{"account": strong(p.Account)})
+			</p>
 		}
-		@logoutProblem(p.Problem)
+		@logoutProblem(p.Layout, p.Problem)
 		<form method="post" action={ templ.SafeURL(p.Action) }>
 			for _, f := range p.Fields {
 				<input type="hidden" name={ f.Name } value={ f.Value }/>
 			}
-			<button id="logout" type="submit" autofocus>Sign out</button>
+			<button id="logout" type="submit" autofocus>{ p.T(i18n.LogoutSubmit) }</button>
 		</form>
-		<p>To stay signed in, close this page.</p>
+		<p>{ p.T(i18n.LogoutStay) }</p>
 	}
 }
 
 // SignedOut renders the page shown after the session ended, when the
 // browser does not return to an application.
 templ SignedOut(p SignedOutPage) {
-	@layout(p.Layout, "You are signed out") {
-		@logoutProblem(p.Problem)
-		<p>You can close this page.</p>
+	@layout(p.Layout, p.T(i18n.SignedOutTitle)) {
+		@logoutProblem(p.Layout, p.Problem)
+		<p>{ p.T(i18n.SignedOutClose) }</p>
 	}
 }
 
 // logoutProblem explains why the browser stays at Clavis after signing out.
-templ logoutProblem(problem string) {
+// The problem itself is fixed English text about the request's parameters,
+// meant for the application's developers.
+templ logoutProblem(l Layout, problem string) {
 	if problem != "" {
-		<p class="error" role="alert">
-			The application's sign-out request cannot be completed as sent ({ problem }), so you stay on
-			this site after signing out.
-		</p>
+		<p class="error" role="alert">{ l.T(i18n.LogoutProblem, "problem", problem) }</p>
 	}
 }
 

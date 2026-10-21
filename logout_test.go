@@ -38,6 +38,8 @@ func signInForLogout(t *testing.T, s *Server, tn store.Tenant, b *browser, issue
 
 // hiddenFields returns the hidden fields of a page's form.
 func hiddenFields(page string) url.Values {
+	// The language selector at the end of the page carries fields of its own.
+	page, _, _ = strings.Cut(page, `<nav class="languages"`)
 	fields := url.Values{}
 	for _, input := range strings.Split(page, `<input type="hidden" `)[1:] {
 		name, _, _ := strings.Cut(strings.TrimPrefix(input, `name="`), `"`)

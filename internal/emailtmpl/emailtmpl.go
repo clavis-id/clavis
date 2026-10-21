@@ -1,6 +1,7 @@
 // Package emailtmpl renders the email messages that Clavis sends, as plain
-// text with an HTML alternative (ADR 0024). Run make generate after editing
-// a .templ file.
+// text with an HTML alternative (ADR 0024). Their text comes from the same
+// catalogs as the hosted pages (ADR 0025). Run make generate after editing a
+// .templ file.
 package emailtmpl
 
 import (
@@ -12,10 +13,13 @@ import (
 	"strings"
 
 	"clavisid.org/clavis/email"
+	"clavisid.org/clavis/internal/i18n"
 )
 
 // Content is a message to a user before it is rendered.
 type Content struct {
+	// Locale is the language of the text, or empty for i18n.Default.
+	Locale i18n.Locale
 	// Subject is the subject line.
 	Subject string
 	// Paragraphs are the body, in order.
@@ -82,15 +86,25 @@ func (c Content) text() string {
 	return strings.Join(parts, "\n\n") + "\n"
 }
 
-// TestMessage returns the content of the message that `clavis email test`
-// sends, which shows that the configuration delivers email.
-func TestMessage(issuer string) Content {
+// lang returns the language of c for the HTML lang attribute.
+func (c Content) lang() string {
+	if c.Locale == "" {
+		return string(i18n.Default)
+	}
+	return string(c.Locale)
+}
+
+// TestMessage returns the content, in the locale of t, of the message that
+// `clavis email test` sends, which shows that the configuration delivers
+// email.
+func TestMessage(t i18n.Printer, issuer string) Content {
 	return Content{
-		Subject: "Clavis test message",
+		Locale:  t.Locale(),
+		Subject: t.T(i18n.EmailTestSubject),
 		Paragraphs: []string{
-			"This message confirms that Clavis can send email.",
-			"Issuer: " + issuer,
+			t.T(i18n.EmailTestBody),
+			t.T(i18n.EmailTestIssuer, "issuer", issuer),
 		},
-		Footer: "You received this message because an operator ran clavis email test.",
+		Footer: t.T(i18n.EmailTestFooter),
 	}
 }

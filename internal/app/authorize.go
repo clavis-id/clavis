@@ -182,6 +182,7 @@ func StartAuthorization(ctx context.Context, d Deps, signer TokenSigner, t Autho
 		HintSubject:         subject,
 		ResponseMode:        r.ResponseMode,
 		ForceConsent:        r.HasPrompt(oauth.PromptConsent),
+		UILocales:           r.UILocales,
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(AuthorizationRequestLifetime),
 	}
