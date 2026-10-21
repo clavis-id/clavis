@@ -91,6 +91,8 @@ func TestParseAuthorizationRequest(t *testing.T) {
 			}},
 		{"prompt none", func(p url.Values) { p.Set("prompt", "none") },
 			func(r AuthorizationRequest) bool { return r.HasPrompt(PromptNone) }},
+		{"prompt create", func(p url.Values) { p.Set("prompt", "create") },
+			func(r AuthorizationRequest) bool { return slices.Equal(r.Prompt, []string{PromptCreate}) }},
 		{"max_age zero", func(p url.Values) { p.Set("max_age", "0") },
 			func(r AuthorizationRequest) bool { return r.MaxAge == 0 }},
 		{"largest max_age", func(p url.Values) { p.Set("max_age", "2147483647") },
@@ -176,7 +178,8 @@ func TestParseAuthorizationRequestErrors(t *testing.T) {
 		{"repeated nonce", func(p url.Values) { p["nonce"] = []string{"a", "b"} }, ErrorInvalidRequest, "af0ifjsldkj"},
 		{"nonce with a control character", func(p url.Values) { p.Set("nonce", "a\x00b") }, ErrorInvalidRequest, "af0ifjsldkj"},
 		{"long nonce", func(p url.Values) { p.Set("nonce", strings.Repeat("n", MaxNonceLength+1)) }, ErrorInvalidRequest, "af0ifjsldkj"},
-		{"unknown prompt", func(p url.Values) { p.Set("prompt", "login create") }, ErrorInvalidRequest, "af0ifjsldkj"},
+		{"unknown prompt", func(p url.Values) { p.Set("prompt", "login register") }, ErrorInvalidRequest, "af0ifjsldkj"},
+		{"prompt none with create", func(p url.Values) { p.Set("prompt", "none create") }, ErrorInvalidRequest, "af0ifjsldkj"},
 		{"prompt none with login", func(p url.Values) { p.Set("prompt", "none login") }, ErrorInvalidRequest, "af0ifjsldkj"},
 		{"prompt separated by a tab", func(p url.Values) { p.Set("prompt", "login\tconsent") }, ErrorInvalidRequest, "af0ifjsldkj"},
 		{"repeated prompt", func(p url.Values) { p["prompt"] = []string{"login", "login"} }, ErrorInvalidRequest, "af0ifjsldkj"},
@@ -324,7 +327,8 @@ func FuzzParseAuthorizationRequest(f *testing.F) {
 		if r.CodeChallenge != "" && len(r.CodeChallenge) != s256ChallengeLength {
 			t.Errorf("ParseAuthorizationRequest(%q) accepted the challenge %q", query, r.CodeChallenge)
 		}
-		if r.HasPrompt(PromptNone) && len(r.Prompt) != 1 {
+		if r.HasPrompt(PromptNone) && len(r.Prompt) != 1 ||
+			slices.ContainsFunc(r.Prompt, func(v string) bool { return !slices.Contains(PromptValues(), v) }) {
 			t.Errorf("ParseAuthorizationRequest(%q) accepted prompt %q", query, r.Prompt)
 		}
 		if len(r.LoginHint) > MaxLoginHintLength || !printableText(r.LoginHint) ||

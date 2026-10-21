@@ -31,6 +31,9 @@ var (
 	ErrTenantExists    = errors.New("tenant already exists")
 	ErrTenantNotFound  = errors.New("tenant not found")
 	ErrProtectedTenant = errors.New("the default and admin tenants cannot be deleted")
+	// ErrSignupNotAllowed reports an attempt to let people sign up to the
+	// admin tenant, whose users administer Clavis (ADR 0026).
+	ErrSignupNotAllowed = errors.New("the admin tenant cannot allow signup")
 )
 
 // ValidateTenantSlug reports whether slug can name a tenant: 1 to 63
@@ -136,6 +139,19 @@ func TenantBySlug(ctx context.Context, d Deps, slug string) (store.Tenant, error
 	return t, nil
 }
 
+// TenantByID returns the tenant with the given ID as stored now, so a
+// request sees the current settings of a tenant that it found earlier.
+func TenantByID(ctx context.Context, d Deps, id uuid.UUID) (store.Tenant, error) {
+	t, err := d.Store.Tenants().Get(ctx, id)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return store.Tenant{}, ErrTenantNotFound
+	case err != nil:
+		return store.Tenant{}, fmt.Errorf("looking up tenant: %w", err)
+	}
+	return t, nil
+}
+
 // ListTenants returns every tenant in ID order, which follows creation time
 // because IDs are version 7 UUIDs.
 func ListTenants(ctx context.Context, d Deps) ([]store.Tenant, error) {
@@ -187,4 +203,44 @@ func DeleteTenant(ctx context.Context, d Deps, slug string) error {
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "deleted tenant",
 		slog.String("tenant_id", t.ID.String()), slog.String("tenant", t.Slug))
 	return nil
+}
+
+// TenantChanges are the changes that UpdateTenant makes; nil fields keep
+// their values.
+type TenantChanges struct {
+	Name *string
+	// SignupEnabled lets people create their own accounts (ADR 0026).
+	SignupEnabled *bool
+}
+
+// UpdateTenant changes the name or the settings of the tenant with the given
+// slug and returns the result. The admin tenant cannot allow signup.
+func UpdateTenant(ctx context.Context, d Deps, slug string, c TenantChanges) (store.Tenant, error) {
+	t, err := FindTenant(ctx, d, slug)
+	if err != nil {
+		return store.Tenant{}, err
+	}
+	if c.Name != nil {
+		if err := validateDisplayName(*c.Name); err != nil {
+			return store.Tenant{}, fmt.Errorf("%w: %w", ErrInvalidTenant, err)
+		}
+		t.Name = *c.Name
+	}
+	if c.SignupEnabled != nil {
+		if *c.SignupEnabled && t.Slug == AdminTenantSlug {
+			return store.Tenant{}, ErrSignupNotAllowed
+		}
+		t.SignupEnabled = *c.SignupEnabled
+	}
+	t.UpdatedAt = d.Now()
+	switch err := d.Store.Tenants().Update(ctx, t); {
+	case errors.Is(err, store.ErrNotFound):
+		return store.Tenant{}, fmt.Errorf("%w: %q", ErrTenantNotFound, slug)
+	case err != nil:
+		return store.Tenant{}, fmt.Errorf("updating tenant %q: %w", slug, err)
+	}
+	d.Logger.LogAttrs(ctx, slog.LevelInfo, "updated tenant",
+		slog.String("tenant_id", t.ID.String()), slog.String("tenant", t.Slug),
+		slog.Bool("signup_enabled", t.SignupEnabled))
+	return t, nil
 }

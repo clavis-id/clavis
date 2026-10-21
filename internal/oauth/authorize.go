@@ -49,13 +49,22 @@ const (
 // (RFC 7636, section 4.2; ADR 0018).
 const CodeChallengeMethodS256 = "S256"
 
-// Values of the prompt parameter (OpenID Connect Core 1.0, section 3.1.2.1).
+// Values of the prompt parameter (OpenID Connect Core 1.0, section 3.1.2.1,
+// and Initiating User Registration via OpenID Connect 1.0, section 4 for
+// create).
 const (
 	PromptNone          = "none"
 	PromptLogin         = "login"
 	PromptConsent       = "consent"
 	PromptSelectAccount = "select_account"
+	PromptCreate        = "create"
 )
+
+// PromptValues lists the prompt values that ParseAuthorizationRequest
+// accepts. A tenant without signup refuses create later (ADR 0026).
+func PromptValues() []string {
+	return []string{PromptNone, PromptLogin, PromptConsent, PromptSelectAccount, PromptCreate}
+}
 
 // Bounds of authorization request parameters, in bytes. They limit what one
 // request can make Clavis store and send back.
@@ -299,7 +308,7 @@ func (r *AuthorizationRequest) parsePrompt(params url.Values) error {
 		switch value {
 		case "":
 			continue
-		case PromptNone, PromptLogin, PromptConsent, PromptSelectAccount:
+		case PromptNone, PromptLogin, PromptConsent, PromptSelectAccount, PromptCreate:
 		default:
 			return invalidRequest("prompt contains an unsupported value")
 		}
