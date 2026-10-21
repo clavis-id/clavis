@@ -330,7 +330,9 @@ year.
   Clavis (ADR 0025).
 - **Languages:** pages and emails come from embedded catalogs in English and Spanish. The
   language is the one the user picked on the page, then the request's `ui_locales`, then the
-  browser's (ADR 0025).
+  browser's (ADR 0025). A cookie remembers the choice only when the request comes from the
+  same origin, judged as `http.CrossOriginProtection` judges a form, so a link or a form on
+  another site cannot change the language of later pages.
 - **Email:** see ADR 0024. Requests queue messages, and background workers send them, so a
   response takes the same time whether or not a message goes out. Messages stay in memory and
   are retried twice. SMTP requires STARTTLS or implicit TLS with a verified certificate;

@@ -1,6 +1,6 @@
 # 0023. Logout and the form post response mode
 
-- Status: Accepted
+- Status: Accepted; ignoring `ui_locales` is superseded by [0025](0025-internationalization-and-theming.md)
 - Date: 2026-10-19
 - Supersedes: the retention default of ADR 0011
 

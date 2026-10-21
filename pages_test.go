@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -76,6 +77,115 @@ func TestHostedPagesFollowTheUsersLanguage(t *testing.T) {
 	}
 	if _, page = other.getIn(issuer+"/login?request="+id, ""); !strings.Contains(page, `<html lang="en">`) {
 		t.Errorf("login page without preferences:\n%s", page)
+	}
+}
+
+// The consent page and the form post page follow the request's ui_locales,
+// and the consent page has a language selector of its own.
+func TestConsentAndFormPostPagesLanguage(t *testing.T) {
+	t.Parallel()
+	const issuer = "https://auth.example.com"
+	s, tn := newLoginServer(t, issuer, "")
+	if _, _, err := app.CreateClient(t.Context(), s.deps, tn.ID, app.ClientSpec{
+		ClientID: "partner", Name: "Partner App", Type: store.ClientConfidential,
+		RedirectURIs: []string{"https://partner.example.com/callback"},
+	}); err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	query := authorizeQuery()
+	query.Set("client_id", "partner")
+	query.Set("redirect_uri", "https://partner.example.com/callback")
+	query.Set("response_mode", "form_post")
+	query.Set("ui_locales", "es")
+	b := newBrowser(t, s.Handler())
+	id := b.startLogin(issuer, query)
+	if res, _ := b.post(issuer+"/login", loginForm(id, testPassword), "same-origin"); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("login = %d, want a redirect to the consent page", res.StatusCode)
+	}
+	allow := func(id string) (response, string) {
+		t.Helper()
+		return b.post(issuer+"/consent", url.Values{"request": {id}, "decision": {"allow"}}, "same-origin")
+	}
+
+	_, page := b.getIn(issuer+"/consent?request="+id, "en")
+	for _, want := range []string{`<html lang="es">`, "<title>Permitir acceso</title>", "Saber quién eres",
+		`<nav class="languages" aria-label="Idioma"><form method="GET" action="/consent">`,
+		`<input type="hidden" name="request" value="` + id + `">`,
+		`name="clavis_locale" value="en" lang="en">English</button>`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("consent page with ui_locales, want %q:\n%s", want, page)
+		}
+	}
+	if res, page := allow(id); res.StatusCode != http.StatusOK || !strings.Contains(page, `<html lang="es">`) ||
+		!strings.Contains(page, "<title>Volviendo a la aplicación</title>") {
+		t.Errorf("form post page with ui_locales = %d:\n%s", res.StatusCode, page)
+	}
+
+	// The selector's choice applies to the consent page and to the response.
+	query.Set("prompt", "consent")
+	res, _ := b.get(issuer + "/oauth2/authorize?" + query.Encode())
+	loc, err := url.Parse(res.Header.Get("Location"))
+	if res.StatusCode != http.StatusSeeOther || err != nil || loc.Path != "/consent" {
+		t.Fatalf("authorize with prompt=consent = %d to %q, want the consent page", res.StatusCode,
+			res.Header.Get("Location"))
+	}
+	id = loc.Query().Get("request")
+	if _, page = b.get(issuer + "/consent?request=" + id + "&clavis_locale=en"); !strings.Contains(page,
+		"<title>Allow access</title>") || !strings.Contains(page, "Know who you are") {
+		t.Errorf("consent page after choosing English:\n%s", page)
+	}
+	if _, page = allow(id); !strings.Contains(page, "<title>Returning to the application</title>") {
+		t.Errorf("form post page after choosing English:\n%s", page)
+	}
+}
+
+// A language chosen in a request from another site applies to its page but
+// is not remembered, so a link or a form elsewhere cannot change the
+// language of the browser's later pages.
+func TestLocaleChoiceFromAnotherSite(t *testing.T) {
+	t.Parallel()
+	const issuer = "https://auth.example.com"
+	s, _ := newLoginServer(t, issuer, "")
+	remembers := func(res response) bool {
+		return slices.ContainsFunc(res.Cookies(), func(c *http.Cookie) bool { return c.Name == localeCookie })
+	}
+
+	b := newBrowser(t, s.Handler())
+	id := b.startLogin(issuer, authorizeQuery())
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet,
+		issuer+"/login?request="+id+"&clavis_locale=es", http.NoBody)
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	if res, page := b.send(req); !strings.Contains(page, `<html lang="es">`) || remembers(res) {
+		t.Errorf("login page linked from another site with a choice: remembered %v, page:\n%s", remembers(res), page)
+	}
+
+	// The end session endpoint shows its confirmation to a POST without the
+	// session cookie, so any site can send one.
+	for _, tc := range []struct {
+		name, site, origin string
+		remembered         bool
+	}{
+		{name: "same origin", site: "same-origin", remembered: true},
+		{name: "typed by the user", site: "none", remembered: true},
+		{name: "same site", site: "same-site"},
+		{name: "cross site", site: "cross-site"},
+		{name: "old browser, same origin", origin: issuer, remembered: true},
+		{name: "old browser, other origin", origin: "https://evil.example"},
+		{name: "not a browser", remembered: true},
+	} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, issuer+"/oauth2/logout",
+			strings.NewReader("clavis_locale=es"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if tc.site != "" {
+			req.Header.Set("Sec-Fetch-Site", tc.site)
+		}
+		if tc.origin != "" {
+			req.Header.Set("Origin", tc.origin)
+		}
+		res, page := newBrowser(t, s.Handler()).send(req)
+		if !strings.Contains(page, "<title>Cerrar sesión</title>") || remembers(res) != tc.remembered {
+			t.Errorf("%s: remembered %v, want %v; page:\n%s", tc.name, remembers(res), tc.remembered, page)
+		}
 	}
 }
 

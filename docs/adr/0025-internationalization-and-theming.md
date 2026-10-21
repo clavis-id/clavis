@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-10-20
+- Supersedes: ignoring `ui_locales` at the end session endpoint, in ADR 0023
 
 ## Context
 
