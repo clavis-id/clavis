@@ -80,6 +80,65 @@ func TestHostedPagesFollowTheUsersLanguage(t *testing.T) {
 	}
 }
 
+// The consent page and the form post page follow the request's ui_locales,
+// and the consent page has a language selector of its own.
+func TestConsentAndFormPostPagesLanguage(t *testing.T) {
+	t.Parallel()
+	const issuer = "https://auth.example.com"
+	s, tn := newLoginServer(t, issuer, "")
+	if _, _, err := app.CreateClient(t.Context(), s.deps, tn.ID, app.ClientSpec{
+		ClientID: "partner", Name: "Partner App", Type: store.ClientConfidential,
+		RedirectURIs: []string{"https://partner.example.com/callback"},
+	}); err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	query := authorizeQuery()
+	query.Set("client_id", "partner")
+	query.Set("redirect_uri", "https://partner.example.com/callback")
+	query.Set("response_mode", "form_post")
+	query.Set("ui_locales", "es")
+	b := newBrowser(t, s.Handler())
+	id := b.startLogin(issuer, query)
+	if res, _ := b.post(issuer+"/login", loginForm(id, testPassword), "same-origin"); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("login = %d, want a redirect to the consent page", res.StatusCode)
+	}
+	allow := func(id string) (response, string) {
+		t.Helper()
+		return b.post(issuer+"/consent", url.Values{"request": {id}, "decision": {"allow"}}, "same-origin")
+	}
+
+	_, page := b.getIn(issuer+"/consent?request="+id, "en")
+	for _, want := range []string{`<html lang="es">`, "<title>Permitir acceso</title>", "Saber quién eres",
+		`<nav class="languages" aria-label="Idioma"><form method="GET" action="/consent">`,
+		`<input type="hidden" name="request" value="` + id + `">`,
+		`name="clavis_locale" value="en" lang="en">English</button>`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("consent page with ui_locales, want %q:\n%s", want, page)
+		}
+	}
+	if res, page := allow(id); res.StatusCode != http.StatusOK || !strings.Contains(page, `<html lang="es">`) ||
+		!strings.Contains(page, "<title>Volviendo a la aplicación</title>") {
+		t.Errorf("form post page with ui_locales = %d:\n%s", res.StatusCode, page)
+	}
+
+	// The selector's choice applies to the consent page and to the response.
+	query.Set("prompt", "consent")
+	res, _ := b.get(issuer + "/oauth2/authorize?" + query.Encode())
+	loc, err := url.Parse(res.Header.Get("Location"))
+	if res.StatusCode != http.StatusSeeOther || err != nil || loc.Path != "/consent" {
+		t.Fatalf("authorize with prompt=consent = %d to %q, want the consent page", res.StatusCode,
+			res.Header.Get("Location"))
+	}
+	id = loc.Query().Get("request")
+	if _, page = b.get(issuer + "/consent?request=" + id + "&clavis_locale=en"); !strings.Contains(page,
+		"<title>Allow access</title>") || !strings.Contains(page, "Know who you are") {
+		t.Errorf("consent page after choosing English:\n%s", page)
+	}
+	if _, page = allow(id); !strings.Contains(page, "<title>Returning to the application</title>") {
+		t.Errorf("form post page after choosing English:\n%s", page)
+	}
+}
+
 // A language chosen in a request from another site applies to its page but
 // is not remembered, so a link or a form elsewhere cannot change the
 // language of the browser's later pages.
