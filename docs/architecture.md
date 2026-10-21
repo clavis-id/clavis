@@ -294,7 +294,8 @@ year.
     consent. Each use moves its idle expiry.
   - A new sign-in is needed for `prompt=login`, `max_age=0`, an authentication older than
     `max_age`, or an `id_token_hint` of another user. Until account selection exists,
-    `prompt=select_account` shows the sign-in form too. With `prompt=none`, a request that
+    `prompt=select_account` shows the sign-in form too, and `prompt=create` shows the signup
+    page. With `prompt=none`, a request that
     needs a sign-in fails with `login_required`.
   - RP-initiated logout (ADR 0023): a browser with an active session confirms on a page,
     which posts only from Clavis itself; so does a `POST` without the session cookie, which a
@@ -338,6 +339,15 @@ year.
   are retried twice. SMTP requires STARTTLS or implicit TLS with a verified certificate;
   plain text is accepted only for a loopback host and without credentials. The console
   driver, for development, is never a default.
+- **Signup:** see ADR 0026. A tenant allows it with `clavis tenants update SLUG --signup`,
+  and it needs email. The sign-in page links to it, and `prompt=create` opens it.
+  - The user types an address first. Clavis answers the same way whether or not it has an
+    account, with the same work. It queues a code and a link for a new address, and a notice
+    for an address with an account.
+  - The code and the link are stored as hashes and work only in the browser that started,
+    for 15 minutes. Five codes may be tried.
+  - The user then chooses a password. The account is created with the address verified,
+    and the user is signed in and returns to the application.
 - **Comparisons:** every secret comparison is constant time.
 - **Logging:** secrets, tokens, passwords, codes and full authorization requests are never
   logged. Audit events record who, what, when and from where, without credential material.
