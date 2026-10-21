@@ -278,6 +278,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 				"and links that grant access, to the log; use it only for development")
 		}
 		mail = mailer.New(cfg.Email, logger)
+		deps.Mail = mail
 	}
 	bgCtx, stop := context.WithCancel(ctx) //nolint:gosec // stop is kept in the Server and called by Close.
 	s := &Server{
@@ -386,6 +387,12 @@ func (s *Server) routes() http.Handler {
 	s.handleTenant(mux, http.MethodPost, loginPath, s.handleLogin)
 	s.handleTenant(mux, http.MethodGet, consentPath, s.handleConsentPage)
 	s.handleTenant(mux, http.MethodPost, consentPath, s.handleConsent)
+	s.handleTenant(mux, http.MethodGet, signupPath, s.handleSignupPage)
+	s.handleTenant(mux, http.MethodPost, signupPath, s.handleSignup)
+	s.handleTenant(mux, http.MethodGet, signupVerifyPath, s.handleVerifyPage)
+	s.handleTenant(mux, http.MethodPost, signupVerifyPath, s.handleVerify)
+	s.handleTenant(mux, http.MethodGet, signupPasswordPath, s.handlePasswordPage)
+	s.handleTenant(mux, http.MethodPost, signupPasswordPath, s.handleSignupPassword)
 	s.handleTenant(mux, http.MethodGet, oidc.EndSessionPath, s.handleEndSession)
 	s.handleTenant(mux, http.MethodPost, oidc.EndSessionPath, s.handleEndSession)
 	s.handleTenant(mux, http.MethodPost, logoutPath, s.handleLogout)
@@ -406,12 +413,15 @@ type tenant struct {
 	store.Tenant
 	issuer string
 	path   string
+	// signup tells whether people can sign up: the tenant allows it and
+	// email is enabled (ADR 0026).
+	signup bool
 }
 
 // authorizationTenant returns what the authorization use cases need to know
 // about t.
 func (t tenant) authorizationTenant() app.AuthorizationTenant {
-	return app.AuthorizationTenant{ID: t.ID, Issuer: t.issuer}
+	return app.AuthorizationTenant{ID: t.ID, Issuer: t.issuer, Signup: t.signup}
 }
 
 // tenantHandler serves a request addressed to one tenant.
@@ -432,26 +442,35 @@ func (s *Server) handleTenant(mux *http.ServeMux, method, path string, h tenantH
 
 // serveTenant resolves the tenant with the given slug, or the default tenant
 // when slug is empty, and passes the request to h. Unknown tenants get a 404
-// response.
+// response. Every request reads its tenant from the store, the default one
+// too, so a change of its settings applies at once.
 func (s *Server) serveTenant(w http.ResponseWriter, r *http.Request, slug string, h tenantHandler) {
+	var t store.Tenant
+	var err error
 	if slug == "" {
-		h(w, r, tenant{Tenant: s.defaultTenant, issuer: s.issuer.String(), path: s.issuer.Path})
-		return
+		t, err = app.TenantByID(r.Context(), s.deps, s.defaultTenant.ID)
+	} else {
+		t, err = app.TenantBySlug(r.Context(), s.deps, slug)
 	}
-	t, err := app.TenantBySlug(r.Context(), s.deps, slug)
 	switch {
-	case errors.Is(err, app.ErrTenantNotFound):
+	case errors.Is(err, app.ErrTenantNotFound) && slug != "":
 		s.notFound(w)
 		return
 	case err != nil:
 		s.internalError(w, r, "resolving the tenant", err)
 		return
 	}
-	h(w, r, tenant{
+	resolved := tenant{
 		Tenant: t,
-		issuer: s.issuer.String() + tenantPathPrefix + t.Slug,
-		path:   s.issuer.Path + tenantPathPrefix + t.Slug,
-	})
+		issuer: s.issuer.String(),
+		path:   s.issuer.Path,
+		signup: t.SignupEnabled && s.deps.Mail != nil,
+	}
+	if slug != "" {
+		resolved.issuer += tenantPathPrefix + t.Slug
+		resolved.path += tenantPathPrefix + t.Slug
+	}
+	h(w, r, resolved)
 }
 
 // instrument wraps h so that it records a span and HTTP metrics named after
@@ -503,7 +522,7 @@ func (s *Server) handleJWKS(w http.ResponseWriter, r *http.Request, t tenant) {
 // handleMetadata serves the provider metadata of a tenant, for OpenID
 // Connect Discovery 1.0, section 4, and RFC 8414, section 3.
 func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request, t tenant) {
-	s.writePublicJSON(w, r, "application/json", metadataMaxAge, oidc.NewMetadata(t.issuer))
+	s.writePublicJSON(w, r, "application/json", metadataMaxAge, oidc.NewMetadata(t.issuer, t.signup))
 }
 
 // allowGet answers requests other than GET and HEAD with 405 before they

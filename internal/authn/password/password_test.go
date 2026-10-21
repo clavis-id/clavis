@@ -287,6 +287,9 @@ func TestCheckNew(t *testing.T) {
 	cfg := cheapConfig()
 	cfg.MinLength = 10
 	h := newHasher(cfg)
+	if h.MinLength() != 10 {
+		t.Errorf("MinLength() = %d, want the configured 10", h.MinLength())
+	}
 	for _, valid := range []string{
 		strings.Repeat("a", 10),
 		strings.Repeat("ñ", 10),

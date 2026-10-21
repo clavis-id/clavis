@@ -178,6 +178,9 @@ func newHasher(cfg Config) *Hasher {
 // FIPS reports whether new hashes use PBKDF2-HMAC-SHA-256.
 func (h *Hasher) FIPS() bool { return h.fips }
 
+// MinLength returns the minimum number of characters of a new password.
+func (h *Hasher) MinLength() int { return h.cfg.MinLength }
+
 // CheckNew reports whether password can be set as a new password: valid
 // UTF-8 with MinLength to MaxLength characters after normalization.
 func (h *Hasher) CheckNew(password string) error {

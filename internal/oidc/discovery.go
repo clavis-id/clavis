@@ -1,7 +1,10 @@
 // Package oidc implements the OpenID Connect layer of Clavis.
 package oidc
 
-import "clavisid.org/clavis/internal/i18n"
+import (
+	"clavisid.org/clavis/internal/i18n"
+	"clavisid.org/clavis/internal/oauth"
+)
 
 // Endpoint paths relative to a tenant's issuer.
 const (
@@ -54,6 +57,10 @@ type Metadata struct {
 	ClaimsSupported               []string `json:"claims_supported"`
 	ACRValuesSupported            []string `json:"acr_values_supported"`
 	CodeChallengeMethodsSupported []string `json:"code_challenge_methods_supported"`
+	// PromptValuesSupported lists the prompt values the tenant accepts,
+	// which include create when it offers signup (Initiating User
+	// Registration via OpenID Connect 1.0, section 4.2; ADR 0026).
+	PromptValuesSupported []string `json:"prompt_values_supported"`
 	// UILocalesSupported lists the languages of the hosted pages (ADR 0025).
 	UILocalesSupported []string `json:"ui_locales_supported"`
 	// AuthorizationResponseIssParameterSupported announces the iss parameter
@@ -62,6 +69,18 @@ type Metadata struct {
 	ClaimsParameterSupported                   bool `json:"claims_parameter_supported"`
 	RequestParameterSupported                  bool `json:"request_parameter_supported"`
 	RequestURIParameterSupported               bool `json:"request_uri_parameter_supported"`
+}
+
+// promptValues returns the prompt values a tenant accepts: every value the
+// parser knows, without create when the tenant offers no signup.
+func promptValues(signup bool) []string {
+	var values []string
+	for _, v := range oauth.PromptValues() {
+		if v != oauth.PromptCreate || signup {
+			values = append(values, v)
+		}
+	}
+	return values
 }
 
 // uiLocales returns the supported locales as BCP 47 tags.
@@ -74,7 +93,8 @@ func uiLocales() []string {
 }
 
 // NewMetadata returns the metadata of the tenant whose issuer is issuer.
-func NewMetadata(issuer string) Metadata {
+// signup tells whether the tenant offers signup, and with it prompt=create.
+func NewMetadata(issuer string, signup bool) Metadata {
 	claims := []string{"sub", "iss", "aud", "exp", "iat", "auth_time", "nonce", "acr", "amr", "at_hash"}
 	for _, scope := range []string{ScopeProfile, ScopeEmail, ScopeAddress, ScopePhone} {
 		claims = append(claims, ScopeClaims(scope)...)
@@ -110,6 +130,7 @@ func NewMetadata(issuer string) Metadata {
 		// RFC 8414, section 2: without this field, clients cannot tell that
 		// PKCE is supported. Only S256 is (ADR 0018).
 		CodeChallengeMethodsSupported:              []string{"S256"},
+		PromptValuesSupported:                      promptValues(signup),
 		UILocalesSupported:                         uiLocales(),
 		AuthorizationResponseIssParameterSupported: true,
 		ClaimsParameterSupported:                   true,
