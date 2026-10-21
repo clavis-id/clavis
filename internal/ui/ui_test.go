@@ -404,7 +404,16 @@ func TestEveryPageInEveryLocale(t *testing.T) {
 			Render(context.Context, io.Writer) error
 		}{
 			"login": Login(LoginPage{Layout: l, ClientName: "Shop", Action: "/login", RequestID: "r",
-				Error: l.T(i18n.LoginInvalidCredentials)}),
+				Error: l.T(i18n.LoginInvalidCredentials), SignupURL: "/signup?request=r"}),
+			"signup": Signup(SignupPage{Layout: l, ClientName: "Shop", Action: "/signup", RequestID: "r",
+				Error: l.T(i18n.SignupInvalidEmail), LoginURL: "/login?request=r"}),
+			"code": Verify(VerifyPage{Layout: l, Email: "grace@example.com", Action: "/signup/verify",
+				VerificationID: "v", Error: l.T(i18n.VerifyWrongCode), RestartURL: "/signup?request=r"}),
+			"link": Verify(VerifyPage{Layout: l, Email: "grace@example.com", Action: "/signup/verify",
+				VerificationID: "v", Token: "t"}),
+			"password": Password(PasswordPage{Layout: l, Email: "grace@example.com", Action: "/signup/password",
+				VerificationID: "v", MinLength: 8, MaxLength: 256, Error: l.T(i18n.PasswordPolicy, "min", "8", "max", "256")}),
+			"signed up": SignedUp(SignedUpPage{Layout: l}),
 			"consent": Consent(ConsentPage{Layout: l, ClientName: "Shop", Account: "ada@example.com",
 				Scopes: []string{ScopeDescription(l.Text, "openid", ""), ScopeDescription(l.Text, "orders:read", "Orders")},
 				Action: "/consent", RequestID: "r"}),

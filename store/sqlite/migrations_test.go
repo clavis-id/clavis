@@ -24,7 +24,9 @@ func TestMigrationGivesEarlierSessionsThePasswordACR(t *testing.T) {
 	tn := store.Tenant{ID: uuid.NewV7(), Slug: "default", Name: "Default", CreatedAt: now, UpdatedAt: now}
 	u := store.User{ID: uuid.NewV7(), TenantID: tn.ID, Email: "ada@example.com", Status: store.UserActive,
 		CreatedAt: now, UpdatedAt: now}
-	if err := s.Tenants().Create(ctx, tn); err != nil {
+	// The adapter writes tenants as the latest schema has them.
+	if err := s.Exec(ctx, "INSERT INTO tenants (id, slug, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+		tn.ID.String(), tn.Slug, tn.Name, now.UnixMicro(), now.UnixMicro()); err != nil {
 		t.Fatalf("creating the tenant: %v", err)
 	}
 	if err := s.Users().Create(ctx, u); err != nil {

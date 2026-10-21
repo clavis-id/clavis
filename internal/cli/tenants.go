@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"text/tabwriter"
@@ -13,6 +14,7 @@ import (
 	"clavisid.org/clavis/internal/app"
 	"clavisid.org/clavis/internal/config"
 	"clavisid.org/clavis/internal/keys"
+	"clavisid.org/clavis/store"
 )
 
 func newTenantsCommand(environ []string) *cobra.Command {
@@ -69,8 +71,58 @@ func newTenantsCommand(environ []string) *cobra.Command {
 	}
 	remove.Flags().BoolVar(&confirmed, "yes", false, "confirm the deletion")
 
-	cmd.AddCommand(create, list, remove, newThemeCommand(environ, &configPath))
+	var newName string
+	var signup bool
+	update := &cobra.Command{
+		Use:   "update SLUG",
+		Short: "Change the name or the settings of a tenant",
+		Long: "Change the display name of a tenant, or whether people can create their own accounts\n" +
+			"on its hosted pages (ADR 0026). Signup also needs email, configured in the email\n" +
+			"section, and the admin tenant never allows it.",
+		Example: "  clavis tenants update acme --signup\n" +
+			"  clavis tenants update acme --name \"Acme Corporation\" --signup=false",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var c app.TenantChanges
+			if cmd.Flags().Changed("name") {
+				c.Name = &newName
+			}
+			if cmd.Flags().Changed("signup") {
+				c.SignupEnabled = &signup
+			}
+			if c.Name == nil && c.SignupEnabled == nil {
+				return errors.New("nothing to change: pass --name or --signup")
+			}
+			return withTenant(cmd, config.LoadDatabase, path(), environ, args[0], true,
+				func(ctx context.Context, cfg config.Config, d app.Deps, t store.Tenant) error {
+					return updateTenant(ctx, cfg, d, t, c, cmd.OutOrStdout())
+				})
+		},
+	}
+	update.Flags().StringVar(&newName, "name", "", "new display name")
+	update.Flags().BoolVar(&signup, "signup", false, "let people create their own accounts")
+
+	cmd.AddCommand(create, list, update, remove, newThemeCommand(environ, &configPath))
 	return cmd
+}
+
+func updateTenant(ctx context.Context, cfg config.Config, d app.Deps, t store.Tenant, c app.TenantChanges,
+	out io.Writer,
+) error {
+	updated, err := app.UpdateTenant(ctx, d, t.Slug, c)
+	if err != nil {
+		return err
+	}
+	signup := "off"
+	if updated.SignupEnabled {
+		signup = "on"
+	}
+	text := fmt.Sprintf("Updated tenant %s: name %q, signup %s.\n", updated.Slug, updated.Name, signup)
+	if updated.SignupEnabled && cfg.Email.Driver == "" {
+		text += "Email is disabled in this configuration, so signup stays unavailable until the email\n" +
+			"section sets a driver.\n"
+	}
+	return write(out, text)
 }
 
 func createTenant(ctx context.Context, configPath string, environ []string, slug, name string,
@@ -131,9 +183,13 @@ func listTenants(ctx context.Context, configPath string, environ []string, out, 
 		return err
 	}
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "SLUG\tNAME\tID\tCREATED")
+	_, _ = fmt.Fprintln(tw, "SLUG\tNAME\tID\tSIGNUP\tCREATED")
 	for _, t := range tenants {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", t.Slug, t.Name, t.ID, t.CreatedAt.Format(time.RFC3339))
+		signup := "off"
+		if t.SignupEnabled {
+			signup = "on"
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", t.Slug, t.Name, t.ID, signup, t.CreatedAt.Format(time.RFC3339))
 	}
 	if err := tw.Flush(); err != nil {
 		return fmt.Errorf("writing output: %w", err)

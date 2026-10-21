@@ -67,6 +67,8 @@ type Store interface {
 	Grants() Grants
 	// Brandings returns the branding repository.
 	Brandings() Brandings
+	// EmailVerifications returns the email verification repository.
+	EmailVerifications() EmailVerifications
 	// Ping reports whether the underlying database is reachable.
 	Ping(ctx context.Context) error
 }
@@ -78,9 +80,12 @@ type Tenant struct {
 	// Slug is the unique, URL-safe name used in the tenant's issuer path.
 	Slug string
 	// Name is a human-readable display name.
-	Name      string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Name string
+	// SignupEnabled lets people create their own accounts on the tenant's
+	// hosted pages (ADR 0026).
+	SignupEnabled bool
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // Tenants stores tenants.
@@ -97,6 +102,10 @@ type Tenants interface {
 	// of a page to get the next one. limit must be between 1 and
 	// MaxPageSize, otherwise List returns ErrInvalidArgument.
 	List(ctx context.Context, after uuid.UUID, limit int) ([]Tenant, error)
+	// Update stores the name, the settings and UpdatedAt of the tenant with
+	// the ID of t; the slug and CreatedAt never change. It returns
+	// ErrNotFound for an unknown tenant.
+	Update(ctx context.Context, t Tenant) error
 	// Delete removes the tenant with the given ID, or returns ErrNotFound.
 	Delete(ctx context.Context, id uuid.UUID) error
 }
@@ -816,4 +825,70 @@ type Brandings interface {
 	DeleteLogo(ctx context.Context, tenantID uuid.UUID, updatedAt time.Time) error
 	// Delete removes the branding of a tenant, or returns ErrNotFound.
 	Delete(ctx context.Context, tenantID uuid.UUID) error
+}
+
+// EmailVerificationPurpose names what an email verification proves the
+// address for.
+type EmailVerificationPurpose string
+
+// Purposes of email verifications.
+const (
+	// VerifySignup proves the address of a new account (ADR 0026).
+	VerifySignup EmailVerificationPurpose = "signup"
+)
+
+// EmailVerification is a one-time code and link sent to an email address,
+// with which a user proves to receive its mail (ADR 0026). Only hashes of
+// the code and the link token are stored. A verification belongs to the
+// browser that asked for it.
+type EmailVerification struct {
+	// ID is a random 128-bit identifier in unpadded base64url, like the ID of
+	// an authorization request.
+	ID       string
+	TenantID uuid.UUID
+	Purpose  EmailVerificationPurpose
+	// Email is the normalized address.
+	Email string
+	// CodeHash and LinkHash are the hashes of the code and of the link's
+	// token.
+	CodeHash []byte
+	LinkHash []byte
+	// BindingHash is the hash of the browser's binding cookie (ADR 0013).
+	BindingHash []byte
+	// AuthorizationRequestID is the authorization request that the user
+	// returns to afterwards, or empty.
+	AuthorizationRequestID string
+	// Attempts counts the codes submitted.
+	Attempts int
+	// VerifiedAt is when the user proved the address, or the zero time.
+	VerifiedAt time.Time
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
+}
+
+// EmailVerifications stores email verifications.
+type EmailVerifications interface {
+	// Create inserts v. It returns ErrConflict when the ID is in use, and
+	// ErrNotFound when the tenant does not exist.
+	Create(ctx context.Context, v EmailVerification) error
+	// Get returns the verification of a tenant with the given ID, or
+	// ErrNotFound. It returns expired verifications too; callers check
+	// ExpiresAt.
+	Get(ctx context.Context, tenantID uuid.UUID, id string) (EmailVerification, error)
+	// AddAttempt adds one to the attempts of the verification of a tenant
+	// with the given ID, unless it is verified, and returns the new count.
+	// Concurrent callers each get a different count. It returns ErrNotFound
+	// when there is no such verification, or when it is verified.
+	AddAttempt(ctx context.Context, tenantID uuid.UUID, id string) (int, error)
+	// MarkVerified sets VerifiedAt of the verification of a tenant with the
+	// given ID. It returns ErrNotFound when there is no such verification,
+	// or when it is verified already.
+	MarkVerified(ctx context.Context, tenantID uuid.UUID, id string, at time.Time) error
+	// Delete removes the verification of a tenant with the given ID, or
+	// returns ErrNotFound. When several callers delete the same verification
+	// at once, exactly one succeeds.
+	Delete(ctx context.Context, tenantID uuid.UUID, id string) error
+	// DeleteExpired removes the verifications of every tenant whose
+	// ExpiresAt is not after now, and returns how many were removed.
+	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
 }

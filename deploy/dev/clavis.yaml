@@ -24,8 +24,9 @@ keys:
 #   max_concurrent_hashes: 0     # 0 means one per CPU
 #   fips_migrate_argon2id: true
 
-# Email delivery (ADR 0024). Disabled unless a driver is set. For local
-# testing, a server such as Mailpit on localhost needs no TLS:
+# Email delivery (ADR 0024). Disabled unless a driver is set; signup (ADR
+# 0026) needs it. For local testing, a server such as Mailpit on localhost
+# needs no TLS:
 # email:
 #   driver: smtp               # or console, which only writes messages to the log
 #   from: "Clavis <no-reply@localhost>"

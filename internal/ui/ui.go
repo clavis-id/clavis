@@ -284,6 +284,66 @@ type LoginPage struct {
 	Email string
 	// Error explains why the previous attempt failed.
 	Error string
+	// SignupURL is the URL of the signup page, or empty when the tenant
+	// offers none.
+	SignupURL string
+}
+
+// SignupPage asks for the email address of a new account (ADR 0026).
+type SignupPage struct {
+	Layout
+	// ClientName names the application the user signs up for.
+	ClientName string
+	// Action is the URL the form posts to.
+	Action string
+	// RequestID identifies the stored authorization request.
+	RequestID string
+	// Email fills the email field again after a malformed address.
+	Email string
+	// Error explains why the previous attempt failed.
+	Error string
+	// LoginURL is the URL of the sign-in page.
+	LoginURL string
+}
+
+// VerifyPage asks for the code sent to Email or, when Token is set,
+// confirms the link that the user followed.
+type VerifyPage struct {
+	Layout
+	// Email is the address the message went to.
+	Email string
+	// Action is the URL the form posts to.
+	Action string
+	// VerificationID identifies the stored email verification.
+	VerificationID string
+	// Token is the token of the link, or empty for the code form.
+	Token string
+	// Error explains why the previous code failed.
+	Error string
+	// RestartURL is the URL of the signup page, to start again.
+	RestartURL string
+}
+
+// PasswordPage asks for the password of a new account.
+type PasswordPage struct {
+	Layout
+	// Email is the address of the new account.
+	Email string
+	// Action is the URL the form posts to.
+	Action string
+	// VerificationID identifies the stored email verification.
+	VerificationID string
+	// MinLength and MaxLength bound the length of the password, in
+	// characters.
+	MinLength int
+	MaxLength int
+	// Error explains why the previous password was refused.
+	Error string
+}
+
+// SignedUpPage says that the new account is ready.
+type SignedUpPage struct {
+	Layout
 }
 
 // ConsentPage asks the user to allow or deny a client.

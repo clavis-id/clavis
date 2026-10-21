@@ -160,3 +160,23 @@ button.link:disabled {
   text-decoration: none;
   cursor: default;
 }
+
+a {
+  color: var(--clavis-accent);
+}
+
+.alternative {
+  margin: 1.25rem 0 0;
+  color: var(--clavis-muted);
+}
+
+.hint {
+  margin: -0.5rem 0 0.75rem;
+  color: var(--clavis-muted);
+  font-size: 0.875rem;
+}
+
+input.code {
+  letter-spacing: 0.25em;
+  font-variant-numeric: tabular-nums;
+}

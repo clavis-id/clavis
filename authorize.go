@@ -79,6 +79,8 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request, t tenan
 		s.respond(w, r, t, uiLocales, a.Response)
 	case a.Consent:
 		seeOther(w, pageURL(t, consentPath, a.RequestID))
+	case a.Signup:
+		seeOther(w, pageURL(t, signupPath, a.RequestID))
 	default:
 		seeOther(w, pageURL(t, loginPath, a.RequestID))
 	}
@@ -159,15 +161,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, t tenant) {
 		s.authorizationRequestError(w, r, t, err)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName(t.ID),
-		Value:    login.SessionToken,
-		Path:     "/",
-		MaxAge:   int(login.SessionExpiresAt.Sub(s.deps.Now()).Seconds()),
-		Secure:   true,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-	})
+	s.setSessionCookie(w, t, login)
 	if login.Consent {
 		seeOther(w, pageURL(t, consentPath, p.Request.ID))
 		return
@@ -276,9 +270,12 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request, t tenant, p a
 	if target := ui.FormTarget(p.Request.RedirectURI); target != "" {
 		targets = append(targets, target)
 	}
-	var message string
+	var message, signupURL string
 	if problem != "" {
 		message = layout.T(problem)
+	}
+	if t.signup {
+		signupURL = pageURL(t, signupPath, p.Request.ID)
 	}
 	ui.SetPageHeaders(w.Header(), layout.ContentSecurityPolicy(true, targets...))
 	s.render(w, r, http.StatusOK, ui.Login(ui.LoginPage{
@@ -288,6 +285,7 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request, t tenant, p a
 		RequestID:  p.Request.ID,
 		Email:      email,
 		Error:      message,
+		SignupURL:  signupURL,
 	}))
 }
 
@@ -305,6 +303,20 @@ func (s *Server) authorizationRequestError(w http.ResponseWriter, r *http.Reques
 // handleAsset serves the static files of the hosted pages.
 func (s *Server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	s.assets.ServeAsset(w, r, r.PathValue("name"))
+}
+
+// setSessionCookie sets the cookie of the session that login started (ADR
+// 0013).
+func (s *Server) setSessionCookie(w http.ResponseWriter, t tenant, login app.Login) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName(t.ID),
+		Value:    login.SessionToken,
+		Path:     "/",
+		MaxAge:   int(login.SessionExpiresAt.Sub(s.deps.Now()).Seconds()),
+		Secure:   true,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
 }
 
 // bindBrowser returns the hash of the browser's binding cookie, setting the

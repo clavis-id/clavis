@@ -33,6 +33,7 @@ The design decisions this plan relies on are recorded as ADRs:
 | [0023](../adr/0023-logout-and-form-post.md) | Logout asks for confirmation and ends the session's online access; post-logout redirects need an `id_token_hint`; retired keys stay published 15 days; form post responses |
 | [0024](../adr/0024-email-delivery.md) | A public `email.Sender` port with SMTP and console senders; messages queued in memory and sent in the background; TLS required except to a loopback host |
 | [0025](../adr/0025-internationalization-and-theming.md) | Embedded JSON catalogs checked for missing keys; locale from the selector, `ui_locales`, then `Accept-Language`; per-tenant colors, radius and logo, applied without loosening the Content Security Policy |
+| [0026](../adr/0026-signup-and-email-verification.md) | Signup per tenant, address first: a code or a link bound to the browser, then the password; the same responses and work for new and existing addresses; `prompt=create` |
 
 ## Rules for every work item
 

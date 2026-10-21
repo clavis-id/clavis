@@ -110,6 +110,21 @@ type Client struct {
 	ResourceServerFor                   []string
 }
 
+type EmailVerification struct {
+	ID                     string
+	TenantID               uuid.UUID
+	Purpose                string
+	Email                  string
+	CodeHash               []byte
+	LinkHash               []byte
+	BindingHash            []byte
+	AuthorizationRequestID string
+	Attempts               int64
+	VerifiedAt             *time.Time
+	CreatedAt              time.Time
+	ExpiresAt              time.Time
+}
+
 type Grant struct {
 	ID        uuid.UUID
 	TenantID  uuid.UUID
@@ -185,11 +200,12 @@ type SigningKey struct {
 }
 
 type Tenant struct {
-	ID        uuid.UUID
-	Slug      string
-	Name      string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID            uuid.UUID
+	Slug          string
+	Name          string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	SignupEnabled bool
 }
 
 type User struct {

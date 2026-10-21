@@ -55,6 +55,7 @@ type Store struct {
 	resources   apiResources
 	grants      grants
 	brandings   brandings
+	emailVerifs emailVerifications
 }
 
 var _ store.Store = (*Store)(nil)
@@ -111,6 +112,7 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		resources:   apiResources{q: q},
 		grants:      grants{q: q},
 		brandings:   brandings{q: q},
+		emailVerifs: emailVerifications{q: q},
 	}
 
 	if err := s.Ping(ctx); err != nil {
@@ -230,17 +232,21 @@ func (s *Store) Grants() store.Grants { return s.grants }
 // Brandings returns the branding repository.
 func (s *Store) Brandings() store.Brandings { return s.brandings }
 
+// EmailVerifications returns the email verification repository.
+func (s *Store) EmailVerifications() store.EmailVerifications { return s.emailVerifs }
+
 type tenants struct {
 	q *db.Queries
 }
 
 func (r tenants) Create(ctx context.Context, t store.Tenant) error {
 	err := r.q.CreateTenant(ctx, db.CreateTenantParams{
-		ID:        t.ID.String(),
-		Slug:      t.Slug,
-		Name:      t.Name,
-		CreatedAt: t.CreatedAt.UnixMicro(),
-		UpdatedAt: t.UpdatedAt.UnixMicro(),
+		ID:            t.ID.String(),
+		Slug:          t.Slug,
+		Name:          t.Name,
+		SignupEnabled: boolInt(t.SignupEnabled),
+		CreatedAt:     t.CreatedAt.UnixMicro(),
+		UpdatedAt:     t.UpdatedAt.UnixMicro(),
 	})
 	return mapError("creating tenant", err)
 }
@@ -281,6 +287,22 @@ func (r tenants) List(ctx context.Context, after uuid.UUID, limit int) ([]store.
 	return out, nil
 }
 
+func (r tenants) Update(ctx context.Context, t store.Tenant) error {
+	n, err := r.q.UpdateTenant(ctx, db.UpdateTenantParams{
+		Name:          t.Name,
+		SignupEnabled: boolInt(t.SignupEnabled),
+		UpdatedAt:     t.UpdatedAt.UnixMicro(),
+		ID:            t.ID.String(),
+	})
+	if err != nil {
+		return mapError("updating tenant", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("sqlite: updating tenant: %w", store.ErrNotFound)
+	}
+	return nil
+}
+
 func (r tenants) Delete(ctx context.Context, id uuid.UUID) error {
 	n, err := r.q.DeleteTenant(ctx, id.String())
 	if err != nil {
@@ -298,11 +320,12 @@ func tenantFromRow(row db.Tenant) (store.Tenant, error) {
 		return store.Tenant{}, fmt.Errorf("sqlite: corrupt tenant id %q: %w", row.ID, err)
 	}
 	return store.Tenant{
-		ID:        id,
-		Slug:      row.Slug,
-		Name:      row.Name,
-		CreatedAt: time.UnixMicro(row.CreatedAt).UTC(),
-		UpdatedAt: time.UnixMicro(row.UpdatedAt).UTC(),
+		ID:            id,
+		Slug:          row.Slug,
+		Name:          row.Name,
+		SignupEnabled: row.SignupEnabled != 0,
+		CreatedAt:     time.UnixMicro(row.CreatedAt).UTC(),
+		UpdatedAt:     time.UnixMicro(row.UpdatedAt).UTC(),
 	}, nil
 }
 

@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -334,6 +336,50 @@ func TestTenantsCommands(t *testing.T) {
 	}
 	if out, _, _ = run("tenants", "list"); strings.Contains(out, "acme") {
 		t.Errorf("deleted tenant still listed: %q", out)
+	}
+}
+
+func TestTenantsUpdate(t *testing.T) {
+	t.Parallel()
+	dsn := filepath.Join(t.TempDir(), "clavis.db")
+	environ := []string{"CLAVIS_ISSUER=https://auth.example.com", "CLAVIS_DATABASE_DSN=" + dsn, testKey}
+	run := func(environ []string, args ...string) (stdout, stderr string, code int) {
+		var out, errOut bytes.Buffer
+		code = Execute(t.Context(), args, nil, &out, &errOut, environ)
+		return out.String(), errOut.String(), code
+	}
+	if _, errOut, code := run(environ, "tenants", "create", "acme"); code != 0 {
+		t.Fatalf("tenants create: exit code %d, stderr %q", code, errOut)
+	}
+
+	out, errOut, code := run(environ, "tenants", "update", "acme", "--name", "Acme Corp", "--signup")
+	if code != 0 || !strings.Contains(out, `Updated tenant acme: name "Acme Corp", signup on.`) ||
+		!strings.Contains(out, "Email is disabled") {
+		t.Errorf("tenants update: exit code %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	withEmail := append(slices.Clone(environ), "CLAVIS_EMAIL_DRIVER=console", "CLAVIS_EMAIL_FROM=Clavis <no-reply@example.com>")
+	if out, errOut, code = run(withEmail, "tenants", "update", "acme", "--signup"); code != 0 || strings.Contains(out, "Email is disabled") {
+		t.Errorf("tenants update with email: exit code %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	if out, _, code = run(environ, "tenants", "list"); code != 0 || !regexp.MustCompile(`acme\s+Acme Corp\s+\S+\s+on\s`).MatchString(out) {
+		t.Errorf("tenants list after the update: exit code %d, stdout %q", code, out)
+	}
+	if out, errOut, code = run(environ, "tenants", "update", "acme", "--signup=false"); code != 0 ||
+		!strings.Contains(out, "signup off.") {
+		t.Errorf("tenants update --signup=false: exit code %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	// The default tenant exists once a command needs it.
+	if out, errOut, code = run(environ, "tenants", "update", "default", "--signup"); code != 0 || !strings.Contains(out, "signup on.") {
+		t.Errorf("tenants update default: exit code %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	for _, args := range [][]string{
+		{"tenants", "update", "acme"},
+		{"tenants", "update", "missing", "--signup"},
+		{"tenants", "update", "acme", "--name", ""},
+	} {
+		if _, errOut, code := run(environ, args...); code != 1 || errOut == "" {
+			t.Errorf("%v: exit code %d, stderr %q; want an error", args, code, errOut)
+		}
 	}
 }
 

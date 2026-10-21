@@ -84,6 +84,12 @@
   "code_challenge_methods_supported": [
     "S256"
   ],
+  "prompt_values_supported": [
+    "none",
+    "login",
+    "consent",
+    "select_account"
+  ],
   "ui_locales_supported": [
     "en",
     "es"

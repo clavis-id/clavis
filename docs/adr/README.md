@@ -34,3 +34,4 @@ request. Status values: Proposed, Accepted, Superseded by NNNN, Deprecated.
 | [0023](0023-logout-and-form-post.md) | Logout and the form post response mode | Accepted; ignoring ui_locales superseded by 0025 |
 | [0024](0024-email-delivery.md) | Email delivery | Accepted |
 | [0025](0025-internationalization-and-theming.md) | Internationalization and theming | Accepted |
+| [0026](0026-signup-and-email-verification.md) | Signup and email verification | Accepted |
