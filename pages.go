@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/a-h/templ"
@@ -29,9 +30,14 @@ const localeCookieMaxAge = 365 * 24 * 60 * 60
 // value of ui.LocaleParam in the request, which the language selector sends
 // and which a cookie then remembers; without it, the remembered locale
 // applies, then uiLocales, the ui_locales parameter of the request that the
-// page belongs to, then the Accept-Language header.
+// page belongs to, then the Accept-Language header. A choice sent from
+// another site applies to its page only, so that a link or a form elsewhere
+// cannot change the language of the browser's later pages.
 func (s *Server) locale(w http.ResponseWriter, r *http.Request, chosen, uiLocales string) i18n.Locale {
 	if l, ok := i18n.ParseLocale(chosen); ok {
+		if !sameOrigin(r) {
+			return l
+		}
 		http.SetCookie(w, &http.Cookie{
 			Name:     localeCookie,
 			Value:    string(l),
@@ -48,6 +54,27 @@ func (s *Server) locale(w http.ResponseWriter, r *http.Request, chosen, uiLocale
 		remembered = c.Value
 	}
 	return s.catalogs.Match(remembered, uiLocales, r.Header.Get("Accept-Language"))
+}
+
+// sameOrigin reports whether a request comes from a page of the same
+// origin, or from the user, by the rules of http.CrossOriginProtection,
+// which does not check GET requests: by the Sec-Fetch-Site header, or
+// without it by the Origin header. A request with neither header does not
+// come from a modern browser and passes.
+func sameOrigin(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin", "none":
+		return true
+	case "":
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true
+		}
+		u, err := url.Parse(origin)
+		return err == nil && u.Host == r.Host
+	default:
+		return false
+	}
 }
 
 // layout returns the frame of a hosted page of tenant t in locale l, with

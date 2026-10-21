@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -76,6 +77,56 @@ func TestHostedPagesFollowTheUsersLanguage(t *testing.T) {
 	}
 	if _, page = other.getIn(issuer+"/login?request="+id, ""); !strings.Contains(page, `<html lang="en">`) {
 		t.Errorf("login page without preferences:\n%s", page)
+	}
+}
+
+// A language chosen in a request from another site applies to its page but
+// is not remembered, so a link or a form elsewhere cannot change the
+// language of the browser's later pages.
+func TestLocaleChoiceFromAnotherSite(t *testing.T) {
+	t.Parallel()
+	const issuer = "https://auth.example.com"
+	s, _ := newLoginServer(t, issuer, "")
+	remembers := func(res response) bool {
+		return slices.ContainsFunc(res.Cookies(), func(c *http.Cookie) bool { return c.Name == localeCookie })
+	}
+
+	b := newBrowser(t, s.Handler())
+	id := b.startLogin(issuer, authorizeQuery())
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet,
+		issuer+"/login?request="+id+"&clavis_locale=es", http.NoBody)
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	if res, page := b.send(req); !strings.Contains(page, `<html lang="es">`) || remembers(res) {
+		t.Errorf("login page linked from another site with a choice: remembered %v, page:\n%s", remembers(res), page)
+	}
+
+	// The end session endpoint shows its confirmation to a POST without the
+	// session cookie, so any site can send one.
+	for _, tc := range []struct {
+		name, site, origin string
+		remembered         bool
+	}{
+		{name: "same origin", site: "same-origin", remembered: true},
+		{name: "typed by the user", site: "none", remembered: true},
+		{name: "same site", site: "same-site"},
+		{name: "cross site", site: "cross-site"},
+		{name: "old browser, same origin", origin: issuer, remembered: true},
+		{name: "old browser, other origin", origin: "https://evil.example"},
+		{name: "not a browser", remembered: true},
+	} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, issuer+"/oauth2/logout",
+			strings.NewReader("clavis_locale=es"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if tc.site != "" {
+			req.Header.Set("Sec-Fetch-Site", tc.site)
+		}
+		if tc.origin != "" {
+			req.Header.Set("Origin", tc.origin)
+		}
+		res, page := newBrowser(t, s.Handler()).send(req)
+		if !strings.Contains(page, "<title>Cerrar sesión</title>") || remembers(res) != tc.remembered {
+			t.Errorf("%s: remembered %v, want %v; page:\n%s", tc.name, remembers(res), tc.remembered, page)
+		}
 	}
 }
 
