@@ -179,6 +179,59 @@ func TestSignupWithTheCode(t *testing.T) {
 	}
 }
 
+// After signup, a client that asks for consent gets it, as after a sign-in
+// (ADR 0020).
+func TestSignupWithConsent(t *testing.T) {
+	t.Parallel()
+	const issuer = signupIssuer
+	s, tn, mail := newSignupServer(t)
+	if _, _, err := app.CreateClient(t.Context(), s.deps, tn.ID, app.ClientSpec{
+		ClientID: "partner", Name: "Partner App", Type: store.ClientConfidential,
+		RedirectURIs: []string{"https://partner.example.com/callback"},
+	}); err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	query := authorizeQuery()
+	query.Set("client_id", "partner")
+	query.Set("redirect_uri", "https://partner.example.com/callback")
+	b := newBrowser(t, s.Handler())
+	id := b.startLogin(issuer, query)
+	res, _ := b.post(issuer+"/signup", url.Values{"request": {id}, "email": {"grace@example.com"}}, "same-origin")
+	loc, err := url.Parse(res.Header.Get("Location"))
+	if res.StatusCode != http.StatusSeeOther || err != nil {
+		t.Fatalf("signup = %d to %q, want the code page", res.StatusCode, res.Header.Get("Location"))
+	}
+	verification := loc.Query().Get("verification")
+	code := signupCode.FindStringSubmatch(mail.last(t, "grace@example.com").Text)
+	if res, _ = b.post(issuer+"/signup/verify", url.Values{"verification": {verification}, "code": {code[1]}},
+		"same-origin"); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("code = %d, want a redirect to the password page", res.StatusCode)
+	}
+
+	consent := issuer + "/consent?request=" + id
+	res, _ = b.post(issuer+"/signup/password", url.Values{"verification": {verification},
+		"password": {"correct horse battery"}}, "same-origin")
+	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != consent {
+		t.Fatalf("password = %d to %q, want the consent page", res.StatusCode, res.Header.Get("Location"))
+	}
+	// The signup page of a request that waits for consent leads to it.
+	if res, _ = b.get(issuer + "/signup?request=" + id); res.StatusCode != http.StatusSeeOther ||
+		res.Header.Get("Location") != consent {
+		t.Errorf("signup page while consent waits = %d to %q, want the consent page", res.StatusCode,
+			res.Header.Get("Location"))
+	}
+	if res, page := b.get(consent); res.StatusCode != http.StatusOK || !strings.Contains(page, "Partner App") ||
+		!strings.Contains(page, "grace@example.com") {
+		t.Fatalf("consent page = %d:\n%s", res.StatusCode, page)
+	}
+	res, _ = b.post(issuer+"/consent", url.Values{"request": {id}, "decision": {"allow"}}, "same-origin")
+	loc, err = url.Parse(res.Header.Get("Location"))
+	if res.StatusCode != http.StatusSeeOther || err != nil ||
+		!strings.HasPrefix(loc.String(), "https://partner.example.com/callback?") || loc.Query().Get("code") == "" {
+		t.Errorf("consent = %d to %q, want a code for the client", res.StatusCode, res.Header.Get("Location"))
+	}
+}
+
 func TestSignupWithTheLink(t *testing.T) {
 	t.Parallel()
 	const issuer = signupIssuer
