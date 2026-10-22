@@ -355,6 +355,12 @@ year.
   - The user chooses a new password and signs in with it on the same sign-in form.
   - A new password, after a reset or from `clavis users set-password`, ends every session of
     the user and revokes the user's codes, access tokens and refresh token families.
+- **Account pages:** see ADR 0028. `<issuer>/account`, where the issuer root leads.
+  - They use the session of single sign-on, or sign the user in on `/account/login` without an
+    authorization request.
+  - The profile edits every standard claim except the email address, each one validated.
+  - A password change needs the current password and signs out the user's other sessions.
+  - The connected applications page removes the access of a client the user allowed.
 - **Comparisons:** every secret comparison is constant time.
 - **Logging:** secrets, tokens, passwords, codes and full authorization requests are never
   logged. Audit events record who, what, when and from where, without credential material.

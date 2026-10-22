@@ -35,6 +35,7 @@ The design decisions this plan relies on are recorded as ADRs:
 | [0025](../adr/0025-internationalization-and-theming.md) | Embedded JSON catalogs checked for missing keys; locale from the selector, `ui_locales`, then `Accept-Language`; per-tenant colors, radius and logo, applied without loosening the Content Security Policy |
 | [0026](../adr/0026-signup-and-email-verification.md) | Signup per tenant, address first: a code or a link bound to the browser, then the password; the same responses and work for new and existing addresses; `prompt=create` |
 | [0027](../adr/0027-password-reset.md) | Reset with the email verifications of 0026; only active accounts get the message; the user signs in again; a new password ends every session and token of the user |
+| [0028](../adr/0028-account-pages.md) | Account pages at `<issuer>/account` on the session of single sign-on: profile of the standard claims, password change, connected applications; the issuer root leads there |
 
 ## Rules for every work item
 
