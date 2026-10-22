@@ -276,3 +276,49 @@ func TestSignInDuringAPasswordChange(t *testing.T) {
 		t.Errorf("a sign-in that rehashes the password = %v, want nil", err)
 	}
 }
+
+// pausingStore pauses a password change after it revoked the access tokens
+// of the user.
+type pausingStore struct {
+	store.Store
+	revoked, resume chan struct{}
+}
+
+func (s pausingStore) AccessTokens() store.AccessTokens {
+	return pausingAccessTokens{s.Store.AccessTokens(), s.revoked, s.resume}
+}
+
+type pausingAccessTokens struct {
+	store.AccessTokens
+	revoked, resume chan struct{}
+}
+
+func (p pausingAccessTokens) RevokeByUser(ctx context.Context, tenantID, userID uuid.UUID, at time.Time) (int64, error) {
+	n, err := p.AccessTokens.RevokeByUser(ctx, tenantID, userID, at)
+	p.revoked <- struct{}{}
+	<-p.resume
+	return n, err
+}
+
+// A refresh during a password change gets no access token that outlives the
+// change: its refresh token family is revoked before the access tokens.
+func TestRefreshDuringAPasswordChange(t *testing.T) {
+	t.Parallel()
+	f := newAuthzFixture(t)
+	resp, client := f.refreshTokenFor(t, with(webRequest(), "scope", "openid offline_access"))
+	paused := f.d
+	ps := pausingStore{Store: f.d.Store, revoked: make(chan struct{}), resume: make(chan struct{})}
+	paused.Store = ps
+	done := make(chan error)
+	go func() { done <- SetPassword(t.Context(), paused, f.h, f.user, "new horse battery") }()
+	<-ps.revoked
+	refreshed, err := f.refresh(t, client, resp.RefreshToken)
+	close(ps.resume)
+	if err := <-done; err != nil {
+		t.Fatalf("SetPassword() unexpected error: %v", err)
+	}
+	if err == nil {
+		f.wantRevoked(t, "a refresh during the change", refreshed.AccessToken)
+	}
+	f.wantRevoked(t, "after the change", resp.AccessToken)
+}

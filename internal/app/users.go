@@ -236,13 +236,17 @@ func endUserAccess(ctx context.Context, d Deps, u store.User, keep uuid.UUID) er
 	if err != nil {
 		return fmt.Errorf("deleting the codes of the user: %w", err)
 	}
-	tokens, err := d.Store.AccessTokens().RevokeByUser(ctx, u.TenantID, u.ID, now)
-	if err != nil {
-		return fmt.Errorf("revoking the access tokens of the user: %w", err)
-	}
+	// Refresh token families come before access tokens, as when a grant is
+	// revoked: a refresh records its access token before it rotates the
+	// refresh token, so it either fails on the revoked family or its access
+	// token is revoked below (ADR 0021).
 	families, err := d.Store.RefreshTokens().RevokeByUser(ctx, u.TenantID, u.ID, now)
 	if err != nil {
 		return fmt.Errorf("revoking the refresh tokens of the user: %w", err)
+	}
+	tokens, err := d.Store.AccessTokens().RevokeByUser(ctx, u.TenantID, u.ID, now)
+	if err != nil {
+		return fmt.Errorf("revoking the access tokens of the user: %w", err)
 	}
 	if sessions+codes+tokens+families > 0 {
 		d.Logger.LogAttrs(ctx, slog.LevelInfo, "ended the access of the user after a password change",
