@@ -245,7 +245,8 @@ func TestSignupWithTheLink(t *testing.T) {
 
 	// Another browser, or a mail scanner, gets nothing from the link.
 	if res, page := newBrowser(t, s.Handler()).get(link); res.StatusCode != http.StatusBadRequest ||
-		!strings.Contains(page, "<title>Sign-up no longer valid</title>") {
+		!strings.Contains(page, "<title>Sign-up no longer valid</title>") ||
+		!strings.Contains(page, "In the browser where you started, open the link or type the code") {
 		t.Errorf("link in another browser = %d:\n%s", res.StatusCode, page)
 	}
 	// Opening the link asks for a confirmation, which verifies nothing yet.
