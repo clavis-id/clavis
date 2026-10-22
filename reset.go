@@ -12,13 +12,20 @@ import (
 )
 
 // handleResetPage asks for the email address of the account whose password
-// the user resets, for the authorization request in the query (ADR 0027).
+// the user resets, for the authorization request in the query (ADR 0027),
+// or for the account pages without one (ADR 0028).
 func (s *Server) handleResetPage(w http.ResponseWriter, r *http.Request, t tenant) {
 	if !t.reset {
 		s.flowUnavailable(w, r, t, resetFlow)
 		return
 	}
-	p, err := app.FindAuthorizationRequest(r.Context(), s.deps, t.ID, r.URL.Query().Get("request"), bindingHash(r))
+	query := r.URL.Query()
+	if query.Get("request") == "" {
+		// A reset for the account pages.
+		s.resetPage(w, r, t, nil, s.locale(w, r, query.Get(ui.LocaleParam), ""), "", "")
+		return
+	}
+	p, err := app.FindAuthorizationRequest(r.Context(), s.deps, t.ID, query.Get("request"), bindingHash(r))
 	if err != nil {
 		s.authorizationRequestError(w, r, t, err)
 		return
@@ -28,7 +35,7 @@ func (s *Server) handleResetPage(w http.ResponseWriter, r *http.Request, t tenan
 		seeOther(w, pageURL(t, consentPath, p.Request.ID))
 		return
 	}
-	s.resetPage(w, r, t, p, s.locale(w, r, r.URL.Query().Get(ui.LocaleParam), p.Request.UILocales),
+	s.resetPage(w, r, t, &p, s.locale(w, r, query.Get(ui.LocaleParam), p.Request.UILocales),
 		p.Request.LoginHint, "")
 }
 
@@ -40,14 +47,21 @@ func (s *Server) handleReset(w http.ResponseWriter, r *http.Request, t tenant) {
 	if !ok {
 		return
 	}
-	p, err := app.FindAuthorizationRequest(r.Context(), s.deps, t.ID, form.Get("request"), bindingHash(r))
-	if err != nil {
-		s.authorizationRequestError(w, r, t, err)
-		return
+	var p *app.PendingAuthorization
+	var uiLocales string
+	if form.Get("request") != "" {
+		pending, err := app.FindAuthorizationRequest(r.Context(), s.deps, t.ID, form.Get("request"), bindingHash(r))
+		if err != nil {
+			s.authorizationRequestError(w, r, t, err)
+			return
+		}
+		p, uiLocales = &pending, pending.Request.UILocales
 	}
-	l := s.locale(w, r, "", p.Request.UILocales)
+	l := s.locale(w, r, "", uiLocales)
+	// The account pages have no binding cookie of their own; a reset binds
+	// to the browser like an authorization request does.
 	id, err := app.StartPasswordReset(r.Context(), s.deps, t.authorizationTenant(), p, form.Get("email"),
-		bindingHash(r), s.catalogs.Printer(l), t.issuer+resetVerifyPath)
+		s.bindBrowser(w, r), s.catalogs.Printer(l), t.issuer+resetVerifyPath)
 	switch {
 	case errors.Is(err, app.ErrInvalidEmail):
 		s.resetPage(w, r, t, p, l, form.Get("email"), i18n.SignupInvalidEmail)
@@ -91,6 +105,10 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request, t t
 	// The reset ended the browser's session along with every other.
 	s.clearSessionCookie(w, r, t)
 	l := s.flowLocale(w, r, p, "")
+	if v.AuthorizationRequestID == "" {
+		s.accountLoginPage(w, r, t, l, u.Email, "", i18n.LoginPasswordChanged)
+		return
+	}
 	if p != nil && p.Request.SessionID == uuid.Nil() {
 		s.loginPage(w, r, t, *p, l, u.Email, "", i18n.LoginPasswordChanged)
 		return
@@ -103,12 +121,17 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request, t t
 // resetPage renders the form that asks for the email address of the account
 // in locale l, filled with email, with the message of problem unless it is
 // empty.
-func (s *Server) resetPage(w http.ResponseWriter, r *http.Request, t tenant, p app.PendingAuthorization,
+func (s *Server) resetPage(w http.ResponseWriter, r *http.Request, t tenant, p *app.PendingAuthorization,
 	l i18n.Locale, email string, problem i18n.Key,
 ) {
 	layout := s.layout(r, t, l)
-	layout.Languages = &ui.LanguageSelector{Method: http.MethodGet, Action: t.path + resetPath,
-		Fields: []ui.Field{{Name: "request", Value: p.Request.ID}}}
+	selector := &ui.LanguageSelector{Method: http.MethodGet, Action: t.path + resetPath}
+	requestID, loginURL := "", t.issuer+accountLoginPath
+	if p != nil {
+		requestID, loginURL = p.Request.ID, pageURL(t, loginPath, p.Request.ID)
+		selector.Fields = []ui.Field{{Name: "request", Value: requestID}}
+	}
+	layout.Languages = selector
 	var message string
 	if problem != "" {
 		message = layout.T(problem)
@@ -117,9 +140,9 @@ func (s *Server) resetPage(w http.ResponseWriter, r *http.Request, t tenant, p a
 	s.render(w, r, http.StatusOK, ui.Reset(ui.ResetPage{
 		Layout:    layout,
 		Action:    t.path + resetPath,
-		RequestID: p.Request.ID,
+		RequestID: requestID,
 		Email:     email,
 		Error:     message,
-		LoginURL:  pageURL(t, loginPath, p.Request.ID),
+		LoginURL:  loginURL,
 	}))
 }

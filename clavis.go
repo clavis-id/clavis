@@ -403,6 +403,16 @@ func (s *Server) routes() http.Handler {
 	s.handleTenant(mux, http.MethodPost, oidc.EndSessionPath, s.handleEndSession)
 	s.handleTenant(mux, http.MethodPost, logoutPath, s.handleLogout)
 	s.handleTenant(mux, http.MethodGet, brandingPath+"{name}", s.handleLogo)
+	s.handleTenant(mux, http.MethodGet, "/{$}", s.handleRoot)
+	s.handleTenant(mux, http.MethodGet, accountPath, s.handleAccountPage)
+	s.handleTenant(mux, http.MethodPost, accountPath, s.handleAccount)
+	s.handleTenant(mux, http.MethodGet, accountLoginPath, s.handleAccountLoginPage)
+	s.handleTenant(mux, http.MethodPost, accountLoginPath, s.handleAccountLogin)
+	s.handleTenant(mux, http.MethodPost, accountLogoutPath, s.handleAccountLogout)
+	s.handleTenant(mux, http.MethodGet, accountPasswordPath, s.handleAccountPasswordPage)
+	s.handleTenant(mux, http.MethodPost, accountPasswordPath, s.handleAccountPassword)
+	s.handleTenant(mux, http.MethodGet, accountApplicationsPath, s.handleAccountApplicationsPage)
+	s.handleTenant(mux, http.MethodPost, accountApplicationsPath, s.handleAccountApplications)
 	// Assets are the same for every tenant and are not instrumented, like
 	// the probes.
 	mux.HandleFunc(http.MethodGet+" "+assetsPath+"{name}", s.handleAsset)

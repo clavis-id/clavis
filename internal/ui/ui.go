@@ -117,8 +117,10 @@ type Layout struct {
 	Stylesheet string
 	// Text writes the page's text in its locale.
 	Text i18n.Printer
-	// Theme is the tenant's style sheet that ThemeStyle returns, or empty.
-	Theme string
+	// theme is the tenant's style sheet, which SetTheme sets, and
+	// themeSource its hash as a Content Security Policy source.
+	theme       string
+	themeSource string
 	// LogoURL is the URL of the tenant's logo, or empty, and TenantName
 	// is its text alternative.
 	LogoURL    string
@@ -164,14 +166,26 @@ func (l Layout) FormPostContentSecurityPolicy(formTarget string) string {
 	return contentSecurityPolicy("script-src '"+formPostScriptHash+"'; ", l.styleSources(), false, targets)
 }
 
+// SetTheme makes css, which ThemeStyle returns, the tenant's style sheet of
+// the page, and records its hash for the page's Content Security Policy.
+func (l *Layout) SetTheme(css string) {
+	l.theme, l.themeSource = css, ""
+	if css != "" {
+		sum := sha256.Sum256([]byte(css))
+		l.themeSource = "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+	}
+}
+
+// Theme returns the tenant's style sheet of the page, or empty.
+func (l Layout) Theme() string { return l.theme }
+
 // styleSources returns the style-src sources of a page: its own origin, and
 // the hash of the theme element when there is one.
 func (l Layout) styleSources() string {
-	if l.Theme == "" {
+	if l.themeSource == "" {
 		return "'self'"
 	}
-	sum := sha256.Sum256([]byte(l.Theme))
-	return "'self' 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+	return "'self' " + l.themeSource
 }
 
 func contentSecurityPolicy(scripts, styles string, allowSelf bool, formTargets []string) string {
@@ -371,6 +385,85 @@ type ResetPage struct {
 	Error string
 	// LoginURL is the URL of the sign-in page.
 	LoginURL string
+}
+
+// AccountNav holds the URLs of the account pages, and the URL of the page
+// that shows it in Current.
+type AccountNav struct {
+	ProfileURL      string
+	PasswordURL     string
+	ApplicationsURL string
+	LogoutURL       string
+	Current         string
+}
+
+// ProfileField is an input of the profile form.
+type ProfileField struct {
+	// Name is the name of the form field and the ID of the input.
+	Name  string
+	Label string
+	Value string
+	// Type is the type of the input, such as text or url, unless Lines is
+	// set, which asks for a text area.
+	Type  string
+	Lines bool
+	// Autocomplete is the autofill token of the input (HTML, section
+	// 4.10.18.7).
+	Autocomplete string
+	// Hint explains the format, or is empty.
+	Hint string
+}
+
+// ProfileSection is a group of profile fields.
+type ProfileSection struct {
+	Title  string
+	Fields []ProfileField
+}
+
+// AccountPage shows the profile of the signed-in user (ADR 0028).
+type AccountPage struct {
+	Layout
+	Nav AccountNav
+	// Email is the address of the account, which the profile cannot
+	// change.
+	Email    string
+	Action   string
+	Sections []ProfileSection
+	// Notice says what the last change did, or is empty, and Errors
+	// explain why it was refused.
+	Notice string
+	Errors []string
+}
+
+// AccountPasswordPage changes the password of the signed-in user.
+type AccountPasswordPage struct {
+	Layout
+	Nav AccountNav
+	// Email is the address of the account, for password managers.
+	Email     string
+	Action    string
+	MinLength int
+	MaxLength int
+	Notice    string
+	Errors    []string
+}
+
+// AccountApplication is an application that the user allowed.
+type AccountApplication struct {
+	Name     string
+	ClientID string
+	// Scopes describes what the application may do, one line each.
+	Scopes []string
+}
+
+// AccountApplicationsPage lists the applications that the signed-in user
+// allowed.
+type AccountApplicationsPage struct {
+	Layout
+	Nav          AccountNav
+	Action       string
+	Applications []AccountApplication
+	Notice       string
 }
 
 // PasswordChangedPage says that the password has changed, after a reset

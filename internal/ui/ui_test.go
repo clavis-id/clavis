@@ -334,7 +334,7 @@ func TestThemeStyle(t *testing.T) {
 func TestBrandedPage(t *testing.T) {
 	t.Parallel()
 	l := testLayout(t, i18n.English)
-	l.Theme = ThemeStyle(store.Theme{Light: store.ThemeColors{Accent: "#0b5cad"}})
+	l.SetTheme(ThemeStyle(store.Theme{Light: store.ThemeColors{Accent: "#0b5cad"}}))
 	l.LogoURL, l.TenantName = "/t/acme/branding/logo-0123456789ab.png", `Acme "Corp"`
 	var b bytes.Buffer
 	if err := SignedOut(SignedOutPage{Layout: l}).Render(t.Context(), &b); err != nil {
@@ -342,14 +342,14 @@ func TestBrandedPage(t *testing.T) {
 	}
 	page := b.String()
 	for _, want := range []string{
-		"<style>" + l.Theme + "</style>",
+		"<style>" + l.Theme() + "</style>",
 		`<img class="logo" src="/t/acme/branding/logo-0123456789ab.png" alt="Acme &#34;Corp&#34;">`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the page does not contain %q:\n%s", want, page)
 		}
 	}
-	sum := sha256.Sum256([]byte(l.Theme))
+	sum := sha256.Sum256([]byte(l.Theme()))
 	hash := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
 	if csp := l.ContentSecurityPolicy(false); !strings.Contains(csp, "style-src 'self' "+hash+";") {
 		t.Errorf("ContentSecurityPolicy() = %q, want the theme's hash in style-src", csp)
@@ -416,6 +416,25 @@ func TestEveryPageInEveryLocale(t *testing.T) {
 			"new password": Password(PasswordPage{Layout: l, Reset: true, Email: "ada@example.com",
 				Action: "/reset/password", VerificationID: "v", MinLength: 8, MaxLength: 256}),
 			"password changed": PasswordChanged(PasswordChangedPage{Layout: l}),
+			"account login": Login(LoginPage{Layout: l, Action: "/account/login", Notice: l.T(i18n.AccountSignedOut),
+				ResetURL: "/reset"}),
+			"account": Account(AccountPage{Layout: l, Nav: AccountNav{ProfileURL: "/account", PasswordURL: "/account/password", ApplicationsURL: "/account/applications", LogoutURL: "/account/logout", Current: "/account"},
+				Email: "ada@example.com", Action: "/account", Notice: l.T(i18n.AccountProfileSaved),
+				Errors: []string{l.T(i18n.AccountInvalidURL, "field", l.T(i18n.ProfileWebsite))},
+				Sections: []ProfileSection{{Title: l.T(i18n.AccountSectionName), Fields: []ProfileField{
+					{Name: "name", Label: l.T(i18n.ProfileName), Value: "Ada", Type: "text", Autocomplete: "name"},
+					{Name: "birthdate", Label: l.T(i18n.ProfileBirthdate), Hint: l.T(i18n.ProfileBirthdateHint), Type: "text"},
+					{Name: "street_address", Label: l.T(i18n.ProfileStreetAddress), Value: "12 Square\nFlat 3", Lines: true},
+				}}}}),
+			"account password": AccountPassword(AccountPasswordPage{Layout: l, Nav: AccountNav{ProfileURL: "/account", PasswordURL: "/account/password", ApplicationsURL: "/account/applications", LogoutURL: "/account/logout", Current: "/account"},
+				Email: "ada@example.com", Action: "/account/password", MinLength: 8, MaxLength: 256,
+				Errors: []string{l.T(i18n.AccountWrongPassword)}}),
+			"applications": AccountApplications(AccountApplicationsPage{Layout: l, Nav: AccountNav{ProfileURL: "/account", PasswordURL: "/account/password", ApplicationsURL: "/account/applications", LogoutURL: "/account/logout", Current: "/account"},
+				Action: "/account/applications", Notice: l.T(i18n.AccountApplicationRemoved, "client", "Shop"),
+				Applications: []AccountApplication{{Name: "Shop", ClientID: "shop",
+					Scopes: []string{ScopeDescription(l.Text, "email", "")}}}}),
+			"no applications": AccountApplications(AccountApplicationsPage{Layout: l, Nav: AccountNav{ProfileURL: "/account", PasswordURL: "/account/password", ApplicationsURL: "/account/applications", LogoutURL: "/account/logout", Current: "/account"},
+				Action: "/account/applications"}),
 			"signup": Signup(SignupPage{Layout: l, ClientName: "Shop", Action: "/signup", RequestID: "r",
 				Error: l.T(i18n.SignupInvalidEmail), LoginURL: "/login?request=r"}),
 			"code": Verify(VerifyPage{Layout: l, Email: "grace@example.com", Action: "/signup/verify",

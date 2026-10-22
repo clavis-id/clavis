@@ -21,8 +21,8 @@ import (
 // request and returns the verification.
 func (f signupFixture) startReset(t *testing.T, address string) store.EmailVerification {
 	t.Helper()
-	id, err := StartPasswordReset(t.Context(), f.d, f.tenant, f.start(t, webRequest()), address, testBinding, f.text,
-		testVerifyURL)
+	p := f.start(t, webRequest())
+	id, err := StartPasswordReset(t.Context(), f.d, f.tenant, &p, address, testBinding, f.text, testVerifyURL)
 	if err != nil {
 		t.Fatalf("StartPasswordReset(%q) unexpected error: %v", address, err)
 	}
@@ -95,7 +95,7 @@ func TestStartPasswordResetRefuses(t *testing.T) {
 	t.Parallel()
 	f := newSignupFixture(t)
 	start := func(f signupFixture, p PendingAuthorization, address string) error {
-		_, err := StartPasswordReset(t.Context(), f.d, f.tenant, p, address, testBinding, f.text, testVerifyURL)
+		_, err := StartPasswordReset(t.Context(), f.d, f.tenant, &p, address, testBinding, f.text, testVerifyURL)
 		return err
 	}
 	if err := start(f, f.start(t, webRequest()), "not an address"); !errors.Is(err, ErrInvalidEmail) {

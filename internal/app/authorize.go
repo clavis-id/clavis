@@ -372,14 +372,21 @@ func resumeSession(ctx context.Context, d Deps, tenantID uuid.UUID, tokenHash []
 	case err != nil:
 		return store.Session{}, false, fmt.Errorf("looking up the user of the session: %w", err)
 	}
+	return touchSession(ctx, d, s)
+}
+
+// touchSession records a use of session s, which moves its idle expiry, and
+// returns the session as stored. ok is false when the session ended in the
+// meantime.
+func touchSession(ctx context.Context, d Deps, s store.Session) (store.Session, bool, error) {
+	now := d.Now()
 	s.LastSeenAt = now
 	s.IdleExpiresAt = now.Add(SessionIdleTimeout)
 	if s.IdleExpiresAt.After(s.ExpiresAt) {
 		s.IdleExpiresAt = s.ExpiresAt
 	}
-	switch err := d.Store.Sessions().Touch(ctx, tenantID, s.ID, s.LastSeenAt, s.IdleExpiresAt); {
+	switch err := d.Store.Sessions().Touch(ctx, s.TenantID, s.ID, s.LastSeenAt, s.IdleExpiresAt); {
 	case errors.Is(err, store.ErrNotFound):
-		// The session ended in the meantime.
 		return store.Session{}, false, nil
 	case err != nil:
 		return store.Session{}, false, fmt.Errorf("recording the use of the session: %w", err)
