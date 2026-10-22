@@ -128,6 +128,9 @@ type Layout struct {
 	// Languages sets up the language selector, or is nil for a page
 	// without one.
 	Languages *LanguageSelector
+	// Wide makes the card of the page wider, for pages with more content
+	// than a sign-in form, such as the account pages.
+	Wide bool
 }
 
 // T returns the message of key in the page's locale; see i18n.Printer.T.
@@ -412,6 +415,9 @@ type ProfileField struct {
 	Autocomplete string
 	// Hint explains the format, or is empty.
 	Hint string
+	// Full makes the field take the whole width of a wide page, where
+	// other fields come in pairs.
+	Full bool
 }
 
 // ProfileSection is a group of profile fields.
