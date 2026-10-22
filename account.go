@@ -250,6 +250,7 @@ func accountNav(t tenant, path string) ui.AccountNav {
 func (s *Server) accountLayout(r *http.Request, t tenant, l i18n.Locale, path string) ui.Layout {
 	layout := s.layout(r, t, l)
 	layout.Languages = &ui.LanguageSelector{Method: http.MethodGet, Action: t.path + path}
+	layout.Wide = true
 	return layout
 }
 
@@ -260,6 +261,7 @@ func (s *Server) accountLoginPage(w http.ResponseWriter, r *http.Request, t tena
 	problem, notice i18n.Key,
 ) {
 	layout := s.accountLayout(r, t, l, accountLoginPath)
+	layout.Wide = false
 	var message, info, resetURL string
 	if problem != "" {
 		message = layout.T(problem)

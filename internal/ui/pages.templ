@@ -24,7 +24,7 @@ templ layout(l Layout, title string) {
 			}
 		</head>
 		<body>
-			<main class="card">
+			<main class={ "card", templ.KV("wide", l.Wide) }>
 				if l.LogoURL != "" {
 					<img class="logo" src={ templ.SafeURL(l.LogoURL) } alt={ l.TenantName }/>
 				}
@@ -366,15 +366,17 @@ templ pageMessages(notice string, errors []string) {
 // field renders a labeled input of the profile form, with a hint unless it
 // is empty.
 templ field(f ProfileField) {
-	<label for={ f.Name }>{ f.Label }</label>
-	if f.Lines {
-		<textarea id={ f.Name } name={ f.Name } rows="3" autocomplete={ f.Autocomplete }>{ f.Value }</textarea>
-	} else if f.Hint != "" {
-		<input id={ f.Name } name={ f.Name } type={ f.Type } autocomplete={ f.Autocomplete } value={ f.Value } aria-describedby={ f.Name + "-hint" }/>
-		<p id={ f.Name + "-hint" } class="hint">{ f.Hint }</p>
-	} else {
-		<input id={ f.Name } name={ f.Name } type={ f.Type } autocomplete={ f.Autocomplete } value={ f.Value }/>
-	}
+	<div class={ "field", templ.KV("full", f.Full) }>
+		<label for={ f.Name }>{ f.Label }</label>
+		if f.Lines {
+			<textarea id={ f.Name } name={ f.Name } rows="3" autocomplete={ f.Autocomplete }>{ f.Value }</textarea>
+		} else if f.Hint != "" {
+			<input id={ f.Name } name={ f.Name } type={ f.Type } autocomplete={ f.Autocomplete } value={ f.Value } aria-describedby={ f.Name + "-hint" }/>
+			<p id={ f.Name + "-hint" } class="hint">{ f.Hint }</p>
+		} else {
+			<input id={ f.Name } name={ f.Name } type={ f.Type } autocomplete={ f.Autocomplete } value={ f.Value }/>
+		}
+	</div>
 }
 
 // Account renders the profile of the signed-in user (ADR 0028).

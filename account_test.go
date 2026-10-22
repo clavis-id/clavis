@@ -53,7 +53,8 @@ func TestAccountSignIn(t *testing.T) {
 	b := newBrowser(t, s.Handler())
 	res, page := b.get(issuer + "/account/login")
 	if res.StatusCode != http.StatusOK || !strings.Contains(page, "to manage your account") ||
-		strings.Contains(page, `name="request"`) || !strings.Contains(page, `<a id="reset" href="`+issuer+`/reset">`) {
+		strings.Contains(page, `name="request"`) || !strings.Contains(page, `<a id="reset" href="`+issuer+`/reset">`) ||
+		!strings.Contains(page, `<main class="card">`) {
 		t.Fatalf("account sign-in page = %d:\n%s", res.StatusCode, page)
 	}
 	if _, page = b.post(issuer+"/account/login", url.Values{"email": {"ada@example.com"}, "password": {"wrong"}},
@@ -64,7 +65,9 @@ func TestAccountSignIn(t *testing.T) {
 	res, page = b.get(issuer + "/account")
 	if res.StatusCode != http.StatusOK || !strings.Contains(page, "<title>Your account</title>") ||
 		!strings.Contains(page, "<strong>ada@example.com</strong>") ||
-		!strings.Contains(page, `<a href="/account" aria-current="page">Profile</a>`) {
+		!strings.Contains(page, `<a href="/account" aria-current="page">Profile</a>`) ||
+		!strings.Contains(page, `<main class="card wide">`) || !strings.Contains(page, `<div class="field full">`) ||
+		!strings.Contains(page, `<legend>Your name</legend>`) {
 		t.Fatalf("account page = %d:\n%s", res.StatusCode, page)
 	}
 	if csp := res.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "form-action 'self';") {

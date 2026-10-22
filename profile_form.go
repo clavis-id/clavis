@@ -13,7 +13,8 @@ import (
 
 // profileField is a field of the profile form: its form name, which is the
 // claim name without the address. prefix, the key of its label, how to
-// show it, and where its value lives in a profile.
+// show it, and where its value lives in a profile. Fields come in pairs on
+// a wide page unless full is set.
 type profileField struct {
 	name         string
 	claim        string
@@ -21,6 +22,7 @@ type profileField struct {
 	hint         i18n.Key
 	typ          string
 	lines        bool
+	full         bool
 	autocomplete string
 	value        func(*store.Profile) *string
 }
@@ -33,18 +35,18 @@ var profileForm = []struct {
 	fields []profileField
 }{
 	{i18n.AccountSectionName, []profileField{
-		{name: "name", label: i18n.ProfileName, typ: "text", autocomplete: "name",
+		{name: "name", label: i18n.ProfileName, typ: "text", autocomplete: "name", full: true,
 			value: func(p *store.Profile) *string { return &p.Name }},
 		{name: "given_name", label: i18n.ProfileGivenName, typ: "text", autocomplete: "given-name",
 			value: func(p *store.Profile) *string { return &p.GivenName }},
-		{name: "middle_name", label: i18n.ProfileMiddleName, typ: "text", autocomplete: "additional-name",
-			value: func(p *store.Profile) *string { return &p.MiddleName }},
 		{name: "family_name", label: i18n.ProfileFamilyName, typ: "text", autocomplete: "family-name",
 			value: func(p *store.Profile) *string { return &p.FamilyName }},
+		{name: "middle_name", label: i18n.ProfileMiddleName, typ: "text", autocomplete: "additional-name",
+			value: func(p *store.Profile) *string { return &p.MiddleName }},
 		{name: "nickname", label: i18n.ProfileNickname, typ: "text", autocomplete: "nickname",
 			value: func(p *store.Profile) *string { return &p.Nickname }},
 		{name: "preferred_username", label: i18n.ProfilePreferredUsername, typ: "text", autocomplete: "off",
-			value: func(p *store.Profile) *string { return &p.PreferredUsername }},
+			full: true, value: func(p *store.Profile) *string { return &p.PreferredUsername }},
 	}},
 	{i18n.AccountSectionPersonal, []profileField{
 		{name: "gender", label: i18n.ProfileGender, typ: "text", autocomplete: "sex",
@@ -58,9 +60,10 @@ var profileForm = []struct {
 	}},
 	{i18n.AccountSectionContact, []profileField{
 		{name: "phone_number", label: i18n.ProfilePhoneNumber, hint: i18n.ProfilePhoneNumberHint, typ: "tel",
-			autocomplete: "tel", value: func(p *store.Profile) *string { return &p.PhoneNumber }},
+			autocomplete: "tel", full: true, value: func(p *store.Profile) *string { return &p.PhoneNumber }},
 		{name: "street_address", claim: "address.street_address", label: i18n.ProfileStreetAddress, lines: true,
-			autocomplete: "street-address", value: func(p *store.Profile) *string { return &p.Address.StreetAddress }},
+			autocomplete: "street-address", full: true,
+			value: func(p *store.Profile) *string { return &p.Address.StreetAddress }},
 		{name: "locality", claim: "address.locality", label: i18n.ProfileLocality, typ: "text",
 			autocomplete: "address-level2", value: func(p *store.Profile) *string { return &p.Address.Locality }},
 		{name: "region", claim: "address.region", label: i18n.ProfileRegion, typ: "text",
@@ -71,11 +74,11 @@ var profileForm = []struct {
 			autocomplete: "country-name", value: func(p *store.Profile) *string { return &p.Address.Country }},
 	}},
 	{i18n.AccountSectionLinks, []profileField{
-		{name: "profile", label: i18n.ProfileProfileURL, typ: "url", autocomplete: "url",
+		{name: "profile", label: i18n.ProfileProfileURL, typ: "url", autocomplete: "url", full: true,
 			value: func(p *store.Profile) *string { return &p.ProfileURL }},
-		{name: "picture", label: i18n.ProfilePicture, typ: "url", autocomplete: "photo",
+		{name: "picture", label: i18n.ProfilePicture, typ: "url", autocomplete: "photo", full: true,
 			value: func(p *store.Profile) *string { return &p.Picture }},
-		{name: "website", label: i18n.ProfileWebsite, typ: "url", autocomplete: "url",
+		{name: "website", label: i18n.ProfileWebsite, typ: "url", autocomplete: "url", full: true,
 			value: func(p *store.Profile) *string { return &p.Website }},
 	}},
 }
@@ -88,7 +91,7 @@ func profileSections(text i18n.Printer, profile store.Profile) []ui.ProfileSecti
 		fields := make([]ui.ProfileField, 0, len(section.fields))
 		for _, f := range section.fields {
 			field := ui.ProfileField{Name: f.name, Label: text.T(f.label), Value: *f.value(&profile), Type: f.typ,
-				Lines: f.lines, Autocomplete: f.autocomplete}
+				Lines: f.lines, Full: f.full, Autocomplete: f.autocomplete}
 			if f.hint != "" {
 				field.Hint = text.T(f.hint)
 			}
