@@ -47,7 +47,10 @@ sessions.
   - `phone_number` is an E.164 number with an optional extension.
 
   Every value is bounded, which also keeps U+0000 out of the store. A changed phone number is no
-  longer verified. The formatted address, which the form does not show, stays as it is.
+  longer verified. The formatted address, which the form does not show, stays only while the
+  other parts of the address do not change and it passes the same rules. Otherwise saving the
+  profile drops it, so it never contradicts the parts nor blocks the form with a problem the
+  user cannot see.
   Changing the email address needs a proof of the new address that reveals nothing about other
   accounts, and comes later.
 - **Password change.** The user gives the current password and a new one under the policy of

@@ -145,6 +145,62 @@ func TestAccountProfile(t *testing.T) {
 	}
 }
 
+// ADR 0028: the formatted address, which the profile form does not show,
+// stays only while the other parts of the address do not change and it is
+// valid.
+func TestAccountProfileFormattedAddress(t *testing.T) {
+	t.Parallel()
+	s, tn := newLoginServer(t, signupIssuer, "")
+	setAddress := func(a store.Address) {
+		t.Helper()
+		u, err := app.FindUser(t.Context(), s.deps, tn.ID, "ada@example.com")
+		if err != nil {
+			t.Fatalf("FindUser() unexpected error: %v", err)
+		}
+		u.Profile.Address = a
+		if err := s.deps.Store.Users().Update(t.Context(), u); err != nil {
+			t.Fatalf("Update() unexpected error: %v", err)
+		}
+	}
+	formatted := func() string {
+		t.Helper()
+		u, err := app.FindUser(t.Context(), s.deps, tn.ID, "ada@example.com")
+		if err != nil {
+			t.Fatalf("FindUser() unexpected error: %v", err)
+		}
+		return u.Profile.Address.Formatted
+	}
+	b := newBrowser(t, s.Handler())
+	b.signInToAccount()
+	save := func(form url.Values) {
+		t.Helper()
+		if _, page := b.post(signupIssuer+"/account", form, "same-origin"); !strings.Contains(page,
+			"Your profile has been saved.") {
+			t.Fatalf("saving the profile:\n%s", page)
+		}
+	}
+	london := store.Address{Formatted: "12 Old Street\nFlat 3\nLondon", StreetAddress: "12 Old Street\nFlat 3",
+		Locality: "London"}
+
+	// Browsers post the lines of a text area with CRLF.
+	setAddress(london)
+	save(url.Values{"name": {"Ada"}, "street_address": {"12 Old Street\r\nFlat 3"}, "locality": {"London"}})
+	if got := formatted(); got != london.Formatted {
+		t.Errorf("formatted address after a save that keeps the address = %q, want it kept", got)
+	}
+	save(url.Values{"street_address": {"3 Rue de Rivoli"}, "locality": {"Paris"}})
+	if got := formatted(); got != "" {
+		t.Errorf("formatted address after a new address = %q, want it dropped", got)
+	}
+	invalid := london
+	invalid.Formatted = "12 Old Street\tLondon"
+	setAddress(invalid)
+	save(url.Values{"name": {"Ada"}, "street_address": {"12 Old Street\nFlat 3"}, "locality": {"London"}})
+	if got := formatted(); got != "" {
+		t.Errorf("formatted address that the rules refuse = %q, want it dropped", got)
+	}
+}
+
 func TestAccountPassword(t *testing.T) {
 	t.Parallel()
 	const issuer = signupIssuer
