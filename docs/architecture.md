@@ -364,6 +364,15 @@ year.
 - **Comparisons:** every secret comparison is constant time.
 - **Logging:** secrets, tokens, passwords, codes and full authorization requests are never
   logged. Audit events record who, what, when and from where, without credential material.
+- **Audit log:** see ADR 0029.
+  - Each tenant keeps events for sign-ins (failed ones too), sign-outs, account changes,
+    consent, grant and token revocations, token reuse, and client changes.
+  - Events outlive the users and clients they name and are deleted after `audit.retention` (90
+    days by default; 0 keeps them).
+  - `clavis audit list` reads them.
+- **Client addresses:** a request is from the address of its connection. Only a connection from
+  `server.trusted_proxies` is from the client that X-Forwarded-For names, read from the right
+  over the trusted proxies; without trusted proxies the header is ignored.
 - **FIPS mode:** builds with `GOFIPS140=certified` restrict algorithms to the validated module.
 
 ## Observability

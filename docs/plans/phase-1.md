@@ -36,6 +36,7 @@ The design decisions this plan relies on are recorded as ADRs:
 | [0026](../adr/0026-signup-and-email-verification.md) | Signup per tenant, address first: a code or a link bound to the browser, then the password; the same responses and work for new and existing addresses; `prompt=create` |
 | [0027](../adr/0027-password-reset.md) | Reset with the email verifications of 0026; only active accounts get the message; the user signs in again; a new password ends every session and token of the user |
 | [0028](../adr/0028-account-pages.md) | Account pages at `<issuer>/account` on the session of single sign-on: profile of the standard claims, password change, connected applications; the issuer root leads there |
+| [0029](../adr/0029-audit-log-and-client-addresses.md) | Audit events per tenant for sign-ins, accounts, consent, tokens and clients, without credential material, kept 90 days by default; client addresses from X-Forwarded-For only behind trusted proxies |
 
 ## Rules for every work item
 

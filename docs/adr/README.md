@@ -37,3 +37,4 @@ request. Status values: Proposed, Accepted, Superseded by NNNN, Deprecated.
 | [0026](0026-signup-and-email-verification.md) | Signup and email verification | Accepted |
 | [0027](0027-password-reset.md) | Password reset | Accepted |
 | [0028](0028-account-pages.md) | Account pages | Accepted |
+| [0029](0029-audit-log-and-client-addresses.md) | Audit log and client addresses | Accepted |
