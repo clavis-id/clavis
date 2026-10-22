@@ -625,7 +625,7 @@ func TestUsersCommands(t *testing.T) {
 	}
 
 	if out, errOut, code = run("battery staple horse\r\n", "users", "set-password", "ADA@example.com"); code != 0 ||
-		!strings.Contains(out, "Set the password of ada@example.com") {
+		!strings.Contains(out, "Set the password of ada@example.com and ended its sessions and tokens.") {
 		t.Errorf("set-password: exit code %d, stdout %q, stderr %q", code, out, errOut)
 	}
 	if err := login("ada@example.com", "battery staple horse"); err != nil {

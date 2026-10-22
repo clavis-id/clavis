@@ -79,24 +79,11 @@ func StartSignup(ctx context.Context, d Deps, t AuthorizationTenant, p PendingAu
 		return "", fmt.Errorf("looking up user: %w", err)
 	}
 
-	now := d.Now()
-	code, token := newCode(), oauth.NewToken()
-	v := store.EmailVerification{
-		ID:                     oauth.NewRequestID(),
-		TenantID:               t.ID,
-		Purpose:                store.VerifySignup,
-		Email:                  email,
-		LinkHash:               oauth.HashToken(token),
-		BindingHash:            bindingHash,
-		AuthorizationRequestID: p.Request.ID,
-		CreatedAt:              now,
-		ExpiresAt:              now.Add(EmailVerificationLifetime),
+	v, code, link, err := startVerification(ctx, d, t.ID, store.VerifySignup, email, bindingHash, p.Request.ID,
+		verifyURL)
+	if err != nil {
+		return "", err
 	}
-	v.CodeHash = codeHash(v.ID, code)
-	if err := d.Store.EmailVerifications().Create(ctx, v); err != nil {
-		return "", fmt.Errorf("storing the email verification: %w", err)
-	}
-	link := verifyURL + "?" + url.Values{"verification": {v.ID}, "token": {token}}.Encode()
 	msg, err := emailtmpl.Render(ctx, email, signupMessage(text, p.Client.Name, code, link, exists))
 	if err != nil {
 		return "", fmt.Errorf("rendering the signup message: %w", err)
@@ -109,6 +96,35 @@ func StartSignup(ctx context.Context, d Deps, t AuthorizationTenant, p PendingAu
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "signup started", append(attrs, slog.Bool("existing_account", exists))...)
 	return v.ID, nil
+}
+
+// startVerification stores a new email verification of a tenant for
+// purpose and email, bound to the browser whose binding cookie hashes to
+// bindingHash, for the authorization request with the ID requestID. It
+// returns the verification with its code and the link to verifyURL that
+// carries its token.
+func startVerification(ctx context.Context, d Deps, tenantID uuid.UUID, purpose store.EmailVerificationPurpose,
+	email string, bindingHash []byte, requestID, verifyURL string,
+) (v store.EmailVerification, code, link string, err error) {
+	now := d.Now()
+	code, token := newCode(), oauth.NewToken()
+	v = store.EmailVerification{
+		ID:                     oauth.NewRequestID(),
+		TenantID:               tenantID,
+		Purpose:                purpose,
+		Email:                  email,
+		LinkHash:               oauth.HashToken(token),
+		BindingHash:            bindingHash,
+		AuthorizationRequestID: requestID,
+		CreatedAt:              now,
+		ExpiresAt:              now.Add(EmailVerificationLifetime),
+	}
+	v.CodeHash = codeHash(v.ID, code)
+	if err := d.Store.EmailVerifications().Create(ctx, v); err != nil {
+		return store.EmailVerification{}, "", "", fmt.Errorf("storing the email verification: %w", err)
+	}
+	link = verifyURL + "?" + url.Values{"verification": {v.ID}, "token": {token}}.Encode()
+	return v, code, link, nil
 }
 
 // signupMessage returns the message that StartSignup sends: the code and

@@ -197,7 +197,9 @@ func DeleteUser(ctx context.Context, d Deps, tenantID uuid.UUID, email string) e
 }
 
 // SetPassword checks pw against the password policy and makes it the
-// password of a user, replacing any previous one.
+// password of a user, replacing any previous one. Like any password change,
+// it ends every session of the user and revokes the user's tokens, so an
+// operator's reset also locks out whoever held the account.
 func SetPassword(ctx context.Context, d Deps, h PasswordHasher, u store.User, pw string) error {
 	if err := h.CheckNew(pw); err != nil {
 		return err
@@ -215,6 +217,38 @@ func SetPassword(ctx context.Context, d Deps, h PasswordHasher, u store.User, pw
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "set password",
 		slog.String("tenant_id", u.TenantID.String()), slog.String("user_id", u.ID.String()))
+	return endUserAccess(ctx, d, u, uuid.Nil())
+}
+
+// endUserAccess ends what a user holds after a password change: every
+// session but the one with the ID keep, the codes not redeemed yet, and
+// every access token and refresh token family. Pass the zero UUID to keep
+// no session.
+func endUserAccess(ctx context.Context, d Deps, u store.User, keep uuid.UUID) error {
+	now := d.Now()
+	sessions, err := d.Store.Sessions().DeleteByUser(ctx, u.TenantID, u.ID, keep)
+	if err != nil {
+		return fmt.Errorf("ending the sessions of the user: %w", err)
+	}
+	// The sessions go first, so no new code comes from them.
+	codes, err := d.Store.AuthorizationCodes().DeleteByUser(ctx, u.TenantID, u.ID)
+	if err != nil {
+		return fmt.Errorf("deleting the codes of the user: %w", err)
+	}
+	tokens, err := d.Store.AccessTokens().RevokeByUser(ctx, u.TenantID, u.ID, now)
+	if err != nil {
+		return fmt.Errorf("revoking the access tokens of the user: %w", err)
+	}
+	families, err := d.Store.RefreshTokens().RevokeByUser(ctx, u.TenantID, u.ID, now)
+	if err != nil {
+		return fmt.Errorf("revoking the refresh tokens of the user: %w", err)
+	}
+	if sessions+codes+tokens+families > 0 {
+		d.Logger.LogAttrs(ctx, slog.LevelInfo, "ended the access of the user after a password change",
+			slog.String("tenant_id", u.TenantID.String()), slog.String("user_id", u.ID.String()),
+			slog.Int64("sessions", sessions), slog.Int64("authorization_codes", codes),
+			slog.Int64("access_tokens", tokens), slog.Int64("refresh_token_families", families))
+	}
 	return nil
 }
 

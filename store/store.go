@@ -854,6 +854,9 @@ type EmailVerificationPurpose string
 const (
 	// VerifySignup proves the address of a new account (ADR 0026).
 	VerifySignup EmailVerificationPurpose = "signup"
+	// VerifyPasswordReset proves the address of an account whose password
+	// the user resets (ADR 0027).
+	VerifyPasswordReset EmailVerificationPurpose = "reset"
 )
 
 // EmailVerification is a one-time code and link sent to an email address,
