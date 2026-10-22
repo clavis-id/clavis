@@ -269,6 +269,25 @@ func (q *Queries) DeleteSession(ctx context.Context, arg DeleteSessionParams) (i
 	return result.RowsAffected(), nil
 }
 
+const deleteSessionsByUser = `-- name: DeleteSessionsByUser :execrows
+DELETE FROM sessions
+WHERE tenant_id = $1 AND user_id = $2 AND id <> $3
+`
+
+type DeleteSessionsByUserParams struct {
+	TenantID uuid.UUID
+	UserID   uuid.UUID
+	KeepID   uuid.UUID
+}
+
+func (q *Queries) DeleteSessionsByUser(ctx context.Context, arg DeleteSessionsByUserParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSessionsByUser, arg.TenantID, arg.UserID, arg.KeepID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteUnredeemedAuthorizationCodesBySession = `-- name: DeleteUnredeemedAuthorizationCodesBySession :execrows
 DELETE FROM authorization_codes
 WHERE tenant_id = $1 AND session_id = $2 AND redeemed_at IS NULL
@@ -281,6 +300,24 @@ type DeleteUnredeemedAuthorizationCodesBySessionParams struct {
 
 func (q *Queries) DeleteUnredeemedAuthorizationCodesBySession(ctx context.Context, arg DeleteUnredeemedAuthorizationCodesBySessionParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteUnredeemedAuthorizationCodesBySession, arg.TenantID, arg.SessionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteUnredeemedAuthorizationCodesByUser = `-- name: DeleteUnredeemedAuthorizationCodesByUser :execrows
+DELETE FROM authorization_codes
+WHERE tenant_id = $1 AND user_id = $2 AND redeemed_at IS NULL
+`
+
+type DeleteUnredeemedAuthorizationCodesByUserParams struct {
+	TenantID uuid.UUID
+	UserID   uuid.UUID
+}
+
+func (q *Queries) DeleteUnredeemedAuthorizationCodesByUser(ctx context.Context, arg DeleteUnredeemedAuthorizationCodesByUserParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUnredeemedAuthorizationCodesByUser, arg.TenantID, arg.UserID)
 	if err != nil {
 		return 0, err
 	}

@@ -49,6 +49,10 @@ UPDATE sessions
 SET last_seen_at = sqlc.arg(last_seen_at), idle_expires_at = sqlc.arg(idle_expires_at)
 WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id);
 
+-- name: DeleteSessionsByUser :execrows
+DELETE FROM sessions
+WHERE tenant_id = sqlc.arg(tenant_id) AND user_id = sqlc.arg(user_id) AND id <> sqlc.arg(keep_id);
+
 -- name: DeleteSession :execrows
 DELETE FROM sessions
 WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id);
@@ -79,6 +83,10 @@ WHERE tenant_id = sqlc.arg(tenant_id) AND hash = sqlc.arg(hash);
 -- name: DeleteExpiredAuthorizationCodes :execrows
 DELETE FROM authorization_codes
 WHERE expires_at <= $1;
+
+-- name: DeleteUnredeemedAuthorizationCodesByUser :execrows
+DELETE FROM authorization_codes
+WHERE tenant_id = sqlc.arg(tenant_id) AND user_id = sqlc.arg(user_id) AND redeemed_at IS NULL;
 
 -- name: DeleteAuthorizationCodesByUserAndClient :execrows
 DELETE FROM authorization_codes

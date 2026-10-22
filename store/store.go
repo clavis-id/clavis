@@ -309,6 +309,10 @@ type Users interface {
 	// after, in ascending ID order. Paging and limits work as in
 	// Tenants.List.
 	List(ctx context.Context, tenantID, after uuid.UUID, limit int) ([]User, error)
+	// Update stores EmailVerified, Status, Profile and UpdatedAt of the user
+	// of a tenant with the ID of u; the email address and CreatedAt never
+	// change. It returns ErrNotFound for an unknown user.
+	Update(ctx context.Context, u User) error
 	// Delete removes the user of a tenant with the given ID together with
 	// the user's credentials, or returns ErrNotFound.
 	Delete(ctx context.Context, tenantID, id uuid.UUID) error
@@ -455,6 +459,10 @@ type Sessions interface {
 	// Delete removes the session of a tenant with the given ID, or returns
 	// ErrNotFound.
 	Delete(ctx context.Context, tenantID, id uuid.UUID) error
+	// DeleteByUser removes the sessions of a user of a tenant, except the
+	// session with the ID keep, and returns how many were removed. Pass the
+	// zero UUID to remove every session.
+	DeleteByUser(ctx context.Context, tenantID, userID, keep uuid.UUID) (int64, error)
 	// DeleteExpired removes the sessions of every tenant whose ExpiresAt or
 	// IdleExpiresAt is not after now, and returns how many were removed.
 	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
@@ -515,6 +523,9 @@ type AuthorizationCodes interface {
 	// session with the given ID and not redeemed yet, and returns how many
 	// were removed. Redeemed codes stay, so that replays are still detected.
 	DeleteBySession(ctx context.Context, tenantID, sessionID uuid.UUID) (int64, error)
+	// DeleteByUser removes the codes of a tenant that were issued to the
+	// user and not redeemed yet, and returns how many were removed.
+	DeleteByUser(ctx context.Context, tenantID, userID uuid.UUID) (int64, error)
 	// MoveSession moves the codes of a tenant that were issued in the session
 	// with the ID from to the session with the ID to, and returns how many it
 	// moved.
@@ -577,6 +588,10 @@ type AccessTokens interface {
 	// tenant that were issued to the client for the user and are not revoked
 	// yet, and returns how many it revoked.
 	RevokeByUserAndClient(ctx context.Context, tenantID, userID, clientID uuid.UUID, at time.Time) (int64, error)
+	// RevokeByUser revokes, at the given time, the tokens of a tenant that
+	// were issued for the user and are not revoked yet, and returns how many
+	// it revoked.
+	RevokeByUser(ctx context.Context, tenantID, userID uuid.UUID, at time.Time) (int64, error)
 	// DeleteExpired removes the tokens of every tenant whose ExpiresAt is not
 	// after now, and returns how many were removed.
 	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
@@ -662,6 +677,10 @@ type RefreshTokens interface {
 	// tenant that were issued to the client for the user and are not revoked
 	// yet, and returns how many it revoked.
 	RevokeByUserAndClient(ctx context.Context, tenantID, userID, clientID uuid.UUID, at time.Time) (int64, error)
+	// RevokeByUser revokes, at the given time, the families of a tenant that
+	// were issued for the user and are not revoked yet, and returns how many
+	// it revoked.
+	RevokeByUser(ctx context.Context, tenantID, userID uuid.UUID, at time.Time) (int64, error)
 	// DeleteExpired removes the tokens of every tenant whose ExpiresAt is not
 	// after now, then the families whose ExpiresAt or IdleExpiresAt is not
 	// after now, with any tokens they still have. It returns how many

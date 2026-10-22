@@ -92,6 +92,10 @@ func Run(t *testing.T, open OpenFunc) {
 		t.Parallel()
 		runEmailVerifications(t, open)
 	})
+	t.Run("RecordsOfAUser", func(t *testing.T) {
+		t.Parallel()
+		runUserRecords(t, open)
+	})
 }
 
 func runTenants(t *testing.T, open OpenFunc) {
@@ -821,6 +825,52 @@ func runUsers(t *testing.T, open OpenFunc) {
 		}
 		if diff := cmp.Diff(normalizeUser(want), got); diff != "" {
 			t.Errorf("GetByEmail() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("Update", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		u := newUser(tn.ID, "ada@example.com")
+		u.EmailVerified = false
+		mustCreateUser(t, s.Users(), u)
+		other := newUser(tn.ID, "grace@example.com")
+		mustCreateUser(t, s.Users(), other)
+
+		// The email address and the creation time never change.
+		update := u
+		update.Email = "changed@example.com"
+		update.EmailVerified = true
+		update.Status = store.UserDisabled
+		update.Profile = store.Profile{Name: "Ada King", Locale: "en-GB"}
+		update.CreatedAt = u.CreatedAt.Add(-time.Hour)
+		update.UpdatedAt = u.UpdatedAt.Add(time.Hour)
+		if err := s.Users().Update(t.Context(), update); err != nil {
+			t.Fatalf("Update() unexpected error: %v", err)
+		}
+		want := u
+		want.EmailVerified, want.Status, want.Profile, want.UpdatedAt = true, store.UserDisabled, update.Profile,
+			update.UpdatedAt
+		got, err := s.Users().GetByEmail(t.Context(), tn.ID, u.Email)
+		if err != nil {
+			t.Fatalf("GetByEmail() unexpected error: %v", err)
+		}
+		if diff := cmp.Diff(normalizeUser(want), got); diff != "" {
+			t.Errorf("user after Update() mismatch (-want +got):\n%s", diff)
+		}
+		if got, err := s.Users().Get(t.Context(), tn.ID, other.ID); err != nil || got.Status != store.UserActive {
+			t.Errorf("Update() changed another user: %+v, %v", got, err)
+		}
+		missing := newUser(tn.ID, "missing@example.com")
+		if err := s.Users().Update(t.Context(), missing); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Update() of an unknown user = %v, want ErrNotFound", err)
+		}
+		foreign := update
+		foreign.TenantID = uuid.NewV7()
+		if err := s.Users().Update(t.Context(), foreign); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Update() through another tenant = %v, want ErrNotFound", err)
 		}
 	})
 
