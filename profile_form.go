@@ -103,8 +103,12 @@ func profileSections(text i18n.Printer, profile store.Profile) []ui.ProfileSecti
 }
 
 // profileFromForm returns current with the values of the posted profile
-// form. What the form does not show, such as the formatted address or
-// whether the phone number is verified, stays.
+// form. What the form does not show stays, such as whether the phone number
+// is verified, except the formatted address: it stays only while the other
+// parts of the address stay as they were and it passes the rules of
+// app.NormalizeProfile. Otherwise it would contradict the new parts, or
+// block every save with a problem that the user can neither see nor fix
+// (ADR 0028).
 func profileFromForm(form url.Values, current store.Profile) store.Profile {
 	profile := current
 	for _, section := range profileForm {
@@ -112,7 +116,32 @@ func profileFromForm(form url.Values, current store.Profile) store.Profile {
 			*f.value(&profile) = form.Get(f.name)
 		}
 	}
+	if _, valid := app.NormalizeProfileValue(current.Address.Formatted, app.ProfileLines); !valid ||
+		!sameAddress(profile.Address, current.Address) {
+		profile.Address.Formatted = ""
+	}
 	return profile
+}
+
+// sameAddress reports whether the posted parts of an address, once
+// normalized as they would be stored, are the parts of current. The
+// formatted address does not count.
+func sameAddress(posted, current store.Address) bool {
+	for _, part := range []struct {
+		posted, current string
+		kind            app.ProfileKind
+	}{
+		{posted.StreetAddress, current.StreetAddress, app.ProfileLines},
+		{posted.Locality, current.Locality, app.ProfileText},
+		{posted.Region, current.Region, app.ProfileText},
+		{posted.PostalCode, current.PostalCode, app.ProfileText},
+		{posted.Country, current.Country, app.ProfileText},
+	} {
+		if normalized, ok := app.NormalizeProfileValue(part.posted, part.kind); !ok || normalized != part.current {
+			return false
+		}
+	}
+	return true
 }
 
 // profileErrors explains, in the locale of text, every claim that err, from

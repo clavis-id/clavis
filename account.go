@@ -349,7 +349,7 @@ func (s *Server) accountApplicationsPage(w http.ResponseWriter, r *http.Request,
 	for _, g := range grants {
 		scopes := make([]string, len(g.Scopes))
 		for i, scope := range g.Scopes {
-			scopes[i] = ui.ScopeDescription(layout.Text, scope, "")
+			scopes[i] = ui.ScopeDescription(layout.Text, scope, g.ScopeResources[scope])
 		}
 		applications = append(applications, ui.AccountApplication{Name: g.Client.Name, ClientID: g.Client.ClientID,
 			Scopes: scopes})

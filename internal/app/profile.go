@@ -120,8 +120,13 @@ func NormalizeProfile(p store.Profile) (store.Profile, error) {
 	return p, nil
 }
 
-// normalizeClaim returns value as it is stored for a claim of the given kind,
-// and whether it is valid. An empty value is valid.
+// NormalizeProfileValue returns value as NormalizeProfile stores it for a
+// claim of the given kind, and whether it is valid. An empty value is valid.
+func NormalizeProfileValue(value string, kind ProfileKind) (string, bool) {
+	return normalizeClaim(value, kind)
+}
+
+// normalizeClaim is NormalizeProfileValue.
 func normalizeClaim(value string, kind ProfileKind) (string, bool) {
 	if kind == ProfileLines {
 		value = strings.ReplaceAll(value, "\r\n", "\n")
