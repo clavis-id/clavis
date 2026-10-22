@@ -284,9 +284,15 @@ type LoginPage struct {
 	Email string
 	// Error explains why the previous attempt failed.
 	Error string
+	// Notice is news for the user, such as a password that has just
+	// changed, or empty.
+	Notice string
 	// SignupURL is the URL of the signup page, or empty when the tenant
 	// offers none.
 	SignupURL string
+	// ResetURL is the URL of the password reset page, or empty when the
+	// server cannot reset passwords.
+	ResetURL string
 }
 
 // SignupPage asks for the email address of a new account (ADR 0026).
@@ -307,9 +313,11 @@ type SignupPage struct {
 }
 
 // VerifyPage asks for the code sent to Email or, when Token is set,
-// confirms the link that the user followed.
+// confirms the link that the user followed. Reset tells a password reset
+// from a signup.
 type VerifyPage struct {
 	Layout
+	Reset bool
 	// Email is the address the message went to.
 	Email string
 	// Action is the URL the form posts to.
@@ -324,9 +332,11 @@ type VerifyPage struct {
 	RestartURL string
 }
 
-// PasswordPage asks for the password of a new account.
+// PasswordPage asks for the password of a new account or, when Reset is
+// set, for the new password of an account.
 type PasswordPage struct {
 	Layout
+	Reset bool
 	// Email is the address of the new account.
 	Email string
 	// Action is the URL the form posts to.
@@ -343,6 +353,29 @@ type PasswordPage struct {
 
 // SignedUpPage says that the new account is ready.
 type SignedUpPage struct {
+	Layout
+}
+
+// ResetPage asks for the email address of the account whose password the
+// user resets (ADR 0027).
+type ResetPage struct {
+	Layout
+	// Action is the URL the form posts to.
+	Action string
+	// RequestID identifies the stored authorization request.
+	RequestID string
+	// Email fills the email field: with the login hint of the request, or
+	// again after a malformed address.
+	Email string
+	// Error explains why the previous attempt failed.
+	Error string
+	// LoginURL is the URL of the sign-in page.
+	LoginURL string
+}
+
+// PasswordChangedPage says that the password has changed, after a reset
+// whose authorization request was gone.
+type PasswordChangedPage struct {
 	Layout
 }
 
@@ -429,4 +462,13 @@ type ErrorPage struct {
 	Layout
 	Title   string
 	Message string
+}
+
+// pick returns ifTrue when cond holds, and otherwise ifFalse, for pages that
+// two flows share.
+func pick(cond bool, ifTrue, ifFalse i18n.Key) i18n.Key {
+	if cond {
+		return ifTrue
+	}
+	return ifFalse
 }

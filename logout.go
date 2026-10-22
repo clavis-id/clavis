@@ -104,17 +104,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request, t tenant, params
 		s.internalError(w, r, "signing out", err)
 		return
 	}
-	if _, err := r.Cookie(sessionCookieName(t.ID)); err == nil {
-		http.SetCookie(w, &http.Cookie{
-			Name:     sessionCookieName(t.ID),
-			Value:    "",
-			Path:     "/",
-			MaxAge:   -1,
-			Secure:   true,
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-		})
-	}
+	s.clearSessionCookie(w, r, t)
 	if uri := l.ResponseURI(); uri != "" {
 		seeOther(w, uri)
 		return

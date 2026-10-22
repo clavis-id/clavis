@@ -123,7 +123,7 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request, t tenan
 		return
 	}
 	s.loginPage(w, r, t, p, s.locale(w, r, r.URL.Query().Get(ui.LocaleParam), p.Request.UILocales),
-		p.Request.LoginHint, "")
+		p.Request.LoginHint, "", "")
 }
 
 // handleLogin checks the credentials posted from the sign-in form. On
@@ -152,10 +152,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, t tenant) {
 		form.Get("password"), sessionHash(r, t.ID))
 	switch {
 	case errors.Is(err, app.ErrInvalidCredentials):
-		s.loginPage(w, r, t, p, s.locale(w, r, "", p.Request.UILocales), email, i18n.LoginInvalidCredentials)
+		s.loginPage(w, r, t, p, s.locale(w, r, "", p.Request.UILocales), email, i18n.LoginInvalidCredentials, "")
 		return
 	case errors.Is(err, app.ErrUserDisabled):
-		s.loginPage(w, r, t, p, s.locale(w, r, "", p.Request.UILocales), email, i18n.LoginDisabled)
+		s.loginPage(w, r, t, p, s.locale(w, r, "", p.Request.UILocales), email, i18n.LoginDisabled, "")
 		return
 	case err != nil:
 		s.authorizationRequestError(w, r, t, err)
@@ -257,11 +257,11 @@ func (s *Server) respond(w http.ResponseWriter, r *http.Request, t tenant, uiLoc
 }
 
 // loginPage renders the sign-in form in locale l, with the email address
-// to fill in and the message of problem, unless it is empty. Its policy
-// lets the form submission redirect to the client, which browsers check
-// against form-action.
+// to fill in, the message of problem and the message of notice, unless they
+// are empty. Its policy lets the form submission redirect to the client,
+// which browsers check against form-action.
 func (s *Server) loginPage(w http.ResponseWriter, r *http.Request, t tenant, p app.PendingAuthorization,
-	l i18n.Locale, email string, problem i18n.Key,
+	l i18n.Locale, email string, problem, notice i18n.Key,
 ) {
 	layout := s.layout(r, t, l)
 	layout.Languages = &ui.LanguageSelector{Method: http.MethodGet, Action: t.path + loginPath,
@@ -270,12 +270,18 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request, t tenant, p a
 	if target := ui.FormTarget(p.Request.RedirectURI); target != "" {
 		targets = append(targets, target)
 	}
-	var message, signupURL string
+	var message, info, signupURL, resetURL string
 	if problem != "" {
 		message = layout.T(problem)
 	}
+	if notice != "" {
+		info = layout.T(notice)
+	}
 	if t.signup {
 		signupURL = pageURL(t, signupPath, p.Request.ID)
+	}
+	if t.reset {
+		resetURL = pageURL(t, resetPath, p.Request.ID)
 	}
 	ui.SetPageHeaders(w.Header(), layout.ContentSecurityPolicy(true, targets...))
 	s.render(w, r, http.StatusOK, ui.Login(ui.LoginPage{
@@ -285,7 +291,9 @@ func (s *Server) loginPage(w http.ResponseWriter, r *http.Request, t tenant, p a
 		RequestID:  p.Request.ID,
 		Email:      email,
 		Error:      message,
+		Notice:     info,
 		SignupURL:  signupURL,
+		ResetURL:   resetURL,
 	}))
 }
 
@@ -313,6 +321,23 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, t tenant, login app.Log
 		Value:    login.SessionToken,
 		Path:     "/",
 		MaxAge:   int(login.SessionExpiresAt.Sub(s.deps.Now()).Seconds()),
+		Secure:   true,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// clearSessionCookie removes the browser's session cookie for tenant t, if
+// it has one.
+func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request, t tenant) {
+	if _, err := r.Cookie(sessionCookieName(t.ID)); err != nil {
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName(t.ID),
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
 		Secure:   true,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,

@@ -389,10 +389,16 @@ func (s *Server) routes() http.Handler {
 	s.handleTenant(mux, http.MethodPost, consentPath, s.handleConsent)
 	s.handleTenant(mux, http.MethodGet, signupPath, s.handleSignupPage)
 	s.handleTenant(mux, http.MethodPost, signupPath, s.handleSignup)
-	s.handleTenant(mux, http.MethodGet, signupVerifyPath, s.handleVerifyPage)
-	s.handleTenant(mux, http.MethodPost, signupVerifyPath, s.handleVerify)
-	s.handleTenant(mux, http.MethodGet, signupPasswordPath, s.handlePasswordPage)
+	s.handleTenant(mux, http.MethodGet, signupVerifyPath, s.handleVerifyPage(signupFlow))
+	s.handleTenant(mux, http.MethodPost, signupVerifyPath, s.handleVerify(signupFlow))
+	s.handleTenant(mux, http.MethodGet, signupPasswordPath, s.handlePasswordPage(signupFlow))
 	s.handleTenant(mux, http.MethodPost, signupPasswordPath, s.handleSignupPassword)
+	s.handleTenant(mux, http.MethodGet, resetPath, s.handleResetPage)
+	s.handleTenant(mux, http.MethodPost, resetPath, s.handleReset)
+	s.handleTenant(mux, http.MethodGet, resetVerifyPath, s.handleVerifyPage(resetFlow))
+	s.handleTenant(mux, http.MethodPost, resetVerifyPath, s.handleVerify(resetFlow))
+	s.handleTenant(mux, http.MethodGet, resetPasswordPath, s.handlePasswordPage(resetFlow))
+	s.handleTenant(mux, http.MethodPost, resetPasswordPath, s.handleResetPassword)
 	s.handleTenant(mux, http.MethodGet, oidc.EndSessionPath, s.handleEndSession)
 	s.handleTenant(mux, http.MethodPost, oidc.EndSessionPath, s.handleEndSession)
 	s.handleTenant(mux, http.MethodPost, logoutPath, s.handleLogout)
@@ -416,6 +422,9 @@ type tenant struct {
 	// signup tells whether people can sign up: the tenant allows it, it is
 	// not the admin tenant, and email is enabled (ADR 0026).
 	signup bool
+	// reset tells whether users can reset their password, which needs email
+	// (ADR 0027).
+	reset bool
 }
 
 // authorizationTenant returns what the authorization use cases need to know
@@ -467,6 +476,7 @@ func (s *Server) serveTenant(w http.ResponseWriter, r *http.Request, slug string
 		// UpdateTenant refuses signup for the admin tenant; a stored setting
 		// that says otherwise is ignored.
 		signup: t.SignupEnabled && t.Slug != app.AdminTenantSlug && s.deps.Mail != nil,
+		reset:  s.deps.Mail != nil,
 	}
 	if slug != "" {
 		resolved.issuer += tenantPathPrefix + t.Slug
