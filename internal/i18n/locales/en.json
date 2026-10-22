@@ -75,7 +75,7 @@
   "error.signup_unavailable.title": "Sign-up not available",
   "error.signup_unavailable": "This site does not let you create an account. Return to the application.",
   "error.expired_signup.title": "Sign-up no longer valid",
-  "error.expired_signup": "This sign-up has expired, was completed already, or was started in another browser. Open the link in the browser where you started, or return to the application and start again.",
+  "error.expired_signup": "This sign-up has expired, was completed already, or was started in another browser. In the browser where you started, open the link or type the code from the message. Otherwise, return to the application and start again.",
   "error.too_many_codes.title": "Too many attempts",
   "error.too_many_codes": "Too many incorrect codes were entered. Return to the application and start again.",
   "error.account_exists.title": "The account exists already",

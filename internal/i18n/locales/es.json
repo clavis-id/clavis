@@ -75,7 +75,7 @@
   "error.signup_unavailable.title": "Registro no disponible",
   "error.signup_unavailable": "Este sitio no permite crear cuentas. Vuelve a la aplicación.",
   "error.expired_signup.title": "El registro ya no es válido",
-  "error.expired_signup": "Este registro venció, ya se completó o se inició en otro navegador. Abre el enlace en el navegador donde empezaste, o vuelve a la aplicación y empieza de nuevo.",
+  "error.expired_signup": "Este registro venció, ya se completó o se inició en otro navegador. En el navegador donde empezaste, abre el enlace o escribe el código del mensaje. Si no, vuelve a la aplicación y empieza de nuevo.",
   "error.too_many_codes.title": "Demasiados intentos",
   "error.too_many_codes": "Se escribieron demasiados códigos incorrectos. Vuelve a la aplicación y empieza de nuevo.",
   "error.account_exists.title": "La cuenta ya existe",

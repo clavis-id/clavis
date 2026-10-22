@@ -413,8 +413,8 @@ type tenant struct {
 	store.Tenant
 	issuer string
 	path   string
-	// signup tells whether people can sign up: the tenant allows it and
-	// email is enabled (ADR 0026).
+	// signup tells whether people can sign up: the tenant allows it, it is
+	// not the admin tenant, and email is enabled (ADR 0026).
 	signup bool
 }
 
@@ -464,7 +464,9 @@ func (s *Server) serveTenant(w http.ResponseWriter, r *http.Request, slug string
 		Tenant: t,
 		issuer: s.issuer.String(),
 		path:   s.issuer.Path,
-		signup: t.SignupEnabled && s.deps.Mail != nil,
+		// UpdateTenant refuses signup for the admin tenant; a stored setting
+		// that says otherwise is ignored.
+		signup: t.SignupEnabled && t.Slug != app.AdminTenantSlug && s.deps.Mail != nil,
 	}
 	if slug != "" {
 		resolved.issuer += tenantPathPrefix + t.Slug

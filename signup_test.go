@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+	"uuid"
 
 	"clavisid.org/clavis/email"
 	"clavisid.org/clavis/internal/app"
@@ -179,6 +181,59 @@ func TestSignupWithTheCode(t *testing.T) {
 	}
 }
 
+// After signup, a client that asks for consent gets it, as after a sign-in
+// (ADR 0020).
+func TestSignupWithConsent(t *testing.T) {
+	t.Parallel()
+	const issuer = signupIssuer
+	s, tn, mail := newSignupServer(t)
+	if _, _, err := app.CreateClient(t.Context(), s.deps, tn.ID, app.ClientSpec{
+		ClientID: "partner", Name: "Partner App", Type: store.ClientConfidential,
+		RedirectURIs: []string{"https://partner.example.com/callback"},
+	}); err != nil {
+		t.Fatalf("CreateClient() unexpected error: %v", err)
+	}
+	query := authorizeQuery()
+	query.Set("client_id", "partner")
+	query.Set("redirect_uri", "https://partner.example.com/callback")
+	b := newBrowser(t, s.Handler())
+	id := b.startLogin(issuer, query)
+	res, _ := b.post(issuer+"/signup", url.Values{"request": {id}, "email": {"grace@example.com"}}, "same-origin")
+	loc, err := url.Parse(res.Header.Get("Location"))
+	if res.StatusCode != http.StatusSeeOther || err != nil {
+		t.Fatalf("signup = %d to %q, want the code page", res.StatusCode, res.Header.Get("Location"))
+	}
+	verification := loc.Query().Get("verification")
+	code := signupCode.FindStringSubmatch(mail.last(t, "grace@example.com").Text)
+	if res, _ = b.post(issuer+"/signup/verify", url.Values{"verification": {verification}, "code": {code[1]}},
+		"same-origin"); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("code = %d, want a redirect to the password page", res.StatusCode)
+	}
+
+	consent := issuer + "/consent?request=" + id
+	res, _ = b.post(issuer+"/signup/password", url.Values{"verification": {verification},
+		"password": {"correct horse battery"}}, "same-origin")
+	if res.StatusCode != http.StatusSeeOther || res.Header.Get("Location") != consent {
+		t.Fatalf("password = %d to %q, want the consent page", res.StatusCode, res.Header.Get("Location"))
+	}
+	// The signup page of a request that waits for consent leads to it.
+	if res, _ = b.get(issuer + "/signup?request=" + id); res.StatusCode != http.StatusSeeOther ||
+		res.Header.Get("Location") != consent {
+		t.Errorf("signup page while consent waits = %d to %q, want the consent page", res.StatusCode,
+			res.Header.Get("Location"))
+	}
+	if res, page := b.get(consent); res.StatusCode != http.StatusOK || !strings.Contains(page, "Partner App") ||
+		!strings.Contains(page, "grace@example.com") {
+		t.Fatalf("consent page = %d:\n%s", res.StatusCode, page)
+	}
+	res, _ = b.post(issuer+"/consent", url.Values{"request": {id}, "decision": {"allow"}}, "same-origin")
+	loc, err = url.Parse(res.Header.Get("Location"))
+	if res.StatusCode != http.StatusSeeOther || err != nil ||
+		!strings.HasPrefix(loc.String(), "https://partner.example.com/callback?") || loc.Query().Get("code") == "" {
+		t.Errorf("consent = %d to %q, want a code for the client", res.StatusCode, res.Header.Get("Location"))
+	}
+}
+
 func TestSignupWithTheLink(t *testing.T) {
 	t.Parallel()
 	const issuer = signupIssuer
@@ -192,7 +247,8 @@ func TestSignupWithTheLink(t *testing.T) {
 
 	// Another browser, or a mail scanner, gets nothing from the link.
 	if res, page := newBrowser(t, s.Handler()).get(link); res.StatusCode != http.StatusBadRequest ||
-		!strings.Contains(page, "<title>Sign-up no longer valid</title>") {
+		!strings.Contains(page, "<title>Sign-up no longer valid</title>") ||
+		!strings.Contains(page, "In the browser where you started, open the link or type the code") {
 		t.Errorf("link in another browser = %d:\n%s", res.StatusCode, page)
 	}
 	// Opening the link asks for a confirmation, which verifies nothing yet.
@@ -297,6 +353,27 @@ func TestSignupUnavailable(t *testing.T) {
 	}
 	if _, body := newBrowser(t, open.Handler()).get(issuer + "/.well-known/openid-configuration"); !strings.Contains(body, `"create"`) {
 		t.Errorf("the metadata of a tenant with signup does not announce prompt=create:\n%s", body)
+	}
+}
+
+// ADR 0026: the admin tenant never offers signup, whatever its stored
+// setting says.
+func TestAdminTenantNeverOffersSignup(t *testing.T) {
+	t.Parallel()
+	s, _, _ := newSignupServer(t)
+	now := time.Now()
+	admin := store.Tenant{ID: uuid.NewV7(), Slug: app.AdminTenantSlug, Name: "Admin", SignupEnabled: true,
+		CreatedAt: now, UpdatedAt: now}
+	if err := s.deps.Store.Tenants().Create(t.Context(), admin); err != nil {
+		t.Fatalf("creating the admin tenant: %v", err)
+	}
+	b := newBrowser(t, s.Handler())
+	if res, body := b.get(signupIssuer + "/t/admin/.well-known/openid-configuration"); res.StatusCode != http.StatusOK ||
+		strings.Contains(body, `"create"`) {
+		t.Errorf("admin tenant metadata = %d, want no prompt=create:\n%s", res.StatusCode, body)
+	}
+	if res, _ := b.get(signupIssuer + "/t/admin/signup?request=" + strings.Repeat("A", 22)); res.StatusCode != http.StatusNotFound {
+		t.Errorf("admin tenant signup page = %d, want 404", res.StatusCode)
 	}
 }
 

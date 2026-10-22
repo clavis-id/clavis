@@ -63,7 +63,8 @@ Five questions are open:
   - It has a purpose (`signup`), so password reset in work item 3.4 can reuse it.
 
   The link opens a page with a confirmation button, so mail scanners that fetch links do not
-  use it. In another browser, the link page asks for the code instead.
+  use it. In another browser, the link leads to a page that says to open it, or type the code,
+  in the browser where the signup started.
 - **prompt=create.** Clavis implements Initiating User Registration via OpenID Connect 1.0
   (Final). A tenant that offers signup sends `prompt=create` requests to the signup page, even
   for a browser with a session. Discovery lists every supported value in
