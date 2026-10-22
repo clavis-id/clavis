@@ -373,6 +373,85 @@ type ResetPage struct {
 	LoginURL string
 }
 
+// AccountNav holds the URLs of the account pages, and the URL of the page
+// that shows it in Current.
+type AccountNav struct {
+	ProfileURL      string
+	PasswordURL     string
+	ApplicationsURL string
+	LogoutURL       string
+	Current         string
+}
+
+// ProfileField is an input of the profile form.
+type ProfileField struct {
+	// Name is the name of the form field and the ID of the input.
+	Name  string
+	Label string
+	Value string
+	// Type is the type of the input, such as text or url, unless Lines is
+	// set, which asks for a text area.
+	Type  string
+	Lines bool
+	// Autocomplete is the autofill token of the input (HTML, section
+	// 4.10.18.7).
+	Autocomplete string
+	// Hint explains the format, or is empty.
+	Hint string
+}
+
+// ProfileSection is a group of profile fields.
+type ProfileSection struct {
+	Title  string
+	Fields []ProfileField
+}
+
+// AccountPage shows the profile of the signed-in user (ADR 0028).
+type AccountPage struct {
+	Layout
+	Nav AccountNav
+	// Email is the address of the account, which the profile cannot
+	// change.
+	Email    string
+	Action   string
+	Sections []ProfileSection
+	// Notice says what the last change did, or is empty, and Errors
+	// explain why it was refused.
+	Notice string
+	Errors []string
+}
+
+// AccountPasswordPage changes the password of the signed-in user.
+type AccountPasswordPage struct {
+	Layout
+	Nav AccountNav
+	// Email is the address of the account, for password managers.
+	Email     string
+	Action    string
+	MinLength int
+	MaxLength int
+	Notice    string
+	Errors    []string
+}
+
+// AccountApplication is an application that the user allowed.
+type AccountApplication struct {
+	Name     string
+	ClientID string
+	// Scopes describes what the application may do, one line each.
+	Scopes []string
+}
+
+// AccountApplicationsPage lists the applications that the signed-in user
+// allowed.
+type AccountApplicationsPage struct {
+	Layout
+	Nav          AccountNav
+	Action       string
+	Applications []AccountApplication
+	Notice       string
+}
+
 // PasswordChangedPage says that the password has changed, after a reset
 // whose authorization request was gone.
 type PasswordChangedPage struct {
