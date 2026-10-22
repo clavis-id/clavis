@@ -31,6 +31,20 @@ type ApiResource struct {
 	UpdatedAt  int64
 }
 
+type AuditEvent struct {
+	ID         string
+	TenantID   string
+	OccurredAt int64
+	Type       string
+	Actor      string
+	UserID     sql.NullString
+	ClientID   string
+	SessionID  sql.NullString
+	Ip         string
+	UserAgent  string
+	Details    string
+}
+
 type AuthorizationCode struct {
 	Hash                []byte
 	TenantID            string

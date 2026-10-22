@@ -69,6 +69,8 @@ type Store interface {
 	Brandings() Brandings
 	// EmailVerifications returns the email verification repository.
 	EmailVerifications() EmailVerifications
+	// AuditEvents returns the audit event repository.
+	AuditEvents() AuditEvents
 	// Ping reports whether the underlying database is reachable.
 	Ping(ctx context.Context) error
 }
@@ -913,4 +915,75 @@ type EmailVerifications interface {
 	// DeleteExpired removes the verifications of every tenant whose
 	// ExpiresAt is not after now, and returns how many were removed.
 	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
+}
+
+// AuditActor says who caused an audit event.
+type AuditActor string
+
+// Actors of audit events.
+const (
+	// ActorUser is the user of the event, acting for themself.
+	ActorUser AuditActor = "user"
+	// ActorClient is the client of the event, such as one that revokes a
+	// token.
+	ActorClient AuditActor = "client"
+	// ActorOperator is an operator, through the command line or, later, the
+	// admin API.
+	ActorOperator AuditActor = "operator"
+	// ActorAnonymous is someone not authenticated, such as a browser whose
+	// sign-in failed.
+	ActorAnonymous AuditActor = "anonymous"
+)
+
+// AuditEvent records something that happened to an account, a client or a
+// tenant (ADR 0029): who, what, when and from where, without credential
+// material.
+type AuditEvent struct {
+	// ID is a version 7 UUID, so events sort by time.
+	ID         uuid.UUID
+	TenantID   uuid.UUID
+	OccurredAt time.Time
+	// Type names what happened, such as user.signed_in.
+	Type  string
+	Actor AuditActor
+	// UserID is the user the event is about, or the zero UUID. It is not a
+	// reference: events outlive the users they are about.
+	UserID uuid.UUID
+	// ClientID is the client_id of the client the event involves, or
+	// empty.
+	ClientID string
+	// SessionID is the browser session of the event, or the zero UUID.
+	SessionID uuid.UUID
+	// IP is the address of the client of the request, and UserAgent its
+	// User-Agent header; both are empty for events without a request.
+	IP        string
+	UserAgent string
+	// Details holds what else the type of event records.
+	Details map[string]string
+}
+
+// AuditQuery selects audit events of a tenant, newest first.
+type AuditQuery struct {
+	// UserID keeps the events about one user, unless it is the zero UUID.
+	UserID uuid.UUID
+	// Type keeps the events of one type, unless it is empty.
+	Type string
+	// Before keeps the events older than the event with this ID, unless it
+	// is the zero UUID: pass the last ID of a page to get the next one.
+	Before uuid.UUID
+	// Limit is the most events to return, from 1 to MaxPageSize.
+	Limit int
+}
+
+// AuditEvents stores audit events. Events are never changed.
+type AuditEvents interface {
+	// Create inserts e. It returns ErrConflict when the ID is in use, and
+	// ErrNotFound when the tenant does not exist.
+	Create(ctx context.Context, e AuditEvent) error
+	// List returns the events of a tenant that q selects, newest first. A
+	// Limit outside [1, MaxPageSize] returns ErrInvalidArgument.
+	List(ctx context.Context, tenantID uuid.UUID, q AuditQuery) ([]AuditEvent, error)
+	// DeleteBefore removes the events of every tenant that occurred before
+	// the given time, and returns how many were removed.
+	DeleteBefore(ctx context.Context, before time.Time) (int64, error)
 }
