@@ -41,7 +41,9 @@ signed in after the reset.
   account, also with a full queue.
 - **Effects of the reset.**
   - The address of the account becomes verified, since the user proved it.
-  - Every session of the user ends.
+  - Every session of the user ends, also one that a sign-in with the old password stores while
+    the reset runs: after it stores its session, a sign-in checks that the password is the
+    one it verified.
   - The user's codes not redeemed yet are deleted.
   - The user's access tokens and refresh token families are revoked.
   - The browser's session cookie is removed.
@@ -64,3 +66,8 @@ signed in after the reset.
 - Without email, users cannot reset their password; operators use `clavis users set-password`.
 - Like signup, reset queues messages for anyone who types an address, so it needs the limits
   per address and IP of work item 3.5.
+- Guessing the code of a reset takes the account, while a guess at signup only shows that an
+  account exists. Each verification allows five codes out of a million, but until work item
+  3.5 nothing limits how many resets anyone asks for: about 140,000 resets, each a message to
+  the account, give an even chance. Work item 3.5 must limit resets and failed codes per
+  account, counted across verifications, before milestone 3 is released.

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/mail"
 	"strings"
+	"time"
 	"uuid"
 
 	"clavisid.org/clavis/internal/authn/password"
@@ -235,13 +236,17 @@ func endUserAccess(ctx context.Context, d Deps, u store.User, keep uuid.UUID) er
 	if err != nil {
 		return fmt.Errorf("deleting the codes of the user: %w", err)
 	}
-	tokens, err := d.Store.AccessTokens().RevokeByUser(ctx, u.TenantID, u.ID, now)
-	if err != nil {
-		return fmt.Errorf("revoking the access tokens of the user: %w", err)
-	}
+	// Refresh token families come before access tokens, as when a grant is
+	// revoked: a refresh records its access token before it rotates the
+	// refresh token, so it either fails on the revoked family or its access
+	// token is revoked below (ADR 0021).
 	families, err := d.Store.RefreshTokens().RevokeByUser(ctx, u.TenantID, u.ID, now)
 	if err != nil {
 		return fmt.Errorf("revoking the refresh tokens of the user: %w", err)
+	}
+	tokens, err := d.Store.AccessTokens().RevokeByUser(ctx, u.TenantID, u.ID, now)
+	if err != nil {
+		return fmt.Errorf("revoking the access tokens of the user: %w", err)
 	}
 	if sessions+codes+tokens+families > 0 {
 		d.Logger.LogAttrs(ctx, slog.LevelInfo, "ended the access of the user after a password change",
@@ -260,25 +265,34 @@ func endUserAccess(ctx context.Context, d Deps, u store.User, keep uuid.UUID) er
 func AuthenticatePassword(ctx context.Context, d Deps, h PasswordHasher, tenantID uuid.UUID,
 	email, pw string,
 ) (store.User, error) {
+	u, _, err := authenticatePassword(ctx, d, h, tenantID, email, pw)
+	return u, err
+}
+
+// authenticatePassword is AuthenticatePassword, and also returns when the
+// password that matched was set.
+func authenticatePassword(ctx context.Context, d Deps, h PasswordHasher, tenantID uuid.UUID,
+	email, pw string,
+) (store.User, time.Time, error) {
 	u, err := FindUser(ctx, d, tenantID, email)
 	if errors.Is(err, ErrUserNotFound) {
 		// Look up a password that cannot exist, so an unknown account makes
 		// as many queries as a known one and the time of a round trip to the
 		// database does not reveal which accounts exist.
 		if _, err := d.Store.Passwords().Get(ctx, tenantID, uuid.Nil()); err != nil && !errors.Is(err, store.ErrNotFound) {
-			return store.User{}, fmt.Errorf("looking up password: %w", err)
+			return store.User{}, time.Time{}, fmt.Errorf("looking up password: %w", err)
 		}
-		return store.User{}, failLogin(ctx, h, pw)
+		return store.User{}, time.Time{}, failLogin(ctx, h, pw)
 	}
 	if err != nil {
-		return store.User{}, err
+		return store.User{}, time.Time{}, err
 	}
 	stored, err := d.Store.Passwords().Get(ctx, tenantID, u.ID)
 	if errors.Is(err, store.ErrNotFound) {
-		return store.User{}, failLogin(ctx, h, pw)
+		return store.User{}, time.Time{}, failLogin(ctx, h, pw)
 	}
 	if err != nil {
-		return store.User{}, fmt.Errorf("looking up password: %w", err)
+		return store.User{}, time.Time{}, fmt.Errorf("looking up password: %w", err)
 	}
 
 	v, err := h.Verify(ctx, stored.Hash, pw)
@@ -288,18 +302,18 @@ func AuthenticatePassword(ctx context.Context, d Deps, h PasswordHasher, tenantI
 		d.Logger.LogAttrs(ctx, slog.LevelWarn, "cannot verify the password hash of a user; the user must reset "+
 			"the password", slog.String("tenant_id", tenantID.String()), slog.String("user_id", u.ID.String()),
 			slog.String("error", err.Error()))
-		return store.User{}, ErrInvalidCredentials
+		return store.User{}, time.Time{}, ErrInvalidCredentials
 	case err != nil:
-		return store.User{}, fmt.Errorf("verifying password: %w", err)
+		return store.User{}, time.Time{}, fmt.Errorf("verifying password: %w", err)
 	case !v.Match:
-		return store.User{}, ErrInvalidCredentials
+		return store.User{}, time.Time{}, ErrInvalidCredentials
 	case u.Status != store.UserActive:
-		return store.User{}, ErrUserDisabled
+		return store.User{}, time.Time{}, ErrUserDisabled
 	}
 	if v.Rehash {
 		rehash(ctx, d, h, u, stored.Hash, pw, v.Algorithm)
 	}
-	return u, nil
+	return u, stored.SetAt, nil
 }
 
 // failLogin spends the time of a password verification and returns
