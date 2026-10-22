@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+	"uuid"
 
 	"clavisid.org/clavis/email"
 	"clavisid.org/clavis/internal/app"
@@ -351,6 +353,27 @@ func TestSignupUnavailable(t *testing.T) {
 	}
 	if _, body := newBrowser(t, open.Handler()).get(issuer + "/.well-known/openid-configuration"); !strings.Contains(body, `"create"`) {
 		t.Errorf("the metadata of a tenant with signup does not announce prompt=create:\n%s", body)
+	}
+}
+
+// ADR 0026: the admin tenant never offers signup, whatever its stored
+// setting says.
+func TestAdminTenantNeverOffersSignup(t *testing.T) {
+	t.Parallel()
+	s, _, _ := newSignupServer(t)
+	now := time.Now()
+	admin := store.Tenant{ID: uuid.NewV7(), Slug: app.AdminTenantSlug, Name: "Admin", SignupEnabled: true,
+		CreatedAt: now, UpdatedAt: now}
+	if err := s.deps.Store.Tenants().Create(t.Context(), admin); err != nil {
+		t.Fatalf("creating the admin tenant: %v", err)
+	}
+	b := newBrowser(t, s.Handler())
+	if res, body := b.get(signupIssuer + "/t/admin/.well-known/openid-configuration"); res.StatusCode != http.StatusOK ||
+		strings.Contains(body, `"create"`) {
+		t.Errorf("admin tenant metadata = %d, want no prompt=create:\n%s", res.StatusCode, body)
+	}
+	if res, _ := b.get(signupIssuer + "/t/admin/signup?request=" + strings.Repeat("A", 22)); res.StatusCode != http.StatusNotFound {
+		t.Errorf("admin tenant signup page = %d, want 404", res.StatusCode)
 	}
 }
 
