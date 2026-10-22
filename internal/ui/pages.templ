@@ -81,6 +81,9 @@ templ Login(p LoginPage) {
 		<p class="lead">
 			@message(p.Text.Parts(i18n.LoginLead), map[string]templ.Component{"client": strong(p.ClientName)})
 		</p>
+		if p.Notice != "" {
+			<p class="notice" role="status">{ p.Notice }</p>
+		}
 		if p.Error != "" {
 			<p class="error" role="alert">{ p.Error }</p>
 		}
@@ -92,6 +95,11 @@ templ Login(p LoginPage) {
 			<input id="password" name="password" type="password" autocomplete="current-password" required/>
 			<button id="submit" type="submit">{ p.T(i18n.LoginSubmit) }</button>
 		</form>
+		if p.ResetURL != "" {
+			<p class="alternative">
+				<a id="reset" href={ templ.SafeURL(p.ResetURL) }>{ p.T(i18n.LoginForgotPassword) }</a>
+			</p>
+		}
 		if p.SignupURL != "" {
 			<p class="alternative">
 				{ p.T(i18n.LoginNoAccount) }
@@ -131,7 +139,8 @@ templ Verify(p VerifyPage) {
 	if p.Token != "" {
 		@layout(p.Layout, p.T(i18n.ConfirmTitle)) {
 			<p class="lead">
-				@message(p.Text.Parts(i18n.ConfirmLead), map[string]templ.Component{"email": strong(p.Email)})
+				@message(p.Text.Parts(pick(p.Reset, i18n.ConfirmResetLead, i18n.ConfirmLead)),
+					map[string]templ.Component{"email": strong(p.Email)})
 			</p>
 			<form method="post" action={ templ.SafeURL(p.Action) }>
 				<input type="hidden" name="verification" value={ p.VerificationID }/>
@@ -142,7 +151,8 @@ templ Verify(p VerifyPage) {
 	} else {
 		@layout(p.Layout, p.T(i18n.VerifyTitle)) {
 			<p class="lead">
-				@message(p.Text.Parts(i18n.VerifyLead), map[string]templ.Component{"email": strong(p.Email)})
+				@message(p.Text.Parts(pick(p.Reset, i18n.ResetVerifyLead, i18n.VerifyLead)),
+					map[string]templ.Component{"email": strong(p.Email)})
 			</p>
 			if p.Error != "" {
 				<p class="error" role="alert">{ p.Error }</p>
@@ -165,7 +175,7 @@ templ Verify(p VerifyPage) {
 // password of the new account. The hidden username field tells password
 // managers which account the password belongs to.
 templ Password(p PasswordPage) {
-	@layout(p.Layout, p.T(i18n.PasswordTitle)) {
+	@layout(p.Layout, p.T(pick(p.Reset, i18n.ResetPasswordTitle, i18n.PasswordTitle))) {
 		<p class="lead">
 			@message(p.Text.Parts(i18n.PasswordLead), map[string]templ.Component{"email": strong(p.Email)})
 		</p>
@@ -178,8 +188,37 @@ templ Password(p PasswordPage) {
 			<label for="password">{ p.T(i18n.LoginPassword) }</label>
 			<input id="password" name="password" type="password" autocomplete="new-password" minlength={ strconv.Itoa(p.MinLength) } required autofocus aria-describedby="password-hint"/>
 			<p id="password-hint" class="hint">{ p.T(i18n.PasswordHint, "min", strconv.Itoa(p.MinLength), "max", strconv.Itoa(p.MaxLength)) }</p>
-			<button id="submit" type="submit">{ p.T(i18n.PasswordSubmit) }</button>
+			<button id="submit" type="submit">{ p.T(pick(p.Reset, i18n.ResetPasswordSubmit, i18n.PasswordSubmit)) }</button>
 		</form>
+	}
+}
+
+// Reset renders the first step of a password reset, which asks for the
+// email address of the account (ADR 0027).
+templ Reset(p ResetPage) {
+	@layout(p.Layout, p.T(i18n.ResetTitle)) {
+		<p class="lead">{ p.T(i18n.ResetLead) }</p>
+		if p.Error != "" {
+			<p class="error" role="alert">{ p.Error }</p>
+		}
+		<form method="post" action={ templ.SafeURL(p.Action) }>
+			<input type="hidden" name="request" value={ p.RequestID }/>
+			<label for="email">{ p.T(i18n.LoginEmail) }</label>
+			<input id="email" name="email" type="email" autocomplete="username" required autofocus value={ p.Email }/>
+			<button id="submit" type="submit">{ p.T(i18n.ResetSubmit) }</button>
+		</form>
+		<p class="alternative">
+			{ p.T(i18n.ResetRemembered) }
+			<a id="login" href={ templ.SafeURL(p.LoginURL) }>{ p.T(i18n.SignupSignIn) }</a>
+		</p>
+	}
+}
+
+// PasswordChanged renders the page shown after a password reset whose
+// authorization request was gone.
+templ PasswordChanged(p PasswordChangedPage) {
+	@layout(p.Layout, p.T(i18n.PasswordChangedTitle)) {
+		<p>{ p.T(i18n.PasswordChangedBody) }</p>
 	}
 }
 

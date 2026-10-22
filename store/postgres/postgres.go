@@ -497,6 +497,28 @@ func (r users) Create(ctx context.Context, u store.User) error {
 	return mapError("creating user", err)
 }
 
+func (r users) Update(ctx context.Context, u store.User) error {
+	profile, err := json.Marshal(u.Profile)
+	if err != nil {
+		return fmt.Errorf("postgres: updating user: encoding the profile: %w", err)
+	}
+	n, err := r.q.UpdateUser(ctx, db.UpdateUserParams{
+		EmailVerified: u.EmailVerified,
+		Status:        string(u.Status),
+		Profile:       profile,
+		UpdatedAt:     u.UpdatedAt,
+		TenantID:      u.TenantID,
+		ID:            u.ID,
+	})
+	if err != nil {
+		return mapError("updating user", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("postgres: updating user: %w", store.ErrNotFound)
+	}
+	return nil
+}
+
 func (r users) Get(ctx context.Context, tenantID, id uuid.UUID) (store.User, error) {
 	row, err := r.q.GetUser(ctx, db.GetUserParams{TenantID: tenantID, ID: id})
 	if err != nil {

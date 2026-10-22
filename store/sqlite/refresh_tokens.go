@@ -209,6 +209,18 @@ func (r refreshTokens) RevokeByUserAndClient(ctx context.Context, tenantID, user
 	return n, nil
 }
 
+func (r refreshTokens) RevokeByUser(ctx context.Context, tenantID, userID uuid.UUID, at time.Time) (int64, error) {
+	n, err := r.q.RevokeRefreshTokenFamiliesByUser(ctx, db.RevokeRefreshTokenFamiliesByUserParams{
+		RevokedAt: optionalTime(at),
+		TenantID:  tenantID.String(),
+		UserID:    userID.String(),
+	})
+	if err != nil {
+		return 0, mapError("revoking the refresh token families of a user", err)
+	}
+	return n, nil
+}
+
 func (r refreshTokens) DeleteExpired(ctx context.Context, now time.Time) (int64, error) {
 	if _, err := r.q.DeleteExpiredRefreshTokens(ctx, now.UnixMicro()); err != nil {
 		return 0, mapError("deleting expired refresh tokens", err)

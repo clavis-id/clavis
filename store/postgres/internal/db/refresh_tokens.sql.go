@@ -237,6 +237,26 @@ func (q *Queries) RevokeRefreshTokenFamiliesByCode(ctx context.Context, arg Revo
 	return result.RowsAffected(), nil
 }
 
+const revokeRefreshTokenFamiliesByUser = `-- name: RevokeRefreshTokenFamiliesByUser :execrows
+UPDATE refresh_token_families
+SET revoked_at = $1
+WHERE tenant_id = $2 AND user_id = $3 AND revoked_at IS NULL
+`
+
+type RevokeRefreshTokenFamiliesByUserParams struct {
+	RevokedAt *time.Time
+	TenantID  uuid.UUID
+	UserID    uuid.UUID
+}
+
+func (q *Queries) RevokeRefreshTokenFamiliesByUser(ctx context.Context, arg RevokeRefreshTokenFamiliesByUserParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeRefreshTokenFamiliesByUser, arg.RevokedAt, arg.TenantID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const revokeRefreshTokenFamiliesByUserAndClient = `-- name: RevokeRefreshTokenFamiliesByUserAndClient :execrows
 UPDATE refresh_token_families
 SET revoked_at = $1

@@ -19,6 +19,12 @@ WHERE tenant_id = sqlc.arg(tenant_id) AND id > sqlc.arg(after)
 ORDER BY id
 LIMIT sqlc.arg(page_size);
 
+-- name: UpdateUser :execrows
+UPDATE users
+SET email_verified = sqlc.arg(email_verified), status = sqlc.arg(status), profile = sqlc.arg(profile),
+    updated_at = sqlc.arg(updated_at)
+WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id);
+
 -- name: DeleteUser :execrows
 DELETE FROM users
 WHERE tenant_id = sqlc.arg(tenant_id) AND id = sqlc.arg(id);

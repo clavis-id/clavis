@@ -348,6 +348,13 @@ year.
     for 15 minutes. Five codes may be tried.
   - The user then chooses a password. The account is created with the address verified,
     and the user is signed in and returns to the application.
+- **Password reset:** see ADR 0027. With email enabled, the sign-in page links to "Forgot your
+  password?".
+  - The user types the address and proves it with the code or the link of signup.
+  - Every address gets the same pages, but only an active account gets the message.
+  - The user chooses a new password and signs in with it on the same sign-in form.
+  - A new password, after a reset or from `clavis users set-password`, ends every session of
+    the user and revokes the user's codes, access tokens and refresh token families.
 - **Comparisons:** every secret comparison is constant time.
 - **Logging:** secrets, tokens, passwords, codes and full authorization requests are never
   logged. Audit events record who, what, when and from where, without credential material.

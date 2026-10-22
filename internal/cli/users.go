@@ -94,8 +94,9 @@ func newUsersCommand(environ []string) *cobra.Command {
 	setPassword := &cobra.Command{
 		Use:   "set-password EMAIL",
 		Short: "Set the password of a user",
-		Long:  "Set the password of a user, replacing the current one.\n\n" + passwordInputHelp,
-		Args:  cobra.ExactArgs(1),
+		Long: "Set the password of a user, replacing the current one. It also ends the user's sessions and\n" +
+			"revokes the user's tokens, so whoever held the account is signed out.\n\n" + passwordInputHelp,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return run(cmd, false, func(ctx context.Context, cfg config.Config, d app.Deps, t store.Tenant) error {
 				u, err := app.FindUser(ctx, d, t.ID, args[0])
@@ -113,7 +114,8 @@ func newUsersCommand(environ []string) *cobra.Command {
 				if err := app.SetPassword(ctx, d, h, u, pw); err != nil {
 					return err
 				}
-				return write(cmd.OutOrStdout(), fmt.Sprintf("Set the password of %s.\n", u.Email))
+				return write(cmd.OutOrStdout(), fmt.Sprintf("Set the password of %s and ended its sessions and tokens.\n",
+					u.Email))
 			})
 		},
 	}
