@@ -245,9 +245,15 @@ func TestAccountApplications(t *testing.T) {
 	t.Parallel()
 	const issuer = signupIssuer
 	s, tn := newLoginServer(t, issuer, "")
+	if _, err := app.CreateAPIResource(t.Context(), s.deps, tn.ID, app.APIResourceSpec{
+		Identifier: "https://orders.example.com", Name: "Orders", Scopes: []string{"orders:read"},
+	}); err != nil {
+		t.Fatalf("CreateAPIResource() unexpected error: %v", err)
+	}
 	if _, _, err := app.CreateClient(t.Context(), s.deps, tn.ID, app.ClientSpec{
 		ClientID: "partner", Name: "Partner App", Type: store.ClientConfidential,
 		RedirectURIs: []string{"https://partner.example.com/callback"},
+		Scopes:       []string{"openid", "orders:read"},
 	}); err != nil {
 		t.Fatalf("CreateClient() unexpected error: %v", err)
 	}
@@ -261,6 +267,7 @@ func TestAccountApplications(t *testing.T) {
 	query := authorizeQuery()
 	query.Set("client_id", "partner")
 	query.Set("redirect_uri", "https://partner.example.com/callback")
+	query.Set("scope", "openid orders:read")
 	res, _ := b.get(issuer + "/oauth2/authorize?" + query.Encode())
 	consent, err := url.Parse(res.Header.Get("Location"))
 	if err != nil || consent.Path != "/consent" {
@@ -272,8 +279,11 @@ func TestAccountApplications(t *testing.T) {
 	}
 
 	res, page := b.get(issuer + "/account/applications")
+	// Each scope reads as on the consent page, which names the API it
+	// belongs to.
 	if res.StatusCode != http.StatusOK || !strings.Contains(page, "<strong>Partner App</strong>") ||
-		!strings.Contains(page, "Know who you are") || !strings.Contains(page, `name="client_id" value="partner"`) {
+		!strings.Contains(page, "Know who you are") || !strings.Contains(page, "<li>Use Orders (orders:read)</li>") ||
+		!strings.Contains(page, `name="client_id" value="partner"`) {
 		t.Fatalf("applications page = %d:\n%s", res.StatusCode, page)
 	}
 	res, page = b.post(issuer+"/account/applications", url.Values{"client_id": {"partner"}}, "same-origin")
