@@ -82,8 +82,8 @@ func layout(l Layout, title string) templ.Component {
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		if l.Theme != "" {
-			templ_7745c5c3_Err = templ.Raw("<style>"+l.Theme+"</style>").Render(ctx, templ_7745c5c3_Buffer)
+		if l.theme != "" {
+			templ_7745c5c3_Err = templ.Raw("<style>"+l.theme+"</style>").Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}

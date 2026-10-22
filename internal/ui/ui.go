@@ -117,8 +117,10 @@ type Layout struct {
 	Stylesheet string
 	// Text writes the page's text in its locale.
 	Text i18n.Printer
-	// Theme is the tenant's style sheet that ThemeStyle returns, or empty.
-	Theme string
+	// theme is the tenant's style sheet, which SetTheme sets, and
+	// themeSource its hash as a Content Security Policy source.
+	theme       string
+	themeSource string
 	// LogoURL is the URL of the tenant's logo, or empty, and TenantName
 	// is its text alternative.
 	LogoURL    string
@@ -164,14 +166,26 @@ func (l Layout) FormPostContentSecurityPolicy(formTarget string) string {
 	return contentSecurityPolicy("script-src '"+formPostScriptHash+"'; ", l.styleSources(), false, targets)
 }
 
+// SetTheme makes css, which ThemeStyle returns, the tenant's style sheet of
+// the page, and records its hash for the page's Content Security Policy.
+func (l *Layout) SetTheme(css string) {
+	l.theme, l.themeSource = css, ""
+	if css != "" {
+		sum := sha256.Sum256([]byte(css))
+		l.themeSource = "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+	}
+}
+
+// Theme returns the tenant's style sheet of the page, or empty.
+func (l Layout) Theme() string { return l.theme }
+
 // styleSources returns the style-src sources of a page: its own origin, and
 // the hash of the theme element when there is one.
 func (l Layout) styleSources() string {
-	if l.Theme == "" {
+	if l.themeSource == "" {
 		return "'self'"
 	}
-	sum := sha256.Sum256([]byte(l.Theme))
-	return "'self' 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+	return "'self' " + l.themeSource
 }
 
 func contentSecurityPolicy(scripts, styles string, allowSelf bool, formTargets []string) string {

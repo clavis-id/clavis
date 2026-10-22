@@ -92,7 +92,7 @@ func (s *Server) layout(r *http.Request, t tenant, l i18n.Locale) ui.Layout {
 			slog.String("route", r.Pattern), slog.String("error", err.Error()))
 		return layout
 	}
-	layout.Theme = ui.ThemeStyle(b.Theme)
+	layout.SetTheme(ui.ThemeStyle(b.Theme))
 	if name, ok := app.LogoName(b.LogoType, b.LogoHash); ok {
 		layout.LogoURL = t.path + brandingPath + name
 	}

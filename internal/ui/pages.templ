@@ -19,8 +19,8 @@ templ layout(l Layout, title string) {
 			<meta name="referrer" content="no-referrer"/>
 			<title>{ title }</title>
 			<link rel="stylesheet" href={ templ.SafeURL(l.Stylesheet) }/>
-			if l.Theme != "" {
-				@templ.Raw("<style>" + l.Theme + "</style>")
+			if l.theme != "" {
+				@templ.Raw("<style>" + l.theme + "</style>")
 			}
 		</head>
 		<body>

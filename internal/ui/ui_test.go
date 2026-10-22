@@ -334,7 +334,7 @@ func TestThemeStyle(t *testing.T) {
 func TestBrandedPage(t *testing.T) {
 	t.Parallel()
 	l := testLayout(t, i18n.English)
-	l.Theme = ThemeStyle(store.Theme{Light: store.ThemeColors{Accent: "#0b5cad"}})
+	l.SetTheme(ThemeStyle(store.Theme{Light: store.ThemeColors{Accent: "#0b5cad"}}))
 	l.LogoURL, l.TenantName = "/t/acme/branding/logo-0123456789ab.png", `Acme "Corp"`
 	var b bytes.Buffer
 	if err := SignedOut(SignedOutPage{Layout: l}).Render(t.Context(), &b); err != nil {
@@ -342,14 +342,14 @@ func TestBrandedPage(t *testing.T) {
 	}
 	page := b.String()
 	for _, want := range []string{
-		"<style>" + l.Theme + "</style>",
+		"<style>" + l.Theme() + "</style>",
 		`<img class="logo" src="/t/acme/branding/logo-0123456789ab.png" alt="Acme &#34;Corp&#34;">`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("the page does not contain %q:\n%s", want, page)
 		}
 	}
-	sum := sha256.Sum256([]byte(l.Theme))
+	sum := sha256.Sum256([]byte(l.Theme()))
 	hash := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
 	if csp := l.ContentSecurityPolicy(false); !strings.Contains(csp, "style-src 'self' "+hash+";") {
 		t.Errorf("ContentSecurityPolicy() = %q, want the theme's hash in style-src", csp)
