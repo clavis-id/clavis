@@ -3,9 +3,11 @@ package config
 import (
 	"errors"
 	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -100,6 +102,41 @@ func TestLoadListsFromFileAndEnvironment(t *testing.T) {
 	}
 }
 
+func TestTrustedProxiesAndAuditRetention(t *testing.T) {
+	t.Parallel()
+
+	path := writeFile(t, "server:\n  trusted_proxies: [10.0.0.0/8, \"2001:db8::1\"]\naudit:\n  retention: 0s\n")
+	res, err := Load(path, []string{"CLAVIS_KEYS_ENCRYPTION_KEY=" + testKey})
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	proxies, err := res.Config.Server.Proxies()
+	want := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("2001:db8::1/128")}
+	if err != nil || !slices.Equal(proxies, want) {
+		t.Errorf("Proxies() = %v, %v; want %v", proxies, err, want)
+	}
+	if res.Config.Audit.Retention != 0 {
+		t.Errorf("audit retention = %s, want 0, which keeps events forever", res.Config.Audit.Retention)
+	}
+
+	res, err = Load("", []string{"CLAVIS_KEYS_ENCRYPTION_KEY=" + testKey,
+		"CLAVIS_SERVER_TRUSTED_PROXIES=192.0.2.10, 198.51.100.0/24"})
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	proxies, err = res.Config.Server.Proxies()
+	want = []netip.Prefix{netip.MustParsePrefix("192.0.2.10/32"), netip.MustParsePrefix("198.51.100.0/24")}
+	if err != nil || !slices.Equal(proxies, want) {
+		t.Errorf("Proxies() from the environment = %v, %v; want %v", proxies, err, want)
+	}
+	if res.Config.Audit.Retention != DefaultAuditRetention {
+		t.Errorf("default audit retention = %s, want %s", res.Config.Audit.Retention, DefaultAuditRetention)
+	}
+	if _, err := (Server{TrustedProxies: []string{"fe80::1%eth0"}}).Proxies(); err == nil {
+		t.Error("Proxies() accepted an address with a zone")
+	}
+}
+
 func TestLoadFileAndEnvironment(t *testing.T) {
 	t.Parallel()
 
@@ -188,6 +225,9 @@ issuer: http://auth.example.com
 server:
   address: "8080"
   write_timeout: 0s
+  trusted_proxies: [10.0.0.0/8, proxy.internal]
+audit:
+  retention: -1h
 database:
   driver: mysql
   dsn: ""
@@ -212,6 +252,8 @@ log:
 				"issuer:",
 				"server.address:",
 				"server.write_timeout: must be positive",
+				`server.trusted_proxies: "proxy.internal" is neither a network`,
+				"audit.retention: must not be negative",
 				"database.driver:",
 				"database.dsn:",
 				"keys.encryption_key: required",
@@ -267,6 +309,7 @@ func TestEnvKeysCoverEveryField(t *testing.T) {
 		"CLAVIS_SERVER_WRITE_TIMEOUT":            "server.write_timeout",
 		"CLAVIS_SERVER_IDLE_TIMEOUT":             "server.idle_timeout",
 		"CLAVIS_SERVER_SHUTDOWN_TIMEOUT":         "server.shutdown_timeout",
+		"CLAVIS_SERVER_TRUSTED_PROXIES":          "server.trusted_proxies",
 		"CLAVIS_DATABASE_DRIVER":                 "database.driver",
 		"CLAVIS_DATABASE_DSN":                    "database.dsn",
 		"CLAVIS_DATABASE_AUTO_MIGRATE":           "database.auto_migrate",
@@ -292,6 +335,7 @@ func TestEnvKeysCoverEveryField(t *testing.T) {
 		"CLAVIS_EMAIL_SMTP_USERNAME":             "email.smtp.username",
 		"CLAVIS_EMAIL_SMTP_PASSWORD":             "email.smtp.password",
 		"CLAVIS_EMAIL_SMTP_TIMEOUT":              "email.smtp.timeout",
+		"CLAVIS_AUDIT_RETENTION":                 "audit.retention",
 		"CLAVIS_TELEMETRY_TRACING_ENABLED":       "telemetry.tracing.enabled",
 		"CLAVIS_TELEMETRY_TRACING_ENDPOINT":      "telemetry.tracing.endpoint",
 		"CLAVIS_TELEMETRY_TRACING_SAMPLE_RATIO":  "telemetry.tracing.sample_ratio",

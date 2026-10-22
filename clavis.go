@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strings"
@@ -95,6 +96,19 @@ type Config struct {
 	// through an SMTP server; email.NewConsole writes messages to the log
 	// and is for development only.
 	Email email.Sender
+
+	// TrustedProxies are the networks of the reverse proxies in front of
+	// Clavis. A request whose connection comes from one of them is from the
+	// client that its X-Forwarded-For header names, read from the right over
+	// the trusted proxies (ADR 0029). Any other request is from the address
+	// of its connection, and when TrustedProxies is empty the header is
+	// ignored. Audit events record this address.
+	TrustedProxies []netip.Prefix
+
+	// AuditRetention is how long audit events are kept (ADR 0029). The
+	// cleanup deletes older ones. Zero takes the default of 90 days; a
+	// negative value keeps them forever.
+	AuditRetention time.Duration
 }
 
 // PasswordPolicy configures password hashing (ADR 0015). Zero fields take
@@ -191,6 +205,8 @@ type Server struct {
 	tracer        trace.TracerProvider
 	meter         metric.MeterProvider
 	mailer        *mailer.Mailer // nil without Config.Email
+	proxies       []netip.Prefix
+	retention     time.Duration // of audit events; not positive keeps them
 	handler       http.Handler
 	wellKnown     http.Handler
 
@@ -228,6 +244,14 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	passwords, err := password.New(cfg.Passwords.config())
 	if err != nil {
 		return nil, fmt.Errorf("clavis: invalid Passwords: %w", err)
+	}
+	proxies, err := trustedProxies(cfg.TrustedProxies)
+	if err != nil {
+		return nil, fmt.Errorf("clavis: invalid TrustedProxies: %w", err)
+	}
+	retention := cfg.AuditRetention
+	if retention == 0 {
+		retention = app.DefaultAuditRetention
 	}
 	assets, err := ui.NewAssets()
 	if err != nil {
@@ -296,6 +320,8 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		tracer:        tracer,
 		meter:         meter,
 		mailer:        mail,
+		proxies:       proxies,
+		retention:     retention,
 		stop:          stop,
 	}
 	s.wellKnown = allowGet(s.instrument(http.MethodGet+" "+oidc.AuthorizationServerMetadataPath,
@@ -309,9 +335,10 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	return s, nil
 }
 
-// runCleanup deletes expired authorization requests, sessions and codes
-// every cleanupInterval until ctx is canceled. Instances that share a store
-// may all run it; deleting an expired record twice is harmless.
+// runCleanup deletes expired records, such as authorization requests,
+// sessions and codes, and the audit events older than the retention, every
+// cleanupInterval until ctx is canceled. Instances that share a store may
+// all run it; deleting a record twice is harmless.
 func (s *Server) runCleanup(ctx context.Context) {
 	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
@@ -324,8 +351,30 @@ func (s *Server) runCleanup(ctx context.Context) {
 				s.logger.LogAttrs(ctx, slog.LevelError, "deleting expired records failed",
 					slog.String("error", err.Error()))
 			}
+			if err := app.PurgeAuditEvents(ctx, s.deps, s.retention); err != nil && ctx.Err() == nil {
+				s.logger.LogAttrs(ctx, slog.LevelError, "deleting old audit events failed",
+					slog.String("error", err.Error()))
+			}
 		}
 	}
+}
+
+// trustedProxies validates the networks of Config.TrustedProxies and returns
+// them masked, with IPv4 networks written in IPv6 form as IPv4 networks, so
+// they compare with the unmapped addresses of clientIP.
+func trustedProxies(prefixes []netip.Prefix) ([]netip.Prefix, error) {
+	out := make([]netip.Prefix, 0, len(prefixes))
+	for _, p := range prefixes {
+		if !p.IsValid() {
+			return nil, fmt.Errorf("invalid network %q", p.String())
+		}
+		p = p.Masked()
+		if p.Addr().Is4In6() && p.Bits() >= 96 {
+			p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+		}
+		out = append(out, p)
+	}
+	return out, nil
 }
 
 // Close stops the background work started by New and waits for it to
@@ -492,6 +541,8 @@ func (s *Server) serveTenant(w http.ResponseWriter, r *http.Request, slug string
 		resolved.issuer += tenantPathPrefix + t.Slug
 		resolved.path += tenantPathPrefix + t.Slug
 	}
+	r = r.WithContext(app.WithRequest(r.Context(), app.RequestInfo{IP: clientIP(r, s.proxies),
+		UserAgent: r.UserAgent()}))
 	h(w, r, resolved)
 }
 

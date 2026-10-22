@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"reflect"
@@ -55,6 +56,8 @@ type Config struct {
 	Passwords Passwords `koanf:"passwords"`
 	// Email configures how Clavis sends email to users.
 	Email Email `koanf:"email"`
+	// Audit configures the audit log.
+	Audit Audit `koanf:"audit"`
 	// Telemetry configures traces and metrics.
 	Telemetry Telemetry `koanf:"telemetry"`
 	// Log configures structured logging.
@@ -118,7 +121,40 @@ type Server struct {
 	// ShutdownTimeout bounds how long in-flight requests may take to finish
 	// after a shutdown signal.
 	ShutdownTimeout time.Duration `koanf:"shutdown_timeout"`
+	// TrustedProxies are the networks, in CIDR notation, or the addresses of
+	// the reverse proxies in front of Clavis. Only a request from one of them
+	// is taken to come from the client that its X-Forwarded-For header
+	// names. In the environment, separate them with commas.
+	TrustedProxies []string `koanf:"trusted_proxies"`
 }
+
+// Proxies returns TrustedProxies as networks; a single address is a network
+// of its own.
+func (s Server) Proxies() ([]netip.Prefix, error) {
+	out := make([]netip.Prefix, 0, len(s.TrustedProxies))
+	for _, v := range s.TrustedProxies {
+		v = strings.TrimSpace(v)
+		if p, err := netip.ParsePrefix(v); err == nil {
+			out = append(out, p)
+			continue
+		}
+		addr, err := netip.ParseAddr(v)
+		if err != nil || addr.Zone() != "" {
+			return nil, fmt.Errorf("%q is neither a network in CIDR notation nor an IP address", v)
+		}
+		out = append(out, netip.PrefixFrom(addr, addr.BitLen()))
+	}
+	return out, nil
+}
+
+// Audit configures the audit log.
+type Audit struct {
+	// Retention is how long audit events are kept. Zero keeps them forever.
+	Retention time.Duration `koanf:"retention"`
+}
+
+// DefaultAuditRetention is the default of Audit.Retention, 90 days.
+const DefaultAuditRetention = 90 * 24 * time.Hour
 
 // Keys configures token signing keys and their encryption at rest.
 type Keys struct {
@@ -334,6 +370,7 @@ func Default() Config {
 		Email: Email{
 			SMTP: SMTP{TLS: string(email.TLSStartTLS), Timeout: email.DefaultSMTPTimeout},
 		},
+		Audit: Audit{Retention: DefaultAuditRetention},
 		Telemetry: Telemetry{
 			Tracing: Tracing{SampleRatio: 1},
 			Metrics: Metrics{Address: "127.0.0.1:9464"},
@@ -487,6 +524,12 @@ func (c Config) Validate() error {
 		if d <= 0 {
 			errs = append(errs, fmt.Errorf("%s: must be positive, got %s", name, d))
 		}
+	}
+	if _, err := c.Server.Proxies(); err != nil {
+		errs = append(errs, fmt.Errorf("server.trusted_proxies: %w", err))
+	}
+	if c.Audit.Retention < 0 {
+		errs = append(errs, fmt.Errorf("audit.retention: must not be negative, got %s", c.Audit.Retention))
 	}
 	errs = append(errs, c.Keys.validate()...)
 	errs = append(errs, c.Passwords.validate()...)
