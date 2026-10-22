@@ -61,6 +61,7 @@ func SignInToAccount(ctx context.Context, d Deps, h PasswordHasher, tenantID uui
 ) (Login, error) {
 	u, setAt, err := authenticatePassword(ctx, d, h, tenantID, email, pw)
 	if err != nil {
+		auditSignInFailure(ctx, d, tenantID, u, "", err)
 		return Login{}, err
 	}
 	session, token, err := startSession(ctx, d, tenantID, d.NewID(), u.ID, previousSession)
@@ -69,12 +70,14 @@ func SignInToAccount(ctx context.Context, d Deps, h PasswordHasher, tenantID uui
 	}
 	login := Login{SessionToken: token, SessionExpiresAt: session.ExpiresAt, sessionID: session.ID}
 	if err := confirmPassword(ctx, d, tenantID, u, setAt, login); err != nil {
+		auditSignInFailure(ctx, d, tenantID, u, "", err)
 		return Login{}, err
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "user signed in to the account pages",
 		slog.String("tenant_id", tenantID.String()),
 		slog.String("user_id", u.ID.String()),
 		slog.String("session_id", session.ID.String()))
+	auditSignIn(ctx, d, tenantID, u.ID, "", session.ID)
 	return login, nil
 }
 
@@ -91,6 +94,8 @@ func SignOutOfAccount(ctx context.Context, d Deps, a Account) error {
 		slog.String("session_id", a.Session.ID.String()),
 		slog.Int64("deleted_authorization_codes", codes),
 		slog.Int64("revoked_access_tokens", tokens))
+	audit(ctx, d, store.AuditEvent{TenantID: a.Session.TenantID, Type: EventSignedOut, Actor: store.ActorUser,
+		UserID: a.User.ID, SessionID: a.Session.ID})
 	return nil
 }
 
@@ -101,6 +106,11 @@ func SignOutOfAccount(ctx context.Context, d Deps, a Account) error {
 // one outside the policy an error that wraps password.ErrPolicy.
 func ChangePassword(ctx context.Context, d Deps, h PasswordHasher, a Account, current, next string) error {
 	if _, _, err := authenticatePassword(ctx, d, h, a.User.TenantID, a.User.Email, current); err != nil {
+		if reason := failureReason(err); reason != "" {
+			audit(ctx, d, store.AuditEvent{TenantID: a.User.TenantID, Type: EventPasswordChangeFailed,
+				Actor: store.ActorUser, UserID: a.User.ID, SessionID: a.Session.ID,
+				Details: map[string]string{"reason": reason}})
+		}
 		return err
 	}
 	if err := h.CheckNew(next); err != nil {
@@ -120,5 +130,7 @@ func ChangePassword(ctx context.Context, d Deps, h PasswordHasher, a Account, cu
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "user changed the password",
 		slog.String("tenant_id", u.TenantID.String()), slog.String("user_id", u.ID.String()))
+	audit(ctx, d, store.AuditEvent{TenantID: u.TenantID, Type: EventPasswordChanged, Actor: store.ActorUser,
+		UserID: u.ID, SessionID: a.Session.ID, Details: map[string]string{"how": "account"}})
 	return endUserAccess(ctx, d, u, a.Session.ID)
 }

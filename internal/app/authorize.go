@@ -507,6 +507,7 @@ func CompletePasswordLogin(ctx context.Context, d Deps, h PasswordHasher, t Auth
 	}
 	u, setAt, err := authenticatePassword(ctx, d, h, t.ID, email, pw)
 	if err != nil {
+		auditSignInFailure(ctx, d, t.ID, u, p.Client.ClientID, err)
 		return Login{}, err
 	}
 	login, err := signIn(ctx, d, t, p, u, previousSession)
@@ -514,8 +515,10 @@ func CompletePasswordLogin(ctx context.Context, d Deps, h PasswordHasher, t Auth
 		return Login{}, err
 	}
 	if err := confirmPassword(ctx, d, t.ID, u, setAt, login); err != nil {
+		auditSignInFailure(ctx, d, t.ID, u, p.Client.ClientID, err)
 		return Login{}, err
 	}
+	auditSignIn(ctx, d, t.ID, u.ID, p.Client.ClientID, login.sessionID)
 	return login, nil
 }
 
@@ -698,6 +701,8 @@ func replaceSession(ctx context.Context, d Deps, tenantID uuid.UUID, tokenHash [
 			slog.String("session_id", s.ID.String()),
 			slog.Int64("deleted_authorization_codes", codes),
 			slog.Int64("revoked_access_tokens", tokens))
+		audit(ctx, d, store.AuditEvent{TenantID: tenantID, Type: EventSignedOut, Actor: store.ActorAnonymous,
+			UserID: s.UserID, SessionID: s.ID, Details: map[string]string{"reason": "another_user_signed_in"}})
 		return nil
 	}
 	// The session goes first, so no new code comes from it.

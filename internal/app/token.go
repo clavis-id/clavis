@@ -110,7 +110,7 @@ func ExchangeCode(ctx context.Context, d Deps, signer TokenSigner, t Authorizati
 	case code.ClientID != client.ID:
 		return TokenResponse{}, invalid("the code was issued to another client")
 	case !code.RedeemedAt.IsZero():
-		return TokenResponse{}, codeReused(ctx, d, t, client, hash)
+		return TokenResponse{}, codeReused(ctx, d, t, client, code)
 	case !d.Now().Before(code.ExpiresAt):
 		return TokenResponse{}, invalid("the code is invalid or expired")
 	// OAuth 2.1, section 4.1.3: redirect_uri must match when the
@@ -159,7 +159,7 @@ func ExchangeCode(ctx context.Context, d Deps, signer TokenSigner, t Authorizati
 	// replay that finds the code redeemed revokes them all.
 	switch err := d.Store.AuthorizationCodes().Redeem(ctx, t.ID, hash, d.Now()); {
 	case errors.Is(err, store.ErrConflict):
-		return TokenResponse{}, codeReused(ctx, d, t, client, hash)
+		return TokenResponse{}, codeReused(ctx, d, t, client, code)
 	case errors.Is(err, store.ErrNotFound):
 		return TokenResponse{}, invalid("the code is invalid or expired")
 	case err != nil:
@@ -196,8 +196,9 @@ func idTokenUserClaims(u store.User, names []string) map[string]any {
 
 // codeReused revokes the tokens issued for a code that is presented again,
 // refresh token families first, and returns the error for the request.
-func codeReused(ctx context.Context, d Deps, t AuthorizationTenant, client store.Client, hash []byte) error {
-	now := d.Now()
+func codeReused(ctx context.Context, d Deps, t AuthorizationTenant, client store.Client, code store.AuthorizationCode,
+) error {
+	hash, now := code.Hash, d.Now()
 	families, err := d.Store.RefreshTokens().RevokeByCode(ctx, t.ID, hash, now)
 	if err != nil {
 		return fmt.Errorf("revoking the refresh tokens of a reused code: %w", err)
@@ -211,6 +212,8 @@ func codeReused(ctx context.Context, d Deps, t AuthorizationTenant, client store
 		slog.String("client_id", client.ClientID),
 		slog.Int64("revoked_refresh_token_families", families),
 		slog.Int64("revoked_access_tokens", tokens))
+	audit(ctx, d, store.AuditEvent{TenantID: t.ID, Type: EventCodeReplayed, Actor: store.ActorClient,
+		UserID: code.UserID, ClientID: client.ClientID, SessionID: code.SessionID})
 	return &oauth.Error{Code: oauth.ErrorInvalidGrant, Description: "the code was used already"}
 }
 
@@ -396,6 +399,9 @@ func refreshTokenReused(ctx context.Context, d Deps, t AuthorizationTenant, clie
 		slog.String("user_id", family.UserID.String()),
 		slog.String("refresh_token_family", family.ID.String()),
 		slog.Int64("revoked_access_tokens", tokens))
+	audit(ctx, d, store.AuditEvent{TenantID: t.ID, Type: EventRefreshTokenReused, Actor: store.ActorClient,
+		UserID: family.UserID, ClientID: client.ClientID, SessionID: family.SessionID,
+		Details: map[string]string{"refresh_token_family": family.ID.String()}})
 	return &oauth.Error{Code: oauth.ErrorInvalidGrant, Description: "the refresh token was used already"}
 }
 

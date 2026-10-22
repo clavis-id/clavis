@@ -304,7 +304,7 @@ func CompleteSignup(ctx context.Context, d Deps, h PasswordHasher, t Authorizati
 	case err != nil:
 		return Signup{}, fmt.Errorf("completing the email verification: %w", err)
 	}
-	u, err := CreateUser(ctx, d, t.ID, UserSpec{Email: v.Email, EmailVerified: true})
+	u, err := createUser(ctx, d, t.ID, UserSpec{Email: v.Email, EmailVerified: true}, store.ActorUser)
 	if err != nil {
 		return Signup{}, err
 	}
@@ -319,6 +319,7 @@ func CompleteSignup(ctx context.Context, d Deps, h PasswordHasher, t Authorizati
 		login, err := signIn(ctx, d, t, *p, u, previousSession)
 		switch {
 		case err == nil:
+			auditSignIn(ctx, d, t.ID, u.ID, p.Client.ClientID, login.sessionID)
 			return Signup{Login: login, Request: true}, nil
 		case !errors.Is(err, ErrAuthorizationRequestNotFound):
 			return Signup{}, err
@@ -334,5 +335,6 @@ func CompleteSignup(ctx context.Context, d Deps, h PasswordHasher, t Authorizati
 		slog.String("tenant_id", t.ID.String()),
 		slog.String("user_id", u.ID.String()),
 		slog.String("session_id", session.ID.String()))
+	auditSignIn(ctx, d, t.ID, u.ID, "", session.ID)
 	return Signup{Login: Login{SessionToken: token, SessionExpiresAt: session.ExpiresAt}}, nil
 }

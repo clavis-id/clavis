@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"time"
 	"uuid"
 
@@ -111,6 +112,14 @@ func CreateClient(ctx context.Context, d Deps, tenantID uuid.UUID, spec ClientSp
 	} else {
 		d.Logger.LogAttrs(ctx, slog.LevelInfo, "created client", attrs...)
 	}
+	// ADR 0018: the exemption from PKCE that a client is created with is
+	// audited.
+	audit(ctx, d, store.AuditEvent{TenantID: tenantID, Type: EventClientCreated, Actor: store.ActorOperator,
+		ClientID: c.ClientID, Details: map[string]string{
+			"type":         string(c.Type),
+			"pkce_exempt":  strconv.FormatBool(c.PKCEExempt),
+			"skip_consent": strconv.FormatBool(c.SkipConsent),
+		}})
 	return c, secret, nil
 }
 
@@ -346,6 +355,8 @@ func RotateClientSecret(ctx context.Context, d Deps, tenantID uuid.UUID, clientI
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "rotated client secret",
 		slog.String("tenant_id", tenantID.String()), slog.String("client_id", c.ClientID))
+	audit(ctx, d, store.AuditEvent{TenantID: tenantID, Type: EventClientSecretRotated, Actor: store.ActorOperator,
+		ClientID: c.ClientID})
 	return secret, nil
 }
 
@@ -363,5 +374,7 @@ func DeleteClient(ctx context.Context, d Deps, tenantID uuid.UUID, clientID stri
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "deleted client",
 		slog.String("tenant_id", tenantID.String()), slog.String("client_id", c.ClientID))
+	audit(ctx, d, store.AuditEvent{TenantID: tenantID, Type: EventClientDeleted, Actor: store.ActorOperator,
+		ClientID: c.ClientID})
 	return nil
 }

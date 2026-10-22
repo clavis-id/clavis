@@ -135,6 +135,8 @@ func CompletePasswordReset(ctx context.Context, d Deps, h PasswordHasher, v stor
 	case err != nil:
 		return store.User{}, fmt.Errorf("storing password: %w", err)
 	}
+	audit(ctx, d, store.AuditEvent{TenantID: u.TenantID, Type: EventPasswordChanged, Actor: store.ActorUser,
+		UserID: u.ID, Details: map[string]string{"how": "reset"}})
 	if !u.EmailVerified {
 		u.EmailVerified, u.UpdatedAt = true, now
 		if err := d.Store.Users().Update(ctx, u); err != nil {

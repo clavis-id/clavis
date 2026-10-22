@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"unicode"
 	"unicode/utf8"
 	"uuid"
@@ -242,5 +243,14 @@ func UpdateTenant(ctx context.Context, d Deps, slug string, c TenantChanges) (st
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "updated tenant",
 		slog.String("tenant_id", t.ID.String()), slog.String("tenant", t.Slug),
 		slog.Bool("signup_enabled", t.SignupEnabled))
+	details := make(map[string]string)
+	if c.Name != nil {
+		details["name"] = t.Name
+	}
+	if c.SignupEnabled != nil {
+		details["signup_enabled"] = strconv.FormatBool(t.SignupEnabled)
+	}
+	audit(ctx, d, store.AuditEvent{TenantID: t.ID, Type: EventTenantUpdated, Actor: store.ActorOperator,
+		Details: details})
 	return t, nil
 }

@@ -105,8 +105,15 @@ type UserSpec struct {
 	FamilyName string
 }
 
-// CreateUser creates an active user without credentials.
+// CreateUser creates an active user without credentials, as an operator
+// does.
 func CreateUser(ctx context.Context, d Deps, tenantID uuid.UUID, spec UserSpec) (store.User, error) {
+	return createUser(ctx, d, tenantID, spec, store.ActorOperator)
+}
+
+// createUser is CreateUser, with the actor of its audit event.
+func createUser(ctx context.Context, d Deps, tenantID uuid.UUID, spec UserSpec, actor store.AuditActor,
+) (store.User, error) {
 	email, err := NormalizeEmail(spec.Email)
 	if err != nil {
 		return store.User{}, err
@@ -142,6 +149,7 @@ func CreateUser(ctx context.Context, d Deps, tenantID uuid.UUID, spec UserSpec) 
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "created user",
 		slog.String("tenant_id", tenantID.String()), slog.String("user_id", u.ID.String()))
+	audit(ctx, d, store.AuditEvent{TenantID: tenantID, Type: EventUserCreated, Actor: actor, UserID: u.ID})
 	return u, nil
 }
 
@@ -194,6 +202,8 @@ func DeleteUser(ctx context.Context, d Deps, tenantID uuid.UUID, email string) e
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "deleted user",
 		slog.String("tenant_id", tenantID.String()), slog.String("user_id", u.ID.String()))
+	audit(ctx, d, store.AuditEvent{TenantID: tenantID, Type: EventUserDeleted, Actor: store.ActorOperator,
+		UserID: u.ID})
 	return nil
 }
 
@@ -218,6 +228,8 @@ func SetPassword(ctx context.Context, d Deps, h PasswordHasher, u store.User, pw
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "set password",
 		slog.String("tenant_id", u.TenantID.String()), slog.String("user_id", u.ID.String()))
+	audit(ctx, d, store.AuditEvent{TenantID: u.TenantID, Type: EventPasswordChanged, Actor: store.ActorOperator,
+		UserID: u.ID, Details: map[string]string{"how": "operator"}})
 	return endUserAccess(ctx, d, u, uuid.Nil())
 }
 
@@ -266,11 +278,16 @@ func AuthenticatePassword(ctx context.Context, d Deps, h PasswordHasher, tenantI
 	email, pw string,
 ) (store.User, error) {
 	u, _, err := authenticatePassword(ctx, d, h, tenantID, email, pw)
-	return u, err
+	if err != nil {
+		return store.User{}, err
+	}
+	return u, nil
 }
 
 // authenticatePassword is AuthenticatePassword, and also returns when the
-// password that matched was set.
+// password that matched was set. On ErrInvalidCredentials and
+// ErrUserDisabled it returns the user that the address names, if any, for
+// the audit event of the failure, which the caller must not reveal.
 func authenticatePassword(ctx context.Context, d Deps, h PasswordHasher, tenantID uuid.UUID,
 	email, pw string,
 ) (store.User, time.Time, error) {
@@ -289,7 +306,7 @@ func authenticatePassword(ctx context.Context, d Deps, h PasswordHasher, tenantI
 	}
 	stored, err := d.Store.Passwords().Get(ctx, tenantID, u.ID)
 	if errors.Is(err, store.ErrNotFound) {
-		return store.User{}, time.Time{}, failLogin(ctx, h, pw)
+		return u, time.Time{}, failLogin(ctx, h, pw)
 	}
 	if err != nil {
 		return store.User{}, time.Time{}, fmt.Errorf("looking up password: %w", err)
@@ -302,13 +319,13 @@ func authenticatePassword(ctx context.Context, d Deps, h PasswordHasher, tenantI
 		d.Logger.LogAttrs(ctx, slog.LevelWarn, "cannot verify the password hash of a user; the user must reset "+
 			"the password", slog.String("tenant_id", tenantID.String()), slog.String("user_id", u.ID.String()),
 			slog.String("error", err.Error()))
-		return store.User{}, time.Time{}, ErrInvalidCredentials
+		return u, time.Time{}, ErrInvalidCredentials
 	case err != nil:
 		return store.User{}, time.Time{}, fmt.Errorf("verifying password: %w", err)
 	case !v.Match:
-		return store.User{}, time.Time{}, ErrInvalidCredentials
+		return u, time.Time{}, ErrInvalidCredentials
 	case u.Status != store.UserActive:
-		return store.User{}, time.Time{}, ErrUserDisabled
+		return u, time.Time{}, ErrUserDisabled
 	}
 	if v.Rehash {
 		rehash(ctx, d, h, u, stored.Hash, pw, v.Algorithm)
