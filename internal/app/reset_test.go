@@ -2,10 +2,12 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 	"uuid"
 
 	"clavisid.org/clavis/internal/authn/password"
@@ -221,5 +223,56 @@ func TestResetMessageInEveryLocale(t *testing.T) {
 		if !strings.Contains(msg.HTML, `<html lang="`+string(locale)+`">`) || !strings.Contains(msg.Text, "123456") {
 			t.Errorf("%s: message = %+v", locale, msg)
 		}
+	}
+}
+
+// pausingHasher pauses every verification until the test lets it go.
+type pausingHasher struct {
+	*fakeHasher
+	verified, resume chan struct{}
+}
+
+func (h pausingHasher) Verify(ctx context.Context, encoded, pw string) (password.Verification, error) {
+	v, err := h.fakeHasher.Verify(ctx, encoded, pw)
+	h.verified <- struct{}{}
+	<-h.resume
+	return v, err
+}
+
+// ADR 0027: a sign-in that verified the old password before a password
+// change ends without a session or a code, even though it stores them after
+// the change ended every other session.
+func TestSignInDuringAPasswordChange(t *testing.T) {
+	t.Parallel()
+	f := newAuthzFixture(t)
+	p := f.start(t, webRequest())
+	h := pausingHasher{fakeHasher: f.h, verified: make(chan struct{}), resume: make(chan struct{})}
+	done := make(chan error)
+	go func() {
+		_, err := CompletePasswordLogin(t.Context(), f.d, h, f.tenant, p, "ada@example.com", "correct horse", nil)
+		done <- err
+	}()
+	<-h.verified
+	*f.now = f.now.Add(time.Minute)
+	if err := SetPassword(t.Context(), f.d, f.h, f.user, "new horse battery"); err != nil {
+		t.Fatalf("SetPassword() unexpected error: %v", err)
+	}
+	close(h.resume)
+	if err := <-done; !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("a sign-in with the old password across the change = %v, want ErrInvalidCredentials", err)
+	}
+	if n, err := f.d.Store.Sessions().DeleteByUser(t.Context(), f.tenant.ID, f.user.ID, uuid.Nil()); err != nil || n != 0 {
+		t.Errorf("sessions of the user after the change = %d, %v; want none", n, err)
+	}
+	if n, err := f.d.Store.AuthorizationCodes().DeleteByUser(t.Context(), f.tenant.ID, f.user.ID); err != nil || n != 0 {
+		t.Errorf("codes of the user after the change = %d, %v; want none", n, err)
+	}
+
+	// A rehash on sign-in replaces the hash but not the password: the
+	// session stays.
+	f.h.rehash = true
+	if _, err := CompletePasswordLogin(t.Context(), f.d, f.h, f.tenant, f.start(t, webRequest()), "ada@example.com",
+		"new horse battery", nil); err != nil {
+		t.Errorf("a sign-in that rehashes the password = %v, want nil", err)
 	}
 }

@@ -482,6 +482,8 @@ type Login struct {
 	// SessionExpiresAt.
 	SessionToken     string
 	SessionExpiresAt time.Time
+	// sessionID identifies the new session.
+	sessionID uuid.UUID
 }
 
 // CompletePasswordLogin signs a user in with a password and answers the
@@ -496,11 +498,43 @@ func CompletePasswordLogin(ctx context.Context, d Deps, h PasswordHasher, t Auth
 		// A user signed in for the request already; it waits for consent.
 		return Login{}, ErrAuthorizationRequestNotFound
 	}
-	u, err := AuthenticatePassword(ctx, d, h, t.ID, email, pw)
+	u, setAt, err := authenticatePassword(ctx, d, h, t.ID, email, pw)
 	if err != nil {
 		return Login{}, err
 	}
-	return signIn(ctx, d, t, p, u, previousSession)
+	login, err := signIn(ctx, d, t, p, u, previousSession)
+	if err != nil {
+		return Login{}, err
+	}
+	if err := confirmPassword(ctx, d, t.ID, u, setAt, login); err != nil {
+		return Login{}, err
+	}
+	return login, nil
+}
+
+// confirmPassword checks that the password of user u is still the one set at
+// setAt, which a sign-in verified before it started the session of login. A
+// password change in the meantime ended every session that existed then
+// (ADR 0027), and this session must not outlive it: confirmPassword ends it,
+// with the codes issued in it, and returns ErrInvalidCredentials. Whatever
+// the order of the two, the session ends: either the change finds it, or
+// this check finds the change.
+func confirmPassword(ctx context.Context, d Deps, tenantID uuid.UUID, u store.User, setAt time.Time, login Login,
+) error {
+	current, err := d.Store.Passwords().Get(ctx, tenantID, u.ID)
+	switch {
+	case err == nil && current.SetAt.Equal(setAt):
+		return nil
+	case err != nil && !errors.Is(err, store.ErrNotFound):
+		return fmt.Errorf("looking up password: %w", err)
+	}
+	if _, _, err := endSession(ctx, d, tenantID, store.Session{ID: login.sessionID}); err != nil {
+		return err
+	}
+	d.Logger.LogAttrs(ctx, slog.LevelWarn, "the password changed during a sign-in; ended the new session",
+		slog.String("tenant_id", tenantID.String()), slog.String("user_id", u.ID.String()),
+		slog.String("session_id", login.sessionID.String()))
+	return ErrInvalidCredentials
 }
 
 // signIn starts a session of user u, who has just authenticated with a
@@ -550,7 +584,7 @@ func signIn(ctx context.Context, d Deps, t AuthorizationTenant, p PendingAuthori
 		slog.String("client_id", p.Client.ClientID),
 		slog.String("session_id", session.ID.String()))
 
-	login := Login{SessionToken: token, SessionExpiresAt: session.ExpiresAt, Consent: consent}
+	login := Login{SessionToken: token, SessionExpiresAt: session.ExpiresAt, Consent: consent, sessionID: session.ID}
 	switch {
 	case otherUser:
 		login.Response = errorResponse(r.RedirectURI, r.ResponseMode, t.Issuer, r.State, &oauth.Error{
