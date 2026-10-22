@@ -46,7 +46,7 @@ func (s *Server) handleReset(w http.ResponseWriter, r *http.Request, t tenant) {
 		return
 	}
 	l := s.locale(w, r, "", p.Request.UILocales)
-	id, err := app.StartPasswordReset(r.Context(), s.deps, t.authorizationTenant(), p, form.Get("email"),
+	id, err := app.StartPasswordReset(r.Context(), s.deps, t.authorizationTenant(), &p, form.Get("email"),
 		bindingHash(r), s.catalogs.Printer(l), t.issuer+resetVerifyPath)
 	switch {
 	case errors.Is(err, app.ErrInvalidEmail):

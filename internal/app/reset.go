@@ -19,7 +19,8 @@ import (
 var ErrResetUnavailable = errors.New("password reset is not available")
 
 // StartPasswordReset begins the reset of the password of the account of the
-// address that the user typed, for the authorization request p (ADR 0027).
+// address that the user typed, for the authorization request p, or for the
+// account pages when p is nil (ADR 0027, ADR 0028).
 // It stores an email verification bound to the browser whose binding cookie
 // hashes to bindingHash and renders a message with a code and a link to
 // verifyURL, in the locale of text, whatever the address. It queues the
@@ -27,15 +28,19 @@ var ErrResetUnavailable = errors.New("password reset is not available")
 // same work otherwise and return a verification ID, so nothing that reaches
 // the browser tells them apart. A malformed address returns an error that
 // wraps ErrInvalidEmail.
-func StartPasswordReset(ctx context.Context, d Deps, t AuthorizationTenant, p PendingAuthorization, address string,
+func StartPasswordReset(ctx context.Context, d Deps, t AuthorizationTenant, p *PendingAuthorization, address string,
 	bindingHash []byte, text i18n.Printer, verifyURL string,
 ) (string, error) {
 	switch {
 	case d.Mail == nil:
 		return "", ErrResetUnavailable
-	case p.Request.SessionID != uuid.Nil():
+	case p != nil && p.Request.SessionID != uuid.Nil():
 		// A user signed in for the request already; it waits for consent.
 		return "", ErrAuthorizationRequestNotFound
+	}
+	var requestID, client string
+	if p != nil {
+		requestID, client = p.Request.ID, p.Client.Name
 	}
 	email, err := NormalizeEmail(address)
 	if err != nil {
@@ -46,12 +51,12 @@ func StartPasswordReset(ctx context.Context, d Deps, t AuthorizationTenant, p Pe
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return "", fmt.Errorf("looking up user: %w", err)
 	}
-	v, code, link, err := startVerification(ctx, d, t.ID, store.VerifyPasswordReset, email, bindingHash, p.Request.ID,
+	v, code, link, err := startVerification(ctx, d, t.ID, store.VerifyPasswordReset, email, bindingHash, requestID,
 		verifyURL)
 	if err != nil {
 		return "", err
 	}
-	msg, err := emailtmpl.Render(ctx, email, resetMessage(text, p.Client.Name, code, link))
+	msg, err := emailtmpl.Render(ctx, email, resetMessage(text, client, code, link))
 	if err != nil {
 		return "", fmt.Errorf("rendering the password reset message: %w", err)
 	}
@@ -67,13 +72,18 @@ func StartPasswordReset(ctx context.Context, d Deps, t AuthorizationTenant, p Pe
 	return v.ID, nil
 }
 
-// resetMessage returns the message that StartPasswordReset sends.
+// resetMessage returns the message that StartPasswordReset sends, which
+// names the application that the user signs in to, unless client is empty.
 func resetMessage(text i18n.Printer, client, code, link string) emailtmpl.Content {
 	minutes := strconv.Itoa(int(EmailVerificationLifetime / time.Minute))
+	body := text.T(i18n.EmailResetBody, "client", client, "minutes", minutes)
+	if client == "" {
+		body = text.T(i18n.EmailResetAccountBody, "minutes", minutes)
+	}
 	return emailtmpl.Content{
 		Locale:     text.Locale(),
 		Subject:    text.T(i18n.EmailResetSubject),
-		Paragraphs: []string{text.T(i18n.EmailResetBody, "client", client, "minutes", minutes)},
+		Paragraphs: []string{body},
 		Code:       code,
 		LinkURL:    link,
 		LinkText:   text.T(i18n.EmailResetLink),

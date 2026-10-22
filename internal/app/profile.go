@@ -1,0 +1,195 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/url"
+	"regexp"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"golang.org/x/text/language"
+
+	"clavisid.org/clavis/store"
+)
+
+// ErrInvalidProfile reports a profile that cannot be stored. Errors that wrap
+// it are a *ProfileError, which names the claim.
+var ErrInvalidProfile = errors.New("invalid profile")
+
+// ProfileKind is the kind of value that a profile claim holds.
+type ProfileKind string
+
+// Kinds of profile values (OpenID Connect Core 1.0, section 5.1).
+const (
+	// ProfileText is one line of up to MaxNameLength characters.
+	ProfileText ProfileKind = "text"
+	// ProfileLines is up to MaxProfileLinesLength characters, on several lines.
+	ProfileLines ProfileKind = "lines"
+	// ProfileURL is an absolute https or http URL.
+	ProfileURL ProfileKind = "url"
+	// ProfileDate is a date as YYYY-MM-DD, where the year may be 0000, or a
+	// year alone as YYYY.
+	ProfileDate ProfileKind = "date"
+	// ProfileTimeZone is the name of a zone of the IANA time zone database,
+	// such as America/Santiago.
+	ProfileTimeZone ProfileKind = "time_zone"
+	// ProfileLanguage is a BCP 47 language tag, such as es-CL.
+	ProfileLanguage ProfileKind = "language"
+	// ProfilePhone is a phone number in E.164 form, such as +56912345678,
+	// with an optional extension.
+	ProfilePhone ProfileKind = "phone"
+)
+
+// ProfileError names an invalid claim of a profile and the kind of value it
+// needs.
+type ProfileError struct {
+	// Claim is the name of the claim, such as website or
+	// address.postal_code.
+	Claim string
+	Kind  ProfileKind
+}
+
+func (e *ProfileError) Error() string {
+	return fmt.Sprintf("invalid profile: %s must be a value of kind %s", e.Claim, e.Kind)
+}
+
+func (e *ProfileError) Unwrap() error { return ErrInvalidProfile }
+
+// MaxProfileLinesLength bounds a profile value of kind ProfileLines, in
+// characters.
+const MaxProfileLinesLength = 500
+
+// Bounds of the other profile values, in bytes.
+const (
+	maxURLLength      = 2048
+	maxTimeZoneLength = 64
+	maxLanguageLength = 35
+)
+
+var (
+	timeZonePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9][A-Za-z0-9_+-]*){0,2}$`)
+	phonePattern    = regexp.MustCompile(`^\+[1-9]\d{1,14}(;ext=\d{1,10})?$`)
+	yearPattern     = regexp.MustCompile(`^\d{4}$`)
+)
+
+// NormalizeProfile checks a profile that a user edits and returns it as it
+// is stored: surrounding spaces removed, line breaks as \n, the language tag
+// in its canonical form and the phone number without the spaces, hyphens,
+// dots and parentheses that people use to group digits. Empty values are
+// unset. Every value is bounded and holds no control characters other than
+// line breaks where lines are allowed, which also keeps U+0000 out of the
+// store. phone_number_verified passes through; UpdateProfile decides it.
+func NormalizeProfile(p store.Profile) (store.Profile, error) {
+	var errs []error
+	check := func(claim string, value *string, kind ProfileKind) {
+		normalized, ok := normalizeClaim(*value, kind)
+		if !ok {
+			errs = append(errs, &ProfileError{Claim: claim, Kind: kind})
+			return
+		}
+		*value = normalized
+	}
+	check("name", &p.Name, ProfileText)
+	check("given_name", &p.GivenName, ProfileText)
+	check("family_name", &p.FamilyName, ProfileText)
+	check("middle_name", &p.MiddleName, ProfileText)
+	check("nickname", &p.Nickname, ProfileText)
+	check("preferred_username", &p.PreferredUsername, ProfileText)
+	check("profile", &p.ProfileURL, ProfileURL)
+	check("picture", &p.Picture, ProfileURL)
+	check("website", &p.Website, ProfileURL)
+	check("gender", &p.Gender, ProfileText)
+	check("birthdate", &p.Birthdate, ProfileDate)
+	check("zoneinfo", &p.Zoneinfo, ProfileTimeZone)
+	check("locale", &p.Locale, ProfileLanguage)
+	check("phone_number", &p.PhoneNumber, ProfilePhone)
+	check("address.formatted", &p.Address.Formatted, ProfileLines)
+	check("address.street_address", &p.Address.StreetAddress, ProfileLines)
+	check("address.locality", &p.Address.Locality, ProfileText)
+	check("address.region", &p.Address.Region, ProfileText)
+	check("address.postal_code", &p.Address.PostalCode, ProfileText)
+	check("address.country", &p.Address.Country, ProfileText)
+	if err := errors.Join(errs...); err != nil {
+		return store.Profile{}, err
+	}
+	return p, nil
+}
+
+// normalizeClaim returns value as it is stored for a claim of the given kind,
+// and whether it is valid. An empty value is valid.
+func normalizeClaim(value string, kind ProfileKind) (string, bool) {
+	if kind == ProfileLines {
+		value = strings.ReplaceAll(value, "\r\n", "\n")
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", true
+	}
+	if !utf8.ValidString(value) {
+		return "", false
+	}
+	for _, r := range value {
+		if r == '\n' && kind == ProfileLines {
+			continue
+		}
+		if unicode.In(r, unicode.Cc, unicode.Bidi_Control, unicode.Zl, unicode.Zp) {
+			return "", false
+		}
+	}
+	switch kind {
+	case ProfileText:
+		return value, utf8.RuneCountInString(value) <= MaxNameLength
+	case ProfileLines:
+		return value, utf8.RuneCountInString(value) <= MaxProfileLinesLength
+	case ProfileURL:
+		u, err := url.Parse(value)
+		return value, len(value) <= maxURLLength && err == nil && (u.Scheme == "https" || u.Scheme == "http") &&
+			u.Host != ""
+	case ProfileDate:
+		if yearPattern.MatchString(value) {
+			return value, value != "0000"
+		}
+		_, err := time.Parse(time.DateOnly, value)
+		return value, err == nil
+	case ProfileTimeZone:
+		return value, len(value) <= maxTimeZoneLength && timeZonePattern.MatchString(value)
+	case ProfileLanguage:
+		tag, err := language.Parse(value)
+		return tag.String(), err == nil && len(value) <= maxLanguageLength
+	case ProfilePhone:
+		value = strings.Map(func(r rune) rune {
+			if strings.ContainsRune(" -.()", r) {
+				return -1
+			}
+			return r
+		}, value)
+		return value, phonePattern.MatchString(value)
+	}
+	return "", false
+}
+
+// UpdateProfile replaces the profile of user u with p after NormalizeProfile
+// and returns the updated user. The phone number stays verified only while
+// it does not change; the email address is not part of the profile.
+func UpdateProfile(ctx context.Context, d Deps, u store.User, p store.Profile) (store.User, error) {
+	normalized, err := NormalizeProfile(p)
+	if err != nil {
+		return store.User{}, err
+	}
+	normalized.PhoneNumberVerified = u.Profile.PhoneNumberVerified && normalized.PhoneNumber == u.Profile.PhoneNumber
+	u.Profile, u.UpdatedAt = normalized, d.Now()
+	switch err := d.Store.Users().Update(ctx, u); {
+	case errors.Is(err, store.ErrNotFound):
+		return store.User{}, fmt.Errorf("%w: %s", ErrUserNotFound, u.Email)
+	case err != nil:
+		return store.User{}, fmt.Errorf("updating the profile: %w", err)
+	}
+	d.Logger.LogAttrs(ctx, slog.LevelInfo, "user updated the profile",
+		slog.String("tenant_id", u.TenantID.String()), slog.String("user_id", u.ID.String()))
+	return u, nil
+}
