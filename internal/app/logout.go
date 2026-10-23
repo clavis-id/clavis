@@ -218,5 +218,7 @@ func CompleteLogout(ctx context.Context, d Deps, signer TokenSigner, t Authoriza
 		attrs = append(attrs, slog.String("client_id", l.Client.ClientID))
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "user signed out", attrs...)
+	audit(ctx, d, store.AuditEvent{TenantID: t.ID, Type: EventSignedOut, Actor: store.ActorUser,
+		UserID: s.UserID, ClientID: l.Client.ClientID, SessionID: s.ID})
 	return l, nil
 }

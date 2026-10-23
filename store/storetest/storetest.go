@@ -96,6 +96,10 @@ func Run(t *testing.T, open OpenFunc) {
 		t.Parallel()
 		runUserRecords(t, open)
 	})
+	t.Run("AuditEvents", func(t *testing.T) {
+		t.Parallel()
+		runAuditEvents(t, open)
+	})
 }
 
 func runTenants(t *testing.T, open OpenFunc) {

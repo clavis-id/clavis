@@ -86,38 +86,53 @@ var (
 // store. phone_number_verified passes through; UpdateProfile decides it.
 func NormalizeProfile(p store.Profile) (store.Profile, error) {
 	var errs []error
-	check := func(claim string, value *string, kind ProfileKind) {
-		normalized, ok := normalizeClaim(*value, kind)
+	for _, c := range profileClaims(&p) {
+		normalized, ok := normalizeClaim(*c.value, c.kind)
 		if !ok {
-			errs = append(errs, &ProfileError{Claim: claim, Kind: kind})
-			return
+			errs = append(errs, &ProfileError{Claim: c.name, Kind: c.kind})
+			continue
 		}
-		*value = normalized
+		*c.value = normalized
 	}
-	check("name", &p.Name, ProfileText)
-	check("given_name", &p.GivenName, ProfileText)
-	check("family_name", &p.FamilyName, ProfileText)
-	check("middle_name", &p.MiddleName, ProfileText)
-	check("nickname", &p.Nickname, ProfileText)
-	check("preferred_username", &p.PreferredUsername, ProfileText)
-	check("profile", &p.ProfileURL, ProfileURL)
-	check("picture", &p.Picture, ProfileURL)
-	check("website", &p.Website, ProfileURL)
-	check("gender", &p.Gender, ProfileText)
-	check("birthdate", &p.Birthdate, ProfileDate)
-	check("zoneinfo", &p.Zoneinfo, ProfileTimeZone)
-	check("locale", &p.Locale, ProfileLanguage)
-	check("phone_number", &p.PhoneNumber, ProfilePhone)
-	check("address.formatted", &p.Address.Formatted, ProfileLines)
-	check("address.street_address", &p.Address.StreetAddress, ProfileLines)
-	check("address.locality", &p.Address.Locality, ProfileText)
-	check("address.region", &p.Address.Region, ProfileText)
-	check("address.postal_code", &p.Address.PostalCode, ProfileText)
-	check("address.country", &p.Address.Country, ProfileText)
 	if err := errors.Join(errs...); err != nil {
 		return store.Profile{}, err
 	}
 	return p, nil
+}
+
+// profileClaim is a text claim of a profile: its name, where p keeps its
+// value, and the kind of value it takes.
+type profileClaim struct {
+	name  string
+	value *string
+	kind  ProfileKind
+}
+
+// profileClaims returns the text claims of p, in the order of OpenID Connect
+// Core 1.0, section 5.1, with the parts of the address last.
+func profileClaims(p *store.Profile) []profileClaim {
+	return []profileClaim{
+		{"name", &p.Name, ProfileText},
+		{"given_name", &p.GivenName, ProfileText},
+		{"family_name", &p.FamilyName, ProfileText},
+		{"middle_name", &p.MiddleName, ProfileText},
+		{"nickname", &p.Nickname, ProfileText},
+		{"preferred_username", &p.PreferredUsername, ProfileText},
+		{"profile", &p.ProfileURL, ProfileURL},
+		{"picture", &p.Picture, ProfileURL},
+		{"website", &p.Website, ProfileURL},
+		{"gender", &p.Gender, ProfileText},
+		{"birthdate", &p.Birthdate, ProfileDate},
+		{"zoneinfo", &p.Zoneinfo, ProfileTimeZone},
+		{"locale", &p.Locale, ProfileLanguage},
+		{"phone_number", &p.PhoneNumber, ProfilePhone},
+		{"address.formatted", &p.Address.Formatted, ProfileLines},
+		{"address.street_address", &p.Address.StreetAddress, ProfileLines},
+		{"address.locality", &p.Address.Locality, ProfileText},
+		{"address.region", &p.Address.Region, ProfileText},
+		{"address.postal_code", &p.Address.PostalCode, ProfileText},
+		{"address.country", &p.Address.Country, ProfileText},
+	}
 }
 
 // NormalizeProfileValue returns value as NormalizeProfile stores it for a
@@ -187,6 +202,7 @@ func UpdateProfile(ctx context.Context, d Deps, u store.User, p store.Profile) (
 		return store.User{}, err
 	}
 	normalized.PhoneNumberVerified = u.Profile.PhoneNumberVerified && normalized.PhoneNumber == u.Profile.PhoneNumber
+	changed := changedClaims(u.Profile, normalized)
 	u.Profile, u.UpdatedAt = normalized, d.Now()
 	switch err := d.Store.Users().Update(ctx, u); {
 	case errors.Is(err, store.ErrNotFound):
@@ -196,5 +212,9 @@ func UpdateProfile(ctx context.Context, d Deps, u store.User, p store.Profile) (
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "user updated the profile",
 		slog.String("tenant_id", u.TenantID.String()), slog.String("user_id", u.ID.String()))
+	if changed != "" {
+		audit(ctx, d, store.AuditEvent{TenantID: u.TenantID, Type: EventProfileUpdated, Actor: store.ActorUser,
+			UserID: u.ID, Details: map[string]string{"claims": changed}})
+	}
 	return u, nil
 }

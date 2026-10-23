@@ -52,7 +52,8 @@ func newRootCommand(environ []string) *cobra.Command {
 	}
 	root.AddCommand(newServeCommand(environ), newMigrateCommand(environ), newTenantsCommand(environ),
 		newClientsCommand(environ), newResourcesCommand(environ), newUsersCommand(environ),
-		newGrantsCommand(environ), newEmailCommand(environ), newKeysCommand(), newVersionCommand())
+		newGrantsCommand(environ), newAuditCommand(environ), newEmailCommand(environ), newKeysCommand(),
+		newVersionCommand())
 	return root
 }
 
@@ -131,6 +132,16 @@ func serve(ctx context.Context, configPath string, environ []string, logOutput i
 	if err != nil {
 		return err
 	}
+	proxies, err := cfg.Server.Proxies()
+	if err != nil {
+		return err
+	}
+	// The configuration keeps events forever with zero, which clavis.Config
+	// takes for its default.
+	retention := cfg.Audit.Retention
+	if retention == 0 {
+		retention = -1
+	}
 
 	info := version.Get()
 	tel, err := telemetry.Setup(ctx, telemetry.Config{
@@ -173,7 +184,9 @@ func serve(ctx context.Context, configPath string, environ []string, logOutput i
 			MaxConcurrentHashes:      cfg.Passwords.MaxConcurrentHashes,
 			RefuseArgon2idInFIPSMode: !cfg.Passwords.FIPSMigrateArgon2id,
 		},
-		Email: sender,
+		Email:          sender,
+		TrustedProxies: proxies,
+		AuditRetention: retention,
 	})
 	if err != nil {
 		return err

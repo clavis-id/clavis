@@ -33,6 +33,20 @@ type ApiResource struct {
 	UpdatedAt  time.Time
 }
 
+type AuditEvent struct {
+	ID         uuid.UUID
+	TenantID   uuid.UUID
+	OccurredAt time.Time
+	Type       string
+	Actor      string
+	UserID     *uuid.UUID
+	ClientID   string
+	SessionID  *uuid.UUID
+	Ip         string
+	UserAgent  string
+	Details    []byte
+}
+
 type AuthorizationCode struct {
 	Hash                []byte
 	TenantID            uuid.UUID

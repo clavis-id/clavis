@@ -59,7 +59,8 @@ func openStore(ctx context.Context, cfg config.Database, migrate bool) (openedSt
 
 // withTenant loads the configuration with load, opens the database, resolves
 // the tenant with the given slug and calls fn, for commands that manage the
-// records of one tenant.
+// records of one tenant. The work of fn is an operator's: its audit events
+// say so (ADR 0029).
 //
 // Only commands that create records pass createDefault: the server creates
 // the default tenant when it first starts, and its signing keys on every
@@ -69,7 +70,10 @@ func withTenant(cmd *cobra.Command, load func(string, []string) (config.Result, 
 	environ []string, slug string, createDefault bool,
 	fn func(context.Context, config.Config, app.Deps, store.Tenant) error,
 ) error {
-	ctx := cmd.Context()
+	// Only the commands that manage records act as operators. The context of
+	// the root command is not marked, since `clavis serve` derives the
+	// contexts of its requests from it.
+	ctx := app.AsOperator(cmd.Context())
 	cfg, logger, err := setup(ctx, load, configPath, environ, cmd.ErrOrStderr())
 	if err != nil {
 		return err

@@ -81,6 +81,9 @@ func revokeAccessToken(ctx context.Context, d Deps, signer TokenSigner, t Author
 		slog.String("tenant_id", t.ID.String()),
 		slog.String("client_id", client.ClientID),
 		slog.String("jti", record.ID))
+	audit(ctx, d, store.AuditEvent{TenantID: t.ID, Type: EventTokenRevoked, Actor: store.ActorClient,
+		UserID: record.UserID, ClientID: client.ClientID,
+		Details: map[string]string{"token_type": "access_token", "jti": record.ID}})
 	return nil
 }
 
@@ -104,6 +107,9 @@ func revokeRefreshToken(ctx context.Context, d Deps, t AuthorizationTenant, clie
 		slog.String("client_id", client.ClientID),
 		slog.String("refresh_token_family", family.ID.String()),
 		slog.Int64("revoked_access_tokens", tokens))
+	audit(ctx, d, store.AuditEvent{TenantID: t.ID, Type: EventTokenRevoked, Actor: store.ActorClient,
+		UserID: family.UserID, ClientID: client.ClientID, SessionID: family.SessionID,
+		Details: map[string]string{"token_type": "refresh_token", "refresh_token_family": family.ID.String()}})
 	return nil
 }
 

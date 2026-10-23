@@ -3,6 +3,10 @@ issuer: http://localhost:8080
 
 server:
   address: 127.0.0.1:8080
+  # Reverse proxies in front of Clavis, as networks or addresses (ADR 0029).
+  # Only a request from one of them is from the client that X-Forwarded-For
+  # names; without them the header is ignored.
+  # trusted_proxies: [10.0.0.0/8]
 
 database:
   driver: sqlite
@@ -36,6 +40,10 @@ keys:
 #     tls: none                # starttls (default) or implicit elsewhere
 #     username: ""             # with a password, or CLAVIS_EMAIL_SMTP_PASSWORD
 #     timeout: 30s
+
+# Audit log (ADR 0029). The value shown is the default; 0 keeps events forever.
+# audit:
+#   retention: 2160h
 
 log:
   level: debug

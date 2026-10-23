@@ -103,5 +103,9 @@ func RevokeGrant(ctx context.Context, d Deps, tenantID uuid.UUID, email, clientI
 		slog.Int64("deleted_authorization_codes", codes),
 		slog.Int64("revoked_refresh_token_families", families),
 		slog.Int64("revoked_access_tokens", tokens))
+	// The user revokes a grant on the account pages, and an operator with the
+	// CLI, whose context says so.
+	audit(ctx, d, store.AuditEvent{TenantID: tenantID, Type: EventGrantRevoked, Actor: store.ActorUser,
+		UserID: u.ID, ClientID: c.ClientID})
 	return nil
 }
