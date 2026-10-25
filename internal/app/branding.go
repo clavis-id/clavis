@@ -79,28 +79,41 @@ func LogoName(contentType, hash string) (name string, ok bool) {
 }
 
 // TenantBranding returns the branding of a tenant, or the zero Branding,
-// which keeps every default, when the tenant has none.
+// which keeps every default, when the tenant has none. The Cache of d keeps
+// it for TenantCacheTTL.
 func TenantBranding(ctx context.Context, d Deps, tenantID uuid.UUID) (store.Branding, error) {
-	b, err := d.Store.Brandings().Get(ctx, tenantID)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		return store.Branding{TenantID: tenantID}, nil
-	case err != nil:
-		return store.Branding{}, fmt.Errorf("getting the branding: %w", err)
-	}
-	return b, nil
+	return cached(d.Cache.brandingMap(), tenantID, d.Now(), func() (store.Branding, error) {
+		b, err := d.Store.Brandings().Get(ctx, tenantID)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			return store.Branding{TenantID: tenantID}, nil
+		case err != nil:
+			return store.Branding{}, fmt.Errorf("getting the branding: %w", err)
+		}
+		return b, nil
+	})
 }
 
-// TenantLogo returns the logo of a tenant, or ErrLogoNotFound.
+// TenantLogo returns the logo of a tenant, or ErrLogoNotFound. The Cache of
+// d keeps the answer for TenantCacheTTL.
 func TenantLogo(ctx context.Context, d Deps, tenantID uuid.UUID) (store.Logo, error) {
-	logo, err := d.Store.Brandings().GetLogo(ctx, tenantID)
+	found, err := cached(d.Cache.logoMap(), tenantID, d.Now(), func() (cachedLogo, error) {
+		logo, err := d.Store.Brandings().GetLogo(ctx, tenantID)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			return cachedLogo{}, nil
+		case err != nil:
+			return cachedLogo{}, fmt.Errorf("getting the logo: %w", err)
+		}
+		return cachedLogo{logo: logo, found: true}, nil
+	})
 	switch {
-	case errors.Is(err, store.ErrNotFound):
-		return store.Logo{}, ErrLogoNotFound
 	case err != nil:
-		return store.Logo{}, fmt.Errorf("getting the logo: %w", err)
+		return store.Logo{}, err
+	case !found.found:
+		return store.Logo{}, ErrLogoNotFound
 	}
-	return logo, nil
+	return found.logo, nil
 }
 
 // ValidateTheme reports whether a theme can be stored: every color is
@@ -150,6 +163,7 @@ func SetTheme(ctx context.Context, d Deps, tenantID uuid.UUID, theme store.Theme
 	case err != nil:
 		return fmt.Errorf("storing the theme: %w", err)
 	}
+	d.Cache.forgetBranding(tenantID)
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "set tenant theme", slog.String("tenant_id", tenantID.String()))
 	return nil
 }
@@ -199,6 +213,7 @@ func SetLogo(ctx context.Context, d Deps, tenantID uuid.UUID, data []byte) (stor
 	case err != nil:
 		return store.Logo{}, fmt.Errorf("storing the logo: %w", err)
 	}
+	d.Cache.forgetBranding(tenantID)
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "set tenant logo", slog.String("tenant_id", tenantID.String()),
 		slog.String("content_type", contentType), slog.Int("bytes", len(data)))
 	return logo, nil
@@ -214,6 +229,7 @@ func RemoveLogo(ctx context.Context, d Deps, tenantID uuid.UUID) error {
 	case err != nil:
 		return fmt.Errorf("removing the logo: %w", err)
 	}
+	d.Cache.forgetBranding(tenantID)
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "removed tenant logo", slog.String("tenant_id", tenantID.String()))
 	return nil
 }
@@ -229,6 +245,7 @@ func ResetBranding(ctx context.Context, d Deps, tenantID uuid.UUID) error {
 	case err != nil:
 		return fmt.Errorf("removing the branding: %w", err)
 	}
+	d.Cache.forgetBranding(tenantID)
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "reset tenant branding", slog.String("tenant_id", tenantID.String()))
 	return nil
 }
