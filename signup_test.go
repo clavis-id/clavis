@@ -70,12 +70,13 @@ func newSignupServer(t *testing.T) (*Server, store.Tenant, *testMail) {
 	return s, tn, mail
 }
 
-// startSignup follows a new authorization request to the signup page,
-// posts address, and returns the verification ID of the page it leads to.
-func (b *browser) startSignup(issuer, address string) string {
+// startSignup follows a new authorization request of signupIssuer to the
+// signup page, posts address, and returns the verification ID of the page
+// it leads to.
+func (b *browser) startSignup(address string) string {
 	b.t.Helper()
-	id := b.startLogin(issuer, authorizeQuery())
-	res, _ := b.post(issuer+"/signup", url.Values{"request": {id}, "email": {address}}, "same-origin")
+	id := b.startLogin(signupIssuer, authorizeQuery())
+	res, _ := b.post(signupIssuer+"/signup", url.Values{"request": {id}, "email": {address}}, "same-origin")
 	loc, err := url.Parse(res.Header.Get("Location"))
 	if res.StatusCode != http.StatusSeeOther || err != nil || loc.Path != "/signup/verify" {
 		b.t.Fatalf("signup = %d to %q, want the code page", res.StatusCode, res.Header.Get("Location"))
@@ -239,7 +240,7 @@ func TestSignupWithTheLink(t *testing.T) {
 	const issuer = signupIssuer
 	s, _, mail := newSignupServer(t)
 	b := newBrowser(t, s.Handler())
-	verification := b.startSignup(issuer, "grace@example.com")
+	verification := b.startSignup("grace@example.com")
 	link := signupLink.FindString(mail.last(t, "grace@example.com").Text)
 	if !strings.HasPrefix(link, issuer+"/signup/verify?") {
 		t.Fatalf("message link = %q", link)
@@ -418,7 +419,7 @@ func TestSignupEndsAfterTooManyCodes(t *testing.T) {
 	const issuer = signupIssuer
 	s, _, _ := newSignupServer(t)
 	b := newBrowser(t, s.Handler())
-	verification := b.startSignup(issuer, "grace@example.com")
+	verification := b.startSignup("grace@example.com")
 	for i := range app.MaxCodeAttempts {
 		res, page := b.post(issuer+"/signup/verify", url.Values{"verification": {verification}, "code": {"12345"}},
 			"same-origin")
@@ -439,7 +440,7 @@ func TestSignupAfterTheRequestExpired(t *testing.T) {
 	const issuer = signupIssuer
 	s, tn, mail := newSignupServer(t)
 	b := newBrowser(t, s.Handler())
-	verification := b.startSignup(issuer, "grace@example.com")
+	verification := b.startSignup("grace@example.com")
 	code := signupCode.FindStringSubmatch(mail.last(t, "grace@example.com").Text)
 	if res, _ := b.post(issuer+"/signup/verify", url.Values{"verification": {verification}, "code": {code[1]}},
 		"same-origin"); res.StatusCode != http.StatusSeeOther {

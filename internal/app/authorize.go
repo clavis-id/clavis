@@ -716,10 +716,10 @@ func replaceSession(ctx context.Context, d Deps, tenantID uuid.UUID, tokenHash [
 }
 
 // PurgeExpired deletes the expired authorization requests, sessions, access
-// token records, refresh tokens, refresh token families and email
-// verifications of every tenant, and the codes that expired more than
-// AuthorizationCodeRetention ago. It goes on after a failure and returns
-// every error.
+// token records, refresh tokens, refresh token families, email
+// verifications and limit counters of every tenant, and the codes that
+// expired more than AuthorizationCodeRetention ago. It goes on after a
+// failure and returns every error.
 func PurgeExpired(ctx context.Context, d Deps) error {
 	now := d.Now()
 	var errs []error
@@ -737,14 +737,16 @@ func PurgeExpired(ctx context.Context, d Deps) error {
 	tokens := purge("access tokens", d.Store.AccessTokens().DeleteExpired, now)
 	families := purge("refresh tokens", d.Store.RefreshTokens().DeleteExpired, now)
 	verifications := purge("email verifications", d.Store.EmailVerifications().DeleteExpired, now)
-	if requests+sessions+codes+tokens+families+verifications > 0 {
+	counters := purge("limit counters", d.Store.LimitCounters().DeleteExpired, now)
+	if requests+sessions+codes+tokens+families+verifications+counters > 0 {
 		d.Logger.LogAttrs(ctx, slog.LevelInfo, "deleted expired records",
 			slog.Int64("authorization_requests", requests),
 			slog.Int64("sessions", sessions),
 			slog.Int64("authorization_codes", codes),
 			slog.Int64("access_tokens", tokens),
 			slog.Int64("refresh_token_families", families),
-			slog.Int64("email_verifications", verifications))
+			slog.Int64("email_verifications", verifications),
+			slog.Int64("limit_counters", counters))
 	}
 	return errors.Join(errs...)
 }

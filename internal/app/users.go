@@ -230,6 +230,7 @@ func SetPassword(ctx context.Context, d Deps, h PasswordHasher, u store.User, pw
 		slog.String("tenant_id", u.TenantID.String()), slog.String("user_id", u.ID.String()))
 	audit(ctx, d, store.AuditEvent{TenantID: u.TenantID, Type: EventPasswordChanged, Actor: store.ActorOperator,
 		UserID: u.ID, Details: map[string]string{"how": "operator"}})
+	unlockSignIn(ctx, d, u)
 	return endUserAccess(ctx, d, u, uuid.Nil())
 }
 
@@ -273,7 +274,9 @@ func endUserAccess(ctx context.Context, d Deps, u store.User, keep uuid.UUID) er
 // match. Every failure that could reveal whether the account exists returns
 // ErrInvalidCredentials after the work of a password verification (ADR
 // 0015). ErrUserDisabled is returned only for a correct password. A hash
-// below the current policy is replaced with a new one.
+// below the current policy is replaced with a new one. Wrong passwords
+// count against the address, which MaxSignInFailures of them lock: a locked
+// address fails like a wrong password (ADR 0030).
 func AuthenticatePassword(ctx context.Context, d Deps, h PasswordHasher, tenantID uuid.UUID,
 	email, pw string,
 ) (store.User, error) {
@@ -290,6 +293,38 @@ func AuthenticatePassword(ctx context.Context, d Deps, h PasswordHasher, tenantI
 // the audit event of the failure, which the caller must not reveal.
 func authenticatePassword(ctx context.Context, d Deps, h PasswordHasher, tenantID uuid.UUID,
 	email, pw string,
+) (store.User, time.Time, error) {
+	locked, err := signInLocked(ctx, d, tenantID, email)
+	if err != nil {
+		return store.User{}, time.Time{}, err
+	}
+	if locked {
+		return lockedSignIn(ctx, d, h, tenantID, email, pw)
+	}
+	u, setAt, err := checkPassword(ctx, d, h, tenantID, email, pw)
+	if errors.Is(err, ErrInvalidCredentials) {
+		countSignInFailure(ctx, d, tenantID, email, u)
+	}
+	return u, setAt, err
+}
+
+// lockedSignIn fails a sign-in with an address that wrong passwords locked,
+// after the work of a password verification, like a wrong password. It
+// returns the user that the address names, if any, for the audit event.
+func lockedSignIn(ctx context.Context, d Deps, h PasswordHasher, tenantID uuid.UUID, email, pw string,
+) (store.User, time.Time, error) {
+	u, err := FindUser(ctx, d, tenantID, email)
+	if err != nil && !errors.Is(err, ErrUserNotFound) {
+		return store.User{}, time.Time{}, err
+	}
+	if err := h.VerifyDummy(ctx, pw); err != nil {
+		return store.User{}, time.Time{}, fmt.Errorf("verifying password: %w", err)
+	}
+	return u, time.Time{}, errLocked
+}
+
+// checkPassword is authenticatePassword without the lock.
+func checkPassword(ctx context.Context, d Deps, h PasswordHasher, tenantID uuid.UUID, email, pw string,
 ) (store.User, time.Time, error) {
 	u, err := FindUser(ctx, d, tenantID, email)
 	if errors.Is(err, ErrUserNotFound) {

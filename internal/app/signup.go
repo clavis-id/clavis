@@ -58,7 +58,9 @@ var (
 // otherwise. Both cases do the same work and return a verification ID, and
 // a message that cannot be queued is only logged, so nothing that reaches
 // the browser tells them apart. A malformed address returns an error that
-// wraps ErrInvalidEmail.
+// wraps ErrInvalidEmail, and an address that received MaxMessages messages
+// within MessageWindow, whether or not it has an account,
+// ErrTooManyMessages (ADR 0030).
 func StartSignup(ctx context.Context, d Deps, t AuthorizationTenant, p PendingAuthorization, address string,
 	bindingHash []byte, text i18n.Printer, verifyURL string,
 ) (string, error) {
@@ -71,6 +73,9 @@ func StartSignup(ctx context.Context, d Deps, t AuthorizationTenant, p PendingAu
 	}
 	email, err := NormalizeEmail(address)
 	if err != nil {
+		return "", err
+	}
+	if err := countMessage(ctx, d, t.ID, email); err != nil {
 		return "", err
 	}
 	_, err = d.Store.Users().GetByEmail(ctx, t.ID, email)
@@ -215,10 +220,18 @@ func FindEmailVerification(ctx context.Context, d Deps, tenantID uuid.UUID, id s
 // Every submission counts as an attempt, before the comparison, so
 // concurrent guesses cannot exceed MaxCodeAttempts. A code that does not
 // match returns ErrWrongCode, or ErrTooManyAttempts when it used the last
-// attempt.
+// attempt. Wrong codes also count against the address, across its
+// verifications: after MaxCodeFailures of them, its codes return
+// ErrCodesLocked until CodeLockout has passed (ADR 0030).
 func VerifyCode(ctx context.Context, d Deps, v store.EmailVerification, typed string) error {
 	if !v.VerifiedAt.IsZero() {
 		return nil
+	}
+	switch locked, err := codesLocked(ctx, d, v); {
+	case err != nil:
+		return err
+	case locked:
+		return ErrCodesLocked
 	}
 	n, err := d.Store.EmailVerifications().AddAttempt(ctx, v.TenantID, v.ID)
 	switch {
@@ -232,6 +245,7 @@ func VerifyCode(ctx context.Context, d Deps, v store.EmailVerification, typed st
 	}
 	code, ok := NormalizeCode(typed)
 	if !ok || subtle.ConstantTimeCompare(codeHash(v.ID, code), v.CodeHash) != 1 {
+		countCodeFailure(ctx, d, v)
 		if n == MaxCodeAttempts {
 			return ErrTooManyAttempts
 		}

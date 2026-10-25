@@ -55,6 +55,9 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request, t tenant) 
 	case errors.Is(err, app.ErrSignupUnavailable):
 		s.flowUnavailable(w, r, t, signupFlow)
 		return
+	case errors.Is(err, app.ErrTooManyMessages):
+		s.tooManyMessages(w, r, t, l)
+		return
 	case err != nil:
 		s.authorizationRequestError(w, r, t, err)
 		return

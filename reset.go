@@ -69,6 +69,9 @@ func (s *Server) handleReset(w http.ResponseWriter, r *http.Request, t tenant) {
 	case errors.Is(err, app.ErrResetUnavailable):
 		s.flowUnavailable(w, r, t, resetFlow)
 		return
+	case errors.Is(err, app.ErrTooManyMessages):
+		s.tooManyMessages(w, r, t, l)
+		return
 	case err != nil:
 		s.authorizationRequestError(w, r, t, err)
 		return
