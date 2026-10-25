@@ -37,6 +37,7 @@ The design decisions this plan relies on are recorded as ADRs:
 | [0027](../adr/0027-password-reset.md) | Reset with the email verifications of 0026; only active accounts get the message; the user signs in again; a new password ends every session and token of the user |
 | [0028](../adr/0028-account-pages.md) | Account pages at `<issuer>/account` on the session of single sign-on: profile of the standard claims, password change, connected applications; the issuer root leads there |
 | [0029](../adr/0029-audit-log-and-client-addresses.md) | Audit events per tenant for sign-ins, accounts, consent, tokens and clients, without credential material, kept 90 days by default; client addresses from X-Forwarded-For only behind trusted proxies |
+| [0030](../adr/0030-rate-limits-and-account-lockout.md) | Stored limits per email address (lockout after 10 wrong passwords in 15 minutes, wrong codes, messages) that reveal nothing about accounts; in-memory limits per client address on wrong guesses, messages and token endpoint errors; 429 with Retry-After |
 
 ## Rules for every work item
 
