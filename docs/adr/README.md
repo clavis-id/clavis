@@ -39,3 +39,4 @@ request. Status values: Proposed, Accepted, Superseded by NNNN, Deprecated.
 | [0028](0028-account-pages.md) | Account pages | Accepted |
 | [0029](0029-audit-log-and-client-addresses.md) | Audit log and client addresses | Accepted |
 | [0030](0030-rate-limits-and-account-lockout.md) | Rate limits and account lockout | Accepted |
+| [0031](0031-per-tenant-cache.md) | Per-tenant cache | Accepted |
