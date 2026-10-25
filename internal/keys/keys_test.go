@@ -233,6 +233,12 @@ func TestRotationLifecycle(t *testing.T) {
 	if len(stored) != 1 {
 		t.Errorf("store holds %d keys after cleanup, want 1", len(stored))
 	}
+	m.mu.Lock()
+	lists := len(m.lists)
+	m.mu.Unlock()
+	if lists != 0 {
+		t.Errorf("the Manager keeps %d key lists after the cleanup, want none", lists)
+	}
 }
 
 func TestRecoveryAfterOutage(t *testing.T) {
@@ -652,5 +658,111 @@ func TestJWKSIsCached(t *testing.T) {
 	f.clock.Advance(JWKSCacheTTL)
 	if got := kids(t, m, f.tenant.ID); len(got) != 2 {
 		t.Errorf("published keys after the cache expires = %v, want 2", got)
+	}
+}
+
+// countingStore counts the lists of signing keys.
+type countingStore struct {
+	store.Store
+	mu    sync.Mutex
+	lists int
+}
+
+func (s *countingStore) SigningKeys() store.SigningKeys {
+	return countingKeys{s.Store.SigningKeys(), s}
+}
+
+func (s *countingStore) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lists
+}
+
+type countingKeys struct {
+	store.SigningKeys
+	s *countingStore
+}
+
+func (k countingKeys) List(ctx context.Context, tenantID uuid.UUID) ([]store.SigningKey, error) {
+	k.s.mu.Lock()
+	k.s.lists++
+	k.s.mu.Unlock()
+	return k.SigningKeys.List(ctx, tenantID)
+}
+
+// The signer reuses the list of keys for JWKSCacheTTL, and the successor
+// that the list holds takes over when it activates (from the review of #52).
+func TestSignerReusesTheKeyList(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	enc := newEncrypter(t, kek.GenerateSecret())
+	policy := DefaultPolicy()
+	counting := &countingStore{Store: f.store}
+	m, err := NewManager(Config{Store: counting, Encrypter: enc, Policy: policy,
+		Logger: slog.New(slog.DiscardHandler), Now: f.clock.Now, NewID: uuid.NewV7})
+	if err != nil {
+		t.Fatalf("NewManager() unexpected error: %v", err)
+	}
+	mustRotate(t, m, f.tenant.ID)
+	first := currentKID(t, m, f.tenant.ID)
+	// Another instance schedules the successor.
+	f.clock.Advance(policy.RotationPeriod - policy.PublishAhead - policy.CheckInterval)
+	mustRotate(t, f.manager(t, enc, policy), f.tenant.ID)
+	before := counting.count()
+	for range 3 {
+		if got := currentKID(t, m, f.tenant.ID); got != first {
+			t.Fatalf("Signer() = %q, want the current key %q", got, first)
+		}
+	}
+	if n := counting.count() - before; n != 1 {
+		t.Errorf("three signers listed the keys %d times, want once", n)
+	}
+
+	// The list read now holds the successor, which takes over without
+	// another read when the current key retires.
+	f.clock.Advance(policy.PublishAhead + policy.CheckInterval - time.Second)
+	successor := currentKID(t, m, f.tenant.ID)
+	if successor != first {
+		t.Fatalf("Signer() before the successor activates = %q, want %q", successor, first)
+	}
+	before = counting.count()
+	f.clock.Advance(time.Second)
+	if got := currentKID(t, m, f.tenant.ID); got == first {
+		t.Errorf("Signer() after the current key retired = %q, want the successor", got)
+	}
+	if n := counting.count() - before; n != 0 {
+		t.Errorf("the successor took %d lists of the keys, want none", n)
+	}
+
+	// A key that the Manager creates itself makes it read the list again.
+	f.clock.Advance(policy.RotationPeriod - policy.PublishAhead - policy.CheckInterval)
+	currentKID(t, m, f.tenant.ID)
+	mustRotate(t, m, f.tenant.ID)
+	before = counting.count()
+	currentKID(t, m, f.tenant.ID)
+	if n := counting.count() - before; n != 1 {
+		t.Errorf("a signer after the Manager created a key listed the keys %d times, want once", n)
+	}
+}
+
+// A key that another instance creates to sign at once, after an outage,
+// is found although the list of keys is reused.
+func TestSignerFindsAKeyThatSignsAtOnce(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	enc := newEncrypter(t, kek.GenerateSecret())
+	policy := DefaultPolicy()
+	m := f.manager(t, enc, policy)
+	mustRotate(t, m, f.tenant.ID)
+	first := currentKID(t, m, f.tenant.ID)
+
+	// Every key retires during an outage; the list is read after that.
+	f.clock.Advance(policy.RotationPeriod)
+	if _, err := m.Signer(t.Context(), f.tenant.ID, RS256); !errors.Is(err, ErrNoActiveKey) {
+		t.Fatalf("Signer() after every key retired = %v, want ErrNoActiveKey", err)
+	}
+	mustRotate(t, f.manager(t, enc, policy), f.tenant.ID)
+	if got := currentKID(t, m, f.tenant.ID); got == first {
+		t.Errorf("Signer() after another instance rotated = %q, want the new key", got)
 	}
 }
