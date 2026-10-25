@@ -44,7 +44,7 @@ func (s *Server) handleResetPage(w http.ResponseWriter, r *http.Request, t tenan
 // whether or not the address has an account (ADR 0027).
 func (s *Server) handleReset(w http.ResponseWriter, r *http.Request, t tenant) {
 	form, ok := s.flowForm(w, r, t, resetFlow)
-	if !ok {
+	if !ok || s.pageLimited(w, r, t, s.limits.messages) {
 		return
 	}
 	var p *app.PendingAuthorization
@@ -76,6 +76,7 @@ func (s *Server) handleReset(w http.ResponseWriter, r *http.Request, t tenant) {
 		s.authorizationRequestError(w, r, t, err)
 		return
 	}
+	s.countClient(s.limits.messages, r)
 	seeOther(w, verificationURL(t, resetVerifyPath, id))
 }
 

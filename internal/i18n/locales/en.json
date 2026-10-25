@@ -147,6 +147,8 @@
   "error.codes_locked": "Too many incorrect codes were entered for this address. Open the link in the message in this browser, or try again tomorrow.",
   "error.too_many_messages.title": "Too many messages",
   "error.too_many_messages": "Too many messages were sent to this address. Wait an hour and try again.",
+  "error.too_many_requests.title": "Too many requests",
+  "error.too_many_requests": "Too many requests came from your network. Wait a few minutes and try again.",
   "error.account_exists.title": "The account exists already",
   "error.account_exists": "An account with this address exists already. Return to the application and sign in.",
   "error.invalid_reset.title": "Invalid password reset request",

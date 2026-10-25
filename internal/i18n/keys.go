@@ -155,6 +155,8 @@ const (
 	ErrorCodesLocked            Key = "error.codes_locked"
 	ErrorTooManyMessagesTitle   Key = "error.too_many_messages.title"
 	ErrorTooManyMessages        Key = "error.too_many_messages"
+	ErrorTooManyRequestsTitle   Key = "error.too_many_requests.title"
+	ErrorTooManyRequests        Key = "error.too_many_requests"
 	ErrorAccountExistsTitle     Key = "error.account_exists.title"
 	ErrorAccountExists          Key = "error.account_exists"
 	ErrorInvalidResetTitle      Key = "error.invalid_reset.title"

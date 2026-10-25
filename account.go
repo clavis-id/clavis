@@ -45,7 +45,7 @@ func (s *Server) handleAccountLoginPage(w http.ResponseWriter, r *http.Request, 
 // credentials.
 func (s *Server) handleAccountLogin(w http.ResponseWriter, r *http.Request, t tenant) {
 	form, ok := s.accountForm(w, r, t)
-	if !ok {
+	if !ok || s.pageLimited(w, r, t, s.limits.passwords) {
 		return
 	}
 	email := form.Get("email")
@@ -53,6 +53,7 @@ func (s *Server) handleAccountLogin(w http.ResponseWriter, r *http.Request, t te
 		sessionHash(r, t.ID))
 	switch {
 	case errors.Is(err, app.ErrInvalidCredentials):
+		s.countClient(s.limits.passwords, r)
 		s.accountLoginPage(w, r, t, s.locale(w, r, "", ""), email, i18n.LoginInvalidCredentials, "")
 		return
 	case errors.Is(err, app.ErrUserDisabled):
@@ -130,7 +131,7 @@ func (s *Server) handleAccountPasswordPage(w http.ResponseWriter, r *http.Reques
 // ends every other session of the user.
 func (s *Server) handleAccountPassword(w http.ResponseWriter, r *http.Request, t tenant) {
 	form, ok := s.accountForm(w, r, t)
-	if !ok {
+	if !ok || s.pageLimited(w, r, t, s.limits.passwords) {
 		return
 	}
 	a, ok := s.account(w, r, t)
@@ -141,6 +142,7 @@ func (s *Server) handleAccountPassword(w http.ResponseWriter, r *http.Request, t
 	err := app.ChangePassword(r.Context(), s.deps, s.passwords, a, form.Get("current_password"), form.Get("new_password"))
 	switch {
 	case errors.Is(err, app.ErrInvalidCredentials):
+		s.countClient(s.limits.passwords, r)
 		s.accountPasswordPage(w, r, t, a, l, i18n.AccountWrongPassword, "")
 	case errors.Is(err, password.ErrPolicy):
 		s.accountPasswordPage(w, r, t, a, l, i18n.PasswordPolicy, "")

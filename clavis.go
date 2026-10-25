@@ -206,6 +206,7 @@ type Server struct {
 	meter         metric.MeterProvider
 	mailer        *mailer.Mailer // nil without Config.Email
 	proxies       []netip.Prefix
+	limits        clientLimits
 	retention     time.Duration // of audit events; not positive keeps them
 	handler       http.Handler
 	wellKnown     http.Handler
@@ -258,6 +259,10 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("clavis: %w", err)
 	}
 	catalogs, err := i18n.Load()
+	if err != nil {
+		return nil, fmt.Errorf("clavis: %w", err)
+	}
+	limits, err := newClientLimits()
 	if err != nil {
 		return nil, fmt.Errorf("clavis: %w", err)
 	}
@@ -321,6 +326,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		meter:         meter,
 		mailer:        mail,
 		proxies:       proxies,
+		limits:        limits,
 		retention:     retention,
 		stop:          stop,
 	}

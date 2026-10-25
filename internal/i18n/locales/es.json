@@ -147,6 +147,8 @@
   "error.codes_locked": "Se escribieron demasiados códigos incorrectos para esta dirección. Abre el enlace del mensaje en este navegador o vuelve a intentarlo mañana.",
   "error.too_many_messages.title": "Demasiados mensajes",
   "error.too_many_messages": "Se enviaron demasiados mensajes a esta dirección. Espera una hora y vuelve a intentarlo.",
+  "error.too_many_requests.title": "Demasiadas solicitudes",
+  "error.too_many_requests": "Llegaron demasiadas solicitudes desde tu red. Espera unos minutos y vuelve a intentarlo.",
   "error.account_exists.title": "La cuenta ya existe",
   "error.account_exists": "Ya existe una cuenta con esta dirección. Vuelve a la aplicación e inicia sesión.",
   "error.invalid_reset.title": "Solicitud de restablecimiento no válida",

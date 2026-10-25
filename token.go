@@ -25,6 +25,9 @@ const formContentType = "application/x-www-form-urlencoded"
 // authenticates first; only then is the grant examined.
 func (s *Server) handleToken(w http.ResponseWriter, r *http.Request, t tenant) {
 	allowCORS(w)
+	if s.tokenLimited(w, r) {
+		return
+	}
 	client, ok := s.authenticateClient(w, r, t)
 	if !ok {
 		return
@@ -85,6 +88,9 @@ func (s *Server) authenticateClient(w http.ResponseWriter, r *http.Request, t te
 // which browser-based clients may call too.
 func (s *Server) handleRevocation(w http.ResponseWriter, r *http.Request, t tenant) {
 	allowCORS(w)
+	if s.tokenLimited(w, r) {
+		return
+	}
 	client, ok := s.authenticateClient(w, r, t)
 	if !ok {
 		return
@@ -104,8 +110,13 @@ func (s *Server) handleRevocation(w http.ResponseWriter, r *http.Request, t tena
 
 // handleIntrospection serves the introspection endpoint (RFC 7662, section
 // 2) to confidential clients, which are servers, so it allows no
-// cross-origin requests.
+// cross-origin requests. An inactive token counts like an error against the
+// client address, so the endpoint cannot be used to scan for tokens
+// (section 4).
 func (s *Server) handleIntrospection(w http.ResponseWriter, r *http.Request, t tenant) {
+	if s.tokenLimited(w, r) {
+		return
+	}
 	client, ok := s.authenticateClient(w, r, t)
 	if !ok {
 		return
@@ -119,18 +130,23 @@ func (s *Server) handleIntrospection(w http.ResponseWriter, r *http.Request, t t
 		s.tokenError(w, r, err)
 		return
 	}
+	if !resp.Active {
+		s.countClient(s.limits.tokens, r)
+	}
 	s.writeNoStoreJSON(w, r, http.StatusOK, resp)
 }
 
-// tokenError answers a token request with an error response (RFC 6749,
-// section 5.2). A failed client authentication answers 401 with the scheme
-// clients can use.
+// tokenError answers a request to the token, revocation or introspection
+// endpoint with an error response (RFC 6749, section 5.2), which counts
+// against the client address (ADR 0030). A failed client authentication
+// answers 401 with the scheme clients can use.
 func (s *Server) tokenError(w http.ResponseWriter, r *http.Request, err error) {
 	var e *oauth.Error
 	if !errors.As(err, &e) {
 		s.internalError(w, r, "answering a token request", err)
 		return
 	}
+	s.countClient(s.limits.tokens, r)
 	status := http.StatusBadRequest
 	if e.Code == oauth.ErrorInvalidClient {
 		status = http.StatusUnauthorized

@@ -37,7 +37,7 @@ func (s *Server) handleSignupPage(w http.ResponseWriter, r *http.Request, t tena
 // whether or not the address has an account (ADR 0026).
 func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request, t tenant) {
 	form, ok := s.flowForm(w, r, t, signupFlow)
-	if !ok {
+	if !ok || s.pageLimited(w, r, t, s.limits.messages) {
 		return
 	}
 	p, err := app.FindAuthorizationRequest(r.Context(), s.deps, t.ID, form.Get("request"), bindingHash(r))
@@ -62,6 +62,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request, t tenant) 
 		s.authorizationRequestError(w, r, t, err)
 		return
 	}
+	s.countClient(s.limits.messages, r)
 	seeOther(w, verificationURL(t, signupVerifyPath, id))
 }
 
