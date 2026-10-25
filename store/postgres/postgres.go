@@ -58,6 +58,7 @@ type Store struct {
 	brandings   brandings
 	emailVerifs emailVerifications
 	audit       auditEvents
+	limits      limitCounters
 }
 
 var _ store.Store = (*Store)(nil)
@@ -119,6 +120,7 @@ func New(ctx context.Context, pool *pgxpool.Pool, opts ...Option) (*Store, error
 		brandings:   brandings{q: q},
 		emailVerifs: emailVerifications{q: q},
 		audit:       auditEvents{q: q},
+		limits:      limitCounters{q: q},
 	}
 	if err := s.Ping(ctx); err != nil {
 		return nil, err
@@ -224,6 +226,9 @@ func (s *Store) EmailVerifications() store.EmailVerifications { return s.emailVe
 
 // AuditEvents returns the audit event repository.
 func (s *Store) AuditEvents() store.AuditEvents { return s.audit }
+
+// LimitCounters returns the limit counter repository.
+func (s *Store) LimitCounters() store.LimitCounters { return s.limits }
 
 type tenants struct {
 	q *db.Queries

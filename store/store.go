@@ -71,6 +71,8 @@ type Store interface {
 	EmailVerifications() EmailVerifications
 	// AuditEvents returns the audit event repository.
 	AuditEvents() AuditEvents
+	// LimitCounters returns the limit counter repository.
+	LimitCounters() LimitCounters
 	// Ping reports whether the underlying database is reachable.
 	Ping(ctx context.Context) error
 }
@@ -986,4 +988,45 @@ type AuditEvents interface {
 	// DeleteBefore removes the events of every tenant that occurred before
 	// the given time, and returns how many were removed.
 	DeleteBefore(ctx context.Context, before time.Time) (int64, error)
+}
+
+// LimitKey names a limit counter: the events of one kind for one key of a
+// tenant, such as the failed sign-ins for an email address (ADR 0030).
+type LimitKey struct {
+	TenantID uuid.UUID
+	// Kind names what the counter counts, such as sign_in.
+	Kind string
+	// Key identifies what the events are about, such as a hash of an email
+	// address.
+	Key []byte
+}
+
+// LimitCount is the state of a limit counter.
+type LimitCount struct {
+	// Count is the number of events counted since the counter started.
+	Count int
+	// EndsAt is when the counter ends. An event at or after EndsAt starts
+	// the count again.
+	EndsAt time.Time
+}
+
+// LimitCounters stores counters of events in a window of time, so that a
+// limit holds across the instances that share a store (ADR 0030).
+type LimitCounters interface {
+	// Add counts one event for k at now and returns the counter. A counter
+	// that does not exist, or that ended at or before now, starts at one and
+	// ends at now plus window. When the event brings the count to lockAt,
+	// the counter ends at now plus window instead, so that lockAt events
+	// within a window hold k for one window after the last of them.
+	// Concurrent callers each get a different count. It returns ErrNotFound
+	// when the tenant does not exist.
+	Add(ctx context.Context, k LimitKey, now time.Time, window time.Duration, lockAt int) (LimitCount, error)
+	// Get returns the counter of k, or ErrNotFound. It returns counters that
+	// ended too; callers check EndsAt.
+	Get(ctx context.Context, k LimitKey) (LimitCount, error)
+	// Delete removes the counter of k, or returns ErrNotFound.
+	Delete(ctx context.Context, k LimitKey) error
+	// DeleteExpired removes the counters of every tenant that ended at or
+	// before now, and returns how many were removed.
+	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
 }

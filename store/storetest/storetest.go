@@ -100,6 +100,10 @@ func Run(t *testing.T, open OpenFunc) {
 		t.Parallel()
 		runAuditEvents(t, open)
 	})
+	t.Run("LimitCounters", func(t *testing.T) {
+		t.Parallel()
+		runLimitCounters(t, open)
+	})
 }
 
 func runTenants(t *testing.T, open OpenFunc) {

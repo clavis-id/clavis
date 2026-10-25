@@ -149,6 +149,14 @@ type Grant struct {
 	UpdatedAt time.Time
 }
 
+type LimitCounter struct {
+	TenantID uuid.UUID
+	Kind     string
+	KeyHash  []byte
+	Hits     int64
+	EndsAt   time.Time
+}
+
 type Password struct {
 	UserID   uuid.UUID
 	TenantID uuid.UUID
