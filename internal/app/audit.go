@@ -15,10 +15,12 @@ import (
 )
 
 // Types of audit events (ADR 0029). A failed password change is a change
-// with a wrong current password; the details of an event say more.
+// with a wrong current password, and a locked sign-in an address that wrong
+// passwords locked (ADR 0030); the details of an event say more.
 const (
 	EventSignedIn             = "user.signed_in"
 	EventSignInFailed         = "user.sign_in_failed"
+	EventSignInLocked         = "user.sign_in_locked"
 	EventSignedOut            = "user.signed_out"
 	EventUserCreated          = "user.created"
 	EventUserDeleted          = "user.deleted"
@@ -128,6 +130,8 @@ func auditSignInFailure(ctx context.Context, d Deps, tenantID uuid.UUID, u store
 // event, or returns "" when err is not a failure of the credentials.
 func failureReason(err error) string {
 	switch {
+	case errors.Is(err, errLocked):
+		return "locked"
 	case errors.Is(err, ErrInvalidCredentials):
 		return "invalid_credentials"
 	case errors.Is(err, ErrUserDisabled):

@@ -115,15 +115,23 @@ func (s *Server) handleVerify(f emailFlow) tenantHandler {
 		if !ok {
 			return
 		}
+		// Links cannot be guessed, so only codes are limited.
+		token := form.Get("token")
+		if token == "" && s.pageLimited(w, r, t, s.limits.codes) {
+			return
+		}
 		v, p, ok := s.findVerification(w, r, t, f, form.Get("verification"))
 		if !ok {
 			return
 		}
 		var err error
-		if token := form.Get("token"); token != "" {
+		if token != "" {
 			err = app.VerifyLink(r.Context(), s.deps, v, token)
 		} else {
 			err = app.VerifyCode(r.Context(), s.deps, v, form.Get("code"))
+			if errors.Is(err, app.ErrWrongCode) || errors.Is(err, app.ErrTooManyAttempts) {
+				s.countClient(s.limits.codes, r)
+			}
 		}
 		switch {
 		case errors.Is(err, app.ErrWrongCode):
@@ -288,11 +296,22 @@ func (s *Server) verificationError(w http.ResponseWriter, r *http.Request, t ten
 	case errors.Is(err, app.ErrTooManyAttempts):
 		s.errorPage(w, r, t, s.locale(w, r, "", ""), http.StatusBadRequest, i18n.ErrorTooManyCodesTitle,
 			i18n.ErrorTooManyCodes)
+	case errors.Is(err, app.ErrCodesLocked):
+		// The address is locked, not the verification: its link still works.
+		s.errorPage(w, r, t, s.locale(w, r, "", ""), http.StatusTooManyRequests, i18n.ErrorTooManyCodesTitle,
+			i18n.ErrorCodesLocked)
 	case errors.Is(err, app.ErrVerificationNotFound):
 		s.errorPage(w, r, t, s.locale(w, r, "", ""), http.StatusBadRequest, f.expiredTitle, f.expired)
 	default:
 		s.internalError(w, r, "verifying an email address", err)
 	}
+}
+
+// tooManyMessages answers a request to start a flow for an address that
+// received too many messages (ADR 0030). The page is the same whether or
+// not the address has an account.
+func (s *Server) tooManyMessages(w http.ResponseWriter, r *http.Request, t tenant, l i18n.Locale) {
+	s.errorPage(w, r, t, l, http.StatusTooManyRequests, i18n.ErrorTooManyMessagesTitle, i18n.ErrorTooManyMessages)
 }
 
 // verificationURL returns the URL of a page of tenant t for the email

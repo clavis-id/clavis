@@ -132,5 +132,6 @@ func ChangePassword(ctx context.Context, d Deps, h PasswordHasher, a Account, cu
 		slog.String("tenant_id", u.TenantID.String()), slog.String("user_id", u.ID.String()))
 	audit(ctx, d, store.AuditEvent{TenantID: u.TenantID, Type: EventPasswordChanged, Actor: store.ActorUser,
 		UserID: u.ID, SessionID: a.Session.ID, Details: map[string]string{"how": "account"}})
+	unlockSignIn(ctx, d, u)
 	return endUserAccess(ctx, d, u, a.Session.ID)
 }

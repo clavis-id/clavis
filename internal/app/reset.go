@@ -27,7 +27,9 @@ var ErrResetUnavailable = errors.New("password reset is not available")
 // message only when the address has an active account. Both cases do the
 // same work otherwise and return a verification ID, so nothing that reaches
 // the browser tells them apart. A malformed address returns an error that
-// wraps ErrInvalidEmail.
+// wraps ErrInvalidEmail, and an address that received MaxMessages messages
+// within MessageWindow, whether or not it has an account,
+// ErrTooManyMessages (ADR 0030).
 func StartPasswordReset(ctx context.Context, d Deps, t AuthorizationTenant, p *PendingAuthorization, address string,
 	bindingHash []byte, text i18n.Printer, verifyURL string,
 ) (string, error) {
@@ -44,6 +46,9 @@ func StartPasswordReset(ctx context.Context, d Deps, t AuthorizationTenant, p *P
 	}
 	email, err := NormalizeEmail(address)
 	if err != nil {
+		return "", err
+	}
+	if err := countMessage(ctx, d, t.ID, email); err != nil {
 		return "", err
 	}
 	u, err := d.Store.Users().GetByEmail(ctx, t.ID, email)
@@ -137,6 +142,7 @@ func CompletePasswordReset(ctx context.Context, d Deps, h PasswordHasher, v stor
 	}
 	audit(ctx, d, store.AuditEvent{TenantID: u.TenantID, Type: EventPasswordChanged, Actor: store.ActorUser,
 		UserID: u.ID, Details: map[string]string{"how": "reset"}})
+	unlockSignIn(ctx, d, u)
 	if !u.EmailVerified {
 		u.EmailVerified, u.UpdatedAt = true, now
 		if err := d.Store.Users().Update(ctx, u); err != nil {

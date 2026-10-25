@@ -71,11 +71,13 @@ func authorizeQuery() url.Values {
 }
 
 // browser sends requests to a handler and keeps the cookies it receives,
-// like a browser would for one host.
+// like a browser would for one host. Its requests come from addr, the
+// address of httptest requests unless a test sets it.
 type browser struct {
-	t   *testing.T
-	h   http.Handler
-	jar map[string]string
+	t    *testing.T
+	h    http.Handler
+	jar  map[string]string
+	addr string
 }
 
 func newBrowser(t *testing.T, h http.Handler) *browser {
@@ -110,6 +112,9 @@ func (b *browser) send(req *http.Request) (res response, body string) {
 	b.t.Helper()
 	for name, value := range b.jar {
 		req.AddCookie(&http.Cookie{Name: name, Value: value})
+	}
+	if b.addr != "" {
+		req.RemoteAddr = b.addr
 	}
 	rec := httptest.NewRecorder()
 	b.h.ServeHTTP(rec, req)

@@ -36,7 +36,8 @@ stay, and which address a request has.
   | Type | Recorded when | Details |
   |---|---|---|
   | `user.signed_in` | A password sign-in for an authorization request, for the account pages, or right after a signup | `method` |
-  | `user.sign_in_failed` | A wrong password, an unknown address, a disabled account, or a password changed during the sign-in (ADR 0027) | `method`, `reason`: `invalid_credentials` or `user_disabled` |
+  | `user.sign_in_failed` | A wrong password, an unknown address, a disabled account, or a password changed during the sign-in (ADR 0027) | `method`, `reason`: `invalid_credentials` or `user_disabled`, or `locked` for an address that wrong passwords locked (ADR 0030) |
+  | `user.sign_in_locked` | Wrong passwords lock the address of an account (ADR 0030) | `until` |
   | `user.signed_out` | RP-Initiated Logout, the account sign-out, or another user who signs in on the browser | `reason`: `another_user_signed_in` for the last |
   | `user.created`, `user.deleted` | An operator creates or deletes a user, or a signup creates one | |
   | `user.password_changed` | The account pages, a reset or an operator set a password | `how`: `account`, `reset` or `operator` |

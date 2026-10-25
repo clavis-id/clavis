@@ -26,7 +26,7 @@ func (r refreshTokens) Create(ctx context.Context, f store.RefreshTokenFamily, t
 	if err != nil {
 		return fmt.Errorf("sqlite: creating refresh token family: %w", err)
 	}
-	return r.inTx(ctx, "creating refresh token family", func(q *db.Queries) error {
+	return inTx(ctx, r.db, r.q, "creating refresh token family", func(q *db.Queries) error {
 		if err := q.CreateRefreshTokenFamily(ctx, db.CreateRefreshTokenFamilyParams{
 			ID:             f.ID.String(),
 			TenantID:       f.TenantID.String(),
@@ -115,7 +115,7 @@ func (r refreshTokens) Rotate(ctx context.Context, tenantID uuid.UUID, hash []by
 			store.ErrInvalidArgument)
 	}
 	const op = "rotating refresh token"
-	return r.inTx(ctx, op, func(q *db.Queries) error {
+	return inTx(ctx, r.db, r.q, op, func(q *db.Queries) error {
 		// The family comes first, as in the cascade from a deleted family
 		// to its tokens.
 		extended, err := q.ExtendRefreshTokenFamily(ctx, db.ExtendRefreshTokenFamilyParams{
@@ -232,11 +232,11 @@ func (r refreshTokens) DeleteExpired(ctx context.Context, now time.Time) (int64,
 	return n, nil
 }
 
-// inTx runs fn in a transaction, which it commits when fn succeeds. Open
-// starts transactions with BEGIN IMMEDIATE, so they take the write lock at
-// once and concurrent writers wait for it.
-func (r refreshTokens) inTx(ctx context.Context, op string, fn func(*db.Queries) error) (err error) {
-	tx, err := r.db.BeginTx(ctx, nil)
+// inTx runs fn in a transaction of conn, which it commits when fn succeeds.
+// Open starts transactions with BEGIN IMMEDIATE, so they take the write lock
+// at once and concurrent writers wait for it.
+func inTx(ctx context.Context, conn *sql.DB, q *db.Queries, op string, fn func(*db.Queries) error) (err error) {
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return mapError(op, err)
 	}
@@ -248,7 +248,7 @@ func (r refreshTokens) inTx(ctx context.Context, op string, fn func(*db.Queries)
 			err = errors.Join(err, rbErr)
 		}
 	}()
-	if err := fn(r.q.WithTx(tx)); err != nil {
+	if err := fn(q.WithTx(tx)); err != nil {
 		return err
 	}
 	return mapError(op, tx.Commit())

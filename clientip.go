@@ -8,6 +8,15 @@ import (
 
 // clientIP returns the address of the client of r, as audit events record it
 // (ADR 0029), or "" when the address of the connection cannot be parsed.
+func clientIP(r *http.Request, trusted []netip.Prefix) string {
+	if addr := clientAddr(r, trusted); addr.IsValid() {
+		return addr.String()
+	}
+	return ""
+}
+
+// clientAddr returns the address of the client of r, or the zero address
+// when the address of the connection cannot be parsed.
 //
 // The address is that of the connection, unless the connection comes from a
 // trusted proxy. Then the X-Forwarded-For header names the client: each
@@ -18,13 +27,13 @@ import (
 // is the client; an entry that is not an address ends the search at the
 // trusted proxy that forwarded it. Without trusted proxies the header is
 // ignored, so a client cannot choose its own address.
-func clientIP(r *http.Request, trusted []netip.Prefix) string {
+func clientAddr(r *http.Request, trusted []netip.Prefix) netip.Addr {
 	addr, ok := parseAddr(r.RemoteAddr)
 	if !ok {
-		return ""
+		return netip.Addr{}
 	}
 	if !isTrusted(addr, trusted) {
-		return addr.String()
+		return addr
 	}
 	values := r.Header.Values("X-Forwarded-For")
 	for i := len(values) - 1; i >= 0; i-- {
@@ -42,15 +51,15 @@ func clientIP(r *http.Request, trusted []netip.Prefix) string {
 			}
 			next, ok := parseAddr(entry)
 			if !ok {
-				return addr.String()
+				return addr
 			}
 			addr = next
 			if !isTrusted(addr, trusted) {
-				return addr.String()
+				return addr
 			}
 		}
 	}
-	return addr.String()
+	return addr
 }
 
 // parseAddr parses an IP address, with or without a port, as a connection or

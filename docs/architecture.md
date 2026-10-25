@@ -373,6 +373,15 @@ year.
 - **Client addresses:** a request is from the address of its connection. Only a connection from
   `server.trusted_proxies` is from the client that X-Forwarded-For names, read from the right
   over the trusted proxies; without trusted proxies the header is ignored.
+- **Rate limits and lockout:** see ADR 0030.
+  - Limits per email address are stored, so they hold across instances, and count addresses
+    with and without accounts alike. Ten wrong passwords within 15 minutes lock an address for
+    15 minutes, answered like a wrong password; setting a password unlocks it. Ten wrong codes
+    within a day refuse the codes of an address for a day, while links still work. Five
+    messages within an hour refuse more for an hour.
+  - Limits per client address are kept in the memory of each instance: wrong passwords, wrong
+    codes, messages, and errors of the token, revocation and introspection endpoints. They
+    allow a burst, then a steady rate, and answer 429 with `Retry-After`.
 - **FIPS mode:** builds with `GOFIPS140=certified` restrict algorithms to the validated module.
 
 ## Observability
