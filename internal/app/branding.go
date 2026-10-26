@@ -82,13 +82,19 @@ func LogoName(contentType, hash string) (name string, ok bool) {
 // which keeps every default, when the tenant has none. The Cache of d keeps
 // it for TenantCacheTTL.
 func TenantBranding(ctx context.Context, d Deps, tenantID uuid.UUID) (store.Branding, error) {
-	return cached(d.Cache.brandingMap(), tenantID, d.Now(), func() (store.Branding, error) {
+	now := d.Now()
+	return cached(d.Cache.brandingMap(), tenantID, now, func() (store.Branding, error) {
 		b, err := d.Store.Brandings().Get(ctx, tenantID)
 		switch {
 		case errors.Is(err, store.ErrNotFound):
-			return store.Branding{TenantID: tenantID}, nil
+			b = store.Branding{TenantID: tenantID}
 		case err != nil:
 			return store.Branding{}, fmt.Errorf("getting the branding: %w", err)
+		}
+		// A kept logo that the branding no longer names was changed by
+		// another process: it goes too, so that pages and the logo agree.
+		if logo, _, ok := d.Cache.logoMap().get(tenantID, now); ok && logo.hash() != b.LogoHash {
+			d.Cache.logoMap().forget(tenantID)
 		}
 		return b, nil
 	})
@@ -97,15 +103,22 @@ func TenantBranding(ctx context.Context, d Deps, tenantID uuid.UUID) (store.Bran
 // TenantLogo returns the logo of a tenant, or ErrLogoNotFound. The Cache of
 // d keeps the answer for TenantCacheTTL.
 func TenantLogo(ctx context.Context, d Deps, tenantID uuid.UUID) (store.Logo, error) {
-	found, err := cached(d.Cache.logoMap(), tenantID, d.Now(), func() (cachedLogo, error) {
+	now := d.Now()
+	found, err := cached(d.Cache.logoMap(), tenantID, now, func() (cachedLogo, error) {
+		var l cachedLogo
 		logo, err := d.Store.Brandings().GetLogo(ctx, tenantID)
 		switch {
-		case errors.Is(err, store.ErrNotFound):
-			return cachedLogo{}, nil
-		case err != nil:
+		case err == nil:
+			l = cachedLogo{logo: logo, found: true}
+		case !errors.Is(err, store.ErrNotFound):
 			return cachedLogo{}, fmt.Errorf("getting the logo: %w", err)
 		}
-		return cachedLogo{logo: logo, found: true}, nil
+		// A kept branding that names another logo was changed by another
+		// process: it goes too, so that pages and the logo agree.
+		if b, _, ok := d.Cache.brandingMap().get(tenantID, now); ok && b.LogoHash != l.hash() {
+			d.Cache.brandingMap().forget(tenantID)
+		}
+		return l, nil
 	})
 	switch {
 	case err != nil:

@@ -40,17 +40,23 @@ minute.
   reads the store again.
 - **Freshness.**
   - A use case that changes a tenant, its API resources or its branding forgets what it
-    changed at once in the cache of its process.
+    changed at once in the cache of its process. A read that started before the change does
+    not keep its value after it: each kind counts the times it forgets, and a value loaded
+    while the count moved is returned but not kept.
   - A change made by another process, such as the command line or another instance, applies
     within 30 seconds.
+  - The branding names its logo by hash. When either is read again from the store and the
+    other is kept with another logo, the other is forgotten, so pages never name a logo that
+    the logo route does not serve, whichever expired first.
   - The command line has no cache, so its reads always reach the store.
   - A new API resource checks its scopes against the store, not the cache, so scopes stay
     unique.
 - **Not cached.** Clients, users, sessions, grants, codes and tokens are read on every
   request. A deleted client, a rotated secret or a disabled user takes effect at once.
-- **Bounds.** Each kind holds at most 10,000 entries, and logos at most 64, about 8 MiB. When
-  a kind is full, its expired entries are removed, at most once per period; while it stays
-  full, reads reach the store without being kept.
+- **Bounds.** Each kind holds at most 10,000 entries, and logos at most 64, about 8 MiB.
+  Slugs of no tenant are a kind of their own, so that requests for many of them cannot crowd
+  out the tenants. When a kind is full, its expired entries are removed, at most once per
+  period; while it stays full, reads reach the store without being kept.
 
 ## Consequences
 
