@@ -280,7 +280,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	// Everything is validated before the first write to the store.
-	deps := app.Deps{Store: cfg.Store, Logger: logger, Now: time.Now, NewID: uuid.NewV7}
+	deps := app.Deps{Store: cfg.Store, Logger: logger, Now: time.Now, NewID: uuid.NewV7, Cache: app.NewCache()}
 	manager, err := keys.NewManager(keys.Config{
 		Store:         cfg.Store,
 		Encrypter:     cfg.KeyEncrypter,
@@ -516,8 +516,9 @@ func (s *Server) handleTenant(mux *http.ServeMux, method, path string, h tenantH
 
 // serveTenant resolves the tenant with the given slug, or the default tenant
 // when slug is empty, and passes the request to h. Unknown tenants get a 404
-// response. Every request reads its tenant from the store, the default one
-// too, so a change of its settings applies at once.
+// response. Tenants, the default one too, and slugs of no tenant come from
+// the cache of app.Deps, so a change made elsewhere applies within
+// app.TenantCacheTTL (ADR 0031).
 func (s *Server) serveTenant(w http.ResponseWriter, r *http.Request, slug string, h tenantHandler) {
 	var t store.Tenant
 	var err error

@@ -51,10 +51,13 @@ func CreateAPIResource(ctx context.Context, d Deps, tenantID uuid.UUID, spec API
 		return store.APIResource{}, fmt.Errorf("%w: a resource defines 1 to %d scopes", ErrInvalidAPIResource,
 			maxResourceScopes)
 	}
-	owners, err := scopeOwners(ctx, d, tenantID)
+	// The resources are read from the store, not the Cache: scopes must
+	// stay unique.
+	resources, err := ListAPIResources(ctx, d, tenantID)
 	if err != nil {
 		return store.APIResource{}, err
 	}
+	owners := ownersOf(resources)
 	for _, scope := range scopes {
 		switch {
 		case oauth.ValidateScope(scope) != nil:
@@ -86,6 +89,7 @@ func CreateAPIResource(ctx context.Context, d Deps, tenantID uuid.UUID, spec API
 	case err != nil:
 		return store.APIResource{}, fmt.Errorf("creating API resource: %w", err)
 	}
+	d.Cache.forgetResources(tenantID)
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "created API resource",
 		slog.String("tenant_id", tenantID.String()), slog.String("api_resource_id", r.ID.String()))
 	return r, nil
@@ -124,25 +128,33 @@ func DeleteAPIResource(ctx context.Context, d Deps, tenantID uuid.UUID, identifi
 	case err != nil:
 		return fmt.Errorf("deleting API resource: %w", err)
 	}
+	d.Cache.forgetResources(tenantID)
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "deleted API resource",
 		slog.String("tenant_id", tenantID.String()), slog.String("api_resource_id", r.ID.String()))
 	return nil
 }
 
 // scopeOwners maps every scope defined by an API resource of a tenant to
-// that resource.
+// that resource. The Cache of d keeps the resources for TenantCacheTTL.
 func scopeOwners(ctx context.Context, d Deps, tenantID uuid.UUID) (map[string]store.APIResource, error) {
-	resources, err := ListAPIResources(ctx, d, tenantID)
+	resources, err := cached(d.Cache.resourceMap(), tenantID, d.Now(), func() ([]store.APIResource, error) {
+		return ListAPIResources(ctx, d, tenantID)
+	})
 	if err != nil {
 		return nil, err
 	}
+	return ownersOf(resources), nil
+}
+
+// ownersOf maps every scope defined by one of resources to that resource.
+func ownersOf(resources []store.APIResource) map[string]store.APIResource {
 	owners := make(map[string]store.APIResource)
 	for _, r := range resources {
 		for _, scope := range r.Scopes {
 			owners[scope] = r
 		}
 	}
-	return owners, nil
+	return owners
 }
 
 // undefinedScope returns the first of scopes that is neither an OpenID

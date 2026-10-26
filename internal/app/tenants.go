@@ -116,6 +116,8 @@ func CreateTenant(ctx context.Context, d Deps, createKeys func(context.Context, 
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "created tenant",
 		slog.String("tenant_id", t.ID.String()), slog.String("tenant", t.Slug))
 
+	d.Cache.forgetSlug(t.Slug)
+
 	if err := createKeys(ctx, t.ID); err != nil {
 		return t, fmt.Errorf("tenant %q was created, but creating its signing keys failed "+
 			"(key rotation retries on the next check): %w", slug, err)
@@ -125,32 +127,45 @@ func CreateTenant(ctx context.Context, d Deps, createKeys func(context.Context, 
 
 // TenantBySlug returns the tenant served under /t/{slug}. The default tenant
 // is served only at the root issuer, so it is not found by slug; neither is
-// any slug that fails validation.
+// any slug that fails validation. The Cache of d keeps the answer, a tenant
+// or none, for TenantCacheTTL.
 func TenantBySlug(ctx context.Context, d Deps, slug string) (store.Tenant, error) {
 	if slug == DefaultTenantSlug || ValidateTenantSlug(slug) != nil {
 		return store.Tenant{}, ErrTenantNotFound
 	}
-	t, err := d.Store.Tenants().GetBySlug(ctx, slug)
+	found, err := cached(d.Cache.slugMap(), slug, d.Now(), func() (cachedSlug, error) {
+		t, err := d.Store.Tenants().GetBySlug(ctx, slug)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			return cachedSlug{}, nil
+		case err != nil:
+			return cachedSlug{}, fmt.Errorf("looking up tenant: %w", err)
+		}
+		return cachedSlug{tenant: t, found: true}, nil
+	})
 	switch {
-	case errors.Is(err, store.ErrNotFound):
-		return store.Tenant{}, ErrTenantNotFound
 	case err != nil:
-		return store.Tenant{}, fmt.Errorf("looking up tenant: %w", err)
+		return store.Tenant{}, err
+	case !found.found:
+		return store.Tenant{}, ErrTenantNotFound
 	}
-	return t, nil
+	return found.tenant, nil
 }
 
-// TenantByID returns the tenant with the given ID as stored now, so a
-// request sees the current settings of a tenant that it found earlier.
+// TenantByID returns the tenant with the given ID as stored at most
+// TenantCacheTTL ago, which the Cache of d keeps, so a request sees the
+// recent settings of a tenant that it found earlier.
 func TenantByID(ctx context.Context, d Deps, id uuid.UUID) (store.Tenant, error) {
-	t, err := d.Store.Tenants().Get(ctx, id)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		return store.Tenant{}, ErrTenantNotFound
-	case err != nil:
-		return store.Tenant{}, fmt.Errorf("looking up tenant: %w", err)
-	}
-	return t, nil
+	return cached(d.Cache.tenantMap(), id, d.Now(), func() (store.Tenant, error) {
+		t, err := d.Store.Tenants().Get(ctx, id)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			return store.Tenant{}, ErrTenantNotFound
+		case err != nil:
+			return store.Tenant{}, fmt.Errorf("looking up tenant: %w", err)
+		}
+		return t, nil
+	})
 }
 
 // ListTenants returns every tenant in ID order, which follows creation time
@@ -201,6 +216,7 @@ func DeleteTenant(ctx context.Context, d Deps, slug string) error {
 	case err != nil:
 		return fmt.Errorf("deleting tenant %q: %w", slug, err)
 	}
+	d.Cache.forgetTenant(t)
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "deleted tenant",
 		slog.String("tenant_id", t.ID.String()), slog.String("tenant", t.Slug))
 	return nil
@@ -240,6 +256,7 @@ func UpdateTenant(ctx context.Context, d Deps, slug string, c TenantChanges) (st
 	case err != nil:
 		return store.Tenant{}, fmt.Errorf("updating tenant %q: %w", slug, err)
 	}
+	d.Cache.forgetTenant(t)
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "updated tenant",
 		slog.String("tenant_id", t.ID.String()), slog.String("tenant", t.Slug),
 		slog.Bool("signup_enabled", t.SignupEnabled))
