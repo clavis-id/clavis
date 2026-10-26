@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +18,8 @@ type readCounter struct {
 	mu    sync.Mutex
 	reads map[string]int
 	fail  error
+	// afterTenant, when set, runs after a tenant is read by ID.
+	afterTenant func()
 }
 
 func (c *readCounter) read(method string) error {
@@ -36,6 +39,14 @@ func (c *readCounter) count(method string) int {
 	n := c.reads[method]
 	delete(c.reads, method)
 	return n
+}
+
+// setAfterTenant makes f run after each read of a tenant by ID, or nothing
+// when f is nil.
+func (c *readCounter) setAfterTenant(f func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.afterTenant = f
 }
 
 // setFailure makes every counted read fail with err, or succeed when err
@@ -67,7 +78,14 @@ func (t countedTenants) Get(ctx context.Context, id uuid.UUID) (store.Tenant, er
 	if err := t.c.read("Tenants.Get"); err != nil {
 		return store.Tenant{}, err
 	}
-	return t.Tenants.Get(ctx, id)
+	tn, err := t.Tenants.Get(ctx, id)
+	t.c.mu.Lock()
+	after := t.c.afterTenant
+	t.c.mu.Unlock()
+	if after != nil {
+		after()
+	}
+	return tn, err
 }
 
 func (t countedTenants) GetBySlug(ctx context.Context, slug string) (store.Tenant, error) {
@@ -325,6 +343,117 @@ func TestCacheKeepsBrandingAndLogo(t *testing.T) {
 	}
 }
 
+// ADR 0031: a tenant read before a change of the same process is not kept
+// after the change forgot it, so the change still applies at once.
+func TestCacheKeepsNoValueReadBeforeAChange(t *testing.T) {
+	t.Parallel()
+	f := newCacheFixture(t)
+	read, resume := make(chan struct{}), make(chan struct{})
+	f.reads.setAfterTenant(func() {
+		read <- struct{}{}
+		<-resume
+	})
+	done := make(chan store.Tenant)
+	go func() {
+		got, _ := TenantByID(t.Context(), f.d, f.tenant.ID)
+		done <- got
+	}()
+	<-read
+	f.reads.setAfterTenant(nil)
+	name := "Acme Inc."
+	if _, err := UpdateTenant(t.Context(), f.d, "acme", TenantChanges{Name: &name}); err != nil {
+		t.Fatalf("UpdateTenant() unexpected error: %v", err)
+	}
+	close(resume)
+	if got := <-done; got.Name != "acme" {
+		t.Errorf("TenantByID() that read before the change = %q, want the old name", got.Name)
+	}
+	if got, err := TenantByID(t.Context(), f.d, f.tenant.ID); err != nil || got.Name != name {
+		t.Errorf("TenantByID() after the change = %q, %v; want %q", got.Name, err, name)
+	}
+}
+
+// ADR 0031: slugs of no tenant have a bound of their own, so many of them
+// cannot keep the tenants from being kept.
+func TestUnknownSlugsDoNotCrowdOutTenants(t *testing.T) {
+	t.Parallel()
+	f := newCacheFixture(t)
+	f.d.Cache = newCache(2, 1)
+	for i := range 3 {
+		if _, err := TenantBySlug(t.Context(), f.d, fmt.Sprintf("nobody%d", i)); !errors.Is(err, ErrTenantNotFound) {
+			t.Fatalf("TenantBySlug() of no tenant = %v, want ErrTenantNotFound", err)
+		}
+	}
+	// The first two are kept, up to the bound.
+	for i := range 2 {
+		if _, err := TenantBySlug(t.Context(), f.d, fmt.Sprintf("nobody%d", i)); !errors.Is(err, ErrTenantNotFound) {
+			t.Fatalf("TenantBySlug() of a kept slug of no tenant = %v, want ErrTenantNotFound", err)
+		}
+	}
+	for range 2 {
+		if _, err := TenantBySlug(t.Context(), f.d, "acme"); err != nil {
+			t.Fatalf("TenantBySlug() unexpected error: %v", err)
+		}
+	}
+	if n := f.reads.count("Tenants.GetBySlug"); n != 4 {
+		t.Errorf("lookups of three slugs of no tenant, two of them twice, and a tenant twice read the store %d "+
+			"times, want 4", n)
+	}
+}
+
+// ADR 0031: when another process changes the logo, the branding and the
+// logo that a Cache keeps change together, whichever expires first, so
+// that pages name the logo that its route serves.
+func TestCacheKeepsBrandingAndLogoInStep(t *testing.T) {
+	t.Parallel()
+	f := newCacheFixture(t)
+	setLogo := func(size int) store.Logo {
+		t.Helper()
+		logo, err := SetLogo(t.Context(), f.other, f.tenant.ID, encodedImage(t, "png", size, size))
+		if err != nil {
+			t.Fatalf("SetLogo() unexpected error: %v", err)
+		}
+		return logo
+	}
+	check := func(when string, want store.Logo) {
+		t.Helper()
+		if got, err := TenantBranding(t.Context(), f.d, f.tenant.ID); err != nil || got.LogoHash != want.Hash {
+			t.Errorf("%s: TenantBranding() = %+v, %v; want logo %s", when, got, err, want.Hash)
+		}
+		if got, err := TenantLogo(t.Context(), f.d, f.tenant.ID); err != nil || got.Hash != want.Hash {
+			t.Errorf("%s: TenantLogo() = %s, %v; want %s", when, got.Hash, err, want.Hash)
+		}
+	}
+	first := setLogo(2)
+	// The branding is kept 20 seconds before the logo, so it expires first.
+	if got, err := TenantBranding(t.Context(), f.d, f.tenant.ID); err != nil || got.LogoHash != first.Hash {
+		t.Fatalf("TenantBranding() = %+v, %v; want logo %s", got, err, first.Hash)
+	}
+	*f.now = f.now.Add(20 * time.Second)
+	if got, err := TenantLogo(t.Context(), f.d, f.tenant.ID); err != nil || got.Hash != first.Hash {
+		t.Fatalf("TenantLogo() = %s, %v; want %s", got.Hash, err, first.Hash)
+	}
+	second := setLogo(3)
+	*f.now = f.now.Add(TenantCacheTTL - 19*time.Second)
+	check("the branding expired", second)
+
+	// Now the logo is kept 20 seconds before the branding.
+	*f.now = f.now.Add(TenantCacheTTL)
+	if _, err := TenantLogo(t.Context(), f.d, f.tenant.ID); err != nil {
+		t.Fatalf("TenantLogo() unexpected error: %v", err)
+	}
+	*f.now = f.now.Add(20 * time.Second)
+	if _, err := TenantBranding(t.Context(), f.d, f.tenant.ID); err != nil {
+		t.Fatalf("TenantBranding() unexpected error: %v", err)
+	}
+	third := setLogo(4)
+	*f.now = f.now.Add(TenantCacheTTL - 19*time.Second)
+	if got, err := TenantLogo(t.Context(), f.d, f.tenant.ID); err != nil || got.Hash != third.Hash {
+		t.Fatalf("TenantLogo() after it expired = %s, %v; want %s", got.Hash, err, third.Hash)
+	}
+	check("the logo expired", third)
+}
+
 // A failed read is not kept, and without a Cache every read reaches the
 // store.
 func TestCacheKeepsNoFailuresAndNilKeepsNothing(t *testing.T) {
@@ -362,27 +491,57 @@ func TestExpiringIsBounded(t *testing.T) {
 	t.Parallel()
 	start := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	e := newExpiring[string, int](2)
-	e.put("a", 1, start)
-	e.put("b", 2, start)
-	e.put("c", 3, start)
-	if _, ok := e.get("c", start); ok {
+	put := func(k string, v int, now time.Time) {
+		_, gen, _ := e.get(k, now)
+		e.put(k, v, now, gen)
+	}
+	put("a", 1, start)
+	put("b", 2, start)
+	put("c", 3, start)
+	if _, _, ok := e.get("c", start); ok {
 		t.Error("an entry beyond the bound was kept")
 	}
-	e.put("a", 10, start)
-	if v, ok := e.get("a", start); !ok || v != 10 {
+	put("a", 10, start)
+	if v, _, ok := e.get("a", start); !ok || v != 10 {
 		t.Errorf("get(a) after replacing it = %d, %v; want 10", v, ok)
 	}
 	later := start.Add(TenantCacheTTL)
-	if _, ok := e.get("b", later); ok {
+	if _, _, ok := e.get("b", later); ok {
 		t.Error("an expired entry was returned")
 	}
-	e.put("c", 3, later)
-	if v, ok := e.get("c", later); !ok || v != 3 {
+	put("c", 3, later)
+	if v, _, ok := e.get("c", later); !ok || v != 3 {
 		t.Errorf("get(c) once expired entries made room = %d, %v; want 3", v, ok)
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if len(e.entries) != 1 {
 		t.Errorf("the map holds %d entries, want 1", len(e.entries))
+	}
+}
+
+// A value loaded after a miss is not kept when forget was called since, and
+// a nil expiring map keeps nothing.
+func TestExpiringKeepsNoValueLoadedBeforeAForget(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	e := newExpiring[string, int](10)
+	_, gen, _ := e.get("a", start)
+	e.forget("b")
+	e.put("a", 1, start, gen)
+	if _, _, ok := e.get("a", start); ok {
+		t.Error("a value loaded before a forget was kept")
+	}
+	_, gen, _ = e.get("a", start)
+	e.put("a", 1, start, gen)
+	if v, _, ok := e.get("a", start); !ok || v != 1 {
+		t.Errorf("get(a) after a put = %d, %v; want 1", v, ok)
+	}
+
+	var none *expiring[string, int]
+	none.put("a", 1, start, 0)
+	none.forget("a")
+	if _, _, ok := none.get("a", start); ok {
+		t.Error("a nil map returned a value")
 	}
 }

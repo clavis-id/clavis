@@ -374,14 +374,19 @@ year.
   `server.trusted_proxies` is from the client that X-Forwarded-For names, read from the right
   over the trusted proxies; without trusted proxies the header is ignored.
 - **Rate limits and lockout:** see ADR 0030.
+  - Every limit counts an event before the work that may produce it, so requests that arrive
+    together cannot exceed it, and takes it back when the work does not produce it.
   - Limits per email address are stored, so they hold across instances, and count addresses
     with and without accounts alike. Ten wrong passwords within 15 minutes lock an address for
-    15 minutes, answered like a wrong password; setting a password unlocks it. Ten wrong codes
-    within a day refuse the codes of an address for a day, while links still work. Five
-    messages within an hour refuse more for an hour.
+    15 minutes, answered like a wrong password; a right password, or setting a password,
+    forgets them. Ten wrong codes within a day refuse the codes of an address for a day, while
+    links still work; a right code forgets them. Five messages within an hour refuse more for
+    an hour.
   - Limits per client address are kept in the memory of each instance: wrong passwords, wrong
-    codes, messages, and errors of the token, revocation and introspection endpoints. They
-    allow a burst, then a steady rate, and answer 429 with `Retry-After`.
+    codes, messages, and failed client authentications and replayed codes or refresh tokens
+    at the token, revocation and introspection endpoints. They allow a burst, then a steady
+    rate, and answer 429 with `Retry-After`. An IPv6 client counts by its /64 network, and its
+    /48 network gets five times the limits of a client.
 - **Per-tenant cache:** see ADR 0031. Each server keeps tenants, unknown slugs, API resources,
   branding and logos for 30 seconds, and each tenant's signing keys for a minute. Changes from
   the same process apply at once; changes from the command line or another instance, within

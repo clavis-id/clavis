@@ -66,27 +66,35 @@ func TestBurstThenSteadyRate(t *testing.T) {
 	}
 }
 
-// Wait counts nothing, Add counts whether or not the event is allowed, and
-// keys are separate.
-func TestWaitAndAdd(t *testing.T) {
+// Refund takes back a counted event, keys are separate, and a key whose
+// burst is whole again after a refund is forgotten.
+func TestRefund(t *testing.T) {
 	t.Parallel()
 	l := mustNew(t, 2, time.Minute, 10)
-	for range 5 {
-		if wait := l.Wait("a", start); wait != 0 {
-			t.Fatalf("Wait() of a new key = %v, want none", wait)
-		}
+	l.Allow("a", start)
+	l.Allow("a", start)
+	l.Refund("a", start)
+	if wait := l.Allow("a", start); wait != 0 {
+		t.Fatalf("an event after a refund waits %v, want none", wait)
 	}
-	l.Add("a", start)
-	l.Add("a", start)
-	if wait := l.Wait("a", start); wait != time.Minute {
-		t.Errorf("Wait() after a burst = %v, want 1m", wait)
+	if wait := l.Allow("a", start); wait != time.Minute {
+		t.Errorf("an event beyond the burst waits %v, want 1m", wait)
 	}
-	l.Add("a", start)
-	if wait := l.Wait("a", start); wait != 2*time.Minute {
-		t.Errorf("Wait() after an event beyond the burst = %v, want 2m", wait)
+	// The event that had to wait was not counted.
+	if wait := l.Allow("a", start.Add(10*time.Second)); wait != 50*time.Second {
+		t.Errorf("an event 10s later waits %v, want 50s", wait)
 	}
-	if wait := l.Wait("b", start); wait != 0 {
-		t.Errorf("Wait() of another key = %v, want none", wait)
+	l.Refund("b", start)
+	if wait := l.Allow("b", start); wait != 0 {
+		t.Errorf("an event of another key waits %v, want none", wait)
+	}
+	l.Refund("a", start)
+	l.Refund("a", start)
+	l.Refund("b", start)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.whole) != 0 {
+		t.Errorf("the limiter holds %d keys after every event was refunded, want none", len(l.whole))
 	}
 }
 
@@ -95,19 +103,20 @@ func TestWaitAndAdd(t *testing.T) {
 func TestKeysAreBounded(t *testing.T) {
 	t.Parallel()
 	l := mustNew(t, 1, time.Minute, 2)
-	l.Add("a", start)
-	l.Add("b", start)
-	l.Add("c", start)
-	if wait := l.Wait("c", start); wait != 0 {
-		t.Errorf("a key beyond the bound waits %v, want it not limited", wait)
+	l.Allow("a", start)
+	l.Allow("b", start)
+	for range 3 {
+		if wait := l.Allow("c", start); wait != 0 {
+			t.Fatalf("a key beyond the bound waits %v, want it not limited", wait)
+		}
 	}
-	if wait := l.Wait("a", start); wait != time.Minute {
+	if wait := l.Allow("a", start); wait != time.Minute {
 		t.Errorf("a key within the bound waits %v, want 1m", wait)
 	}
 	// Once the burst of a and b is whole, they make room for c.
 	at := start.Add(time.Minute)
-	l.Add("c", at)
-	if wait := l.Wait("c", at); wait != time.Minute {
+	l.Allow("c", at)
+	if wait := l.Allow("c", at); wait != time.Minute {
 		t.Errorf("a key after the sweep waits %v, want 1m", wait)
 	}
 	l.mu.Lock()

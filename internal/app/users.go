@@ -274,9 +274,11 @@ func endUserAccess(ctx context.Context, d Deps, u store.User, keep uuid.UUID) er
 // match. Every failure that could reveal whether the account exists returns
 // ErrInvalidCredentials after the work of a password verification (ADR
 // 0015). ErrUserDisabled is returned only for a correct password. A hash
-// below the current policy is replaced with a new one. Wrong passwords
-// count against the address, which MaxSignInFailures of them lock: a locked
-// address fails like a wrong password (ADR 0030).
+// below the current policy is replaced with a new one. Each attempt counts
+// against the address before its password is checked, and a right password
+// forgets the count, so that MaxSignInFailures wrong passwords lock the
+// address even when they arrive together: a locked address fails like a
+// wrong password (ADR 0030).
 func AuthenticatePassword(ctx context.Context, d Deps, h PasswordHasher, tenantID uuid.UUID,
 	email, pw string,
 ) (store.User, error) {
@@ -294,16 +296,20 @@ func AuthenticatePassword(ctx context.Context, d Deps, h PasswordHasher, tenantI
 func authenticatePassword(ctx context.Context, d Deps, h PasswordHasher, tenantID uuid.UUID,
 	email, pw string,
 ) (store.User, time.Time, error) {
-	locked, err := signInLocked(ctx, d, tenantID, email)
+	a, err := countSignIn(ctx, d, tenantID, email)
 	if err != nil {
 		return store.User{}, time.Time{}, err
 	}
-	if locked {
+	if a.beyond(MaxSignInFailures) {
 		return lockedSignIn(ctx, d, h, tenantID, email, pw)
 	}
 	u, setAt, err := checkPassword(ctx, d, h, tenantID, email, pw)
-	if errors.Is(err, ErrInvalidCredentials) {
-		countSignInFailure(ctx, d, tenantID, email, u)
+	switch {
+	// A disabled account fails only with the right password.
+	case err == nil, errors.Is(err, ErrUserDisabled):
+		signInSucceeded(ctx, d, a)
+	case errors.Is(err, ErrInvalidCredentials):
+		signInFailed(ctx, d, a, u)
 	}
 	return u, setAt, err
 }

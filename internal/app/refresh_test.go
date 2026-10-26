@@ -256,8 +256,15 @@ func TestRefreshTokenReuseRevokesTheFamily(t *testing.T) {
 
 	_, err = f.refresh(t, client, first.RefreshToken)
 	wantOAuthError(t, "reused refresh token", err, oauth.ErrorInvalidGrant)
+	// ADR 0030: a reuse counts against the client address.
+	if !errors.Is(err, ErrReplayed) {
+		t.Errorf("reused refresh token: error = %v, want ErrReplayed", err)
+	}
 	_, err = f.refresh(t, client, second.RefreshToken)
 	wantOAuthError(t, "current token of a revoked family", err, oauth.ErrorInvalidGrant)
+	if errors.Is(err, ErrReplayed) {
+		t.Errorf("current token of a revoked family: error = %v, want no ErrReplayed", err)
+	}
 	f.wantRevoked(t, "after the reuse", first.AccessToken, second.AccessToken)
 	if !strings.Contains(logs.String(), "refresh token reused") || !strings.Contains(logs.String(), "revoked_access_tokens=2") {
 		t.Errorf("logs do not report the reuse:\n%s", logs.String())
@@ -403,6 +410,10 @@ func TestCodeReplayRevokesRefreshTokens(t *testing.T) {
 	// refreshed ones.
 	_, err = ExchangeCode(t.Context(), f.d, fakeSigner{}, f.tenant, client, codeRequest(code))
 	wantOAuthError(t, "replayed code", err, oauth.ErrorInvalidGrant)
+	// ADR 0030: a replay counts against the client address.
+	if !errors.Is(err, ErrReplayed) {
+		t.Errorf("replayed code: error = %v, want ErrReplayed", err)
+	}
 	_, err = f.refresh(t, client, second.RefreshToken)
 	wantOAuthError(t, "refresh token of a replayed code", err, oauth.ErrorInvalidGrant)
 	f.wantRevoked(t, "after the code replay", first.AccessToken, second.AccessToken)

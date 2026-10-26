@@ -34,6 +34,13 @@ const accessTokenAlgorithm = "RS256"
 // verification. TokenSigner.Verify wraps it.
 var ErrInvalidToken = errors.New("invalid token")
 
+// ErrReplayed is wrapped, together with the invalid_grant error of the
+// response, by the error of a token request that presents a code or a
+// refresh token that was used already. Such a request revokes tokens and
+// records an audit event, so it counts against the client address (ADR
+// 0030).
+var ErrReplayed = errors.New("a code or refresh token was presented again")
+
 // TokenSigner signs and verifies the tokens of a tenant with its signing
 // keys. Verify returns an error that wraps ErrInvalidToken for a token that
 // fails verification, and other errors only when it cannot check.
@@ -214,7 +221,8 @@ func codeReused(ctx context.Context, d Deps, t AuthorizationTenant, client store
 		slog.Int64("revoked_access_tokens", tokens))
 	audit(ctx, d, store.AuditEvent{TenantID: t.ID, Type: EventCodeReplayed, Actor: store.ActorClient,
 		UserID: code.UserID, ClientID: client.ClientID, SessionID: code.SessionID})
-	return &oauth.Error{Code: oauth.ErrorInvalidGrant, Description: "the code was used already"}
+	return fmt.Errorf("%w: %w", ErrReplayed, &oauth.Error{Code: oauth.ErrorInvalidGrant,
+		Description: "the code was used already"})
 }
 
 // issuesRefreshToken reports whether exchanging a code that grants scopes
@@ -402,7 +410,8 @@ func refreshTokenReused(ctx context.Context, d Deps, t AuthorizationTenant, clie
 	audit(ctx, d, store.AuditEvent{TenantID: t.ID, Type: EventRefreshTokenReused, Actor: store.ActorClient,
 		UserID: family.UserID, ClientID: client.ClientID, SessionID: family.SessionID,
 		Details: map[string]string{"refresh_token_family": family.ID.String()}})
-	return &oauth.Error{Code: oauth.ErrorInvalidGrant, Description: "the refresh token was used already"}
+	return fmt.Errorf("%w: %w", ErrReplayed, &oauth.Error{Code: oauth.ErrorInvalidGrant,
+		Description: "the refresh token was used already"})
 }
 
 // ClientCredentialsToken answers a client_credentials token request (RFC

@@ -133,23 +133,22 @@ func TenantBySlug(ctx context.Context, d Deps, slug string) (store.Tenant, error
 	if slug == DefaultTenantSlug || ValidateTenantSlug(slug) != nil {
 		return store.Tenant{}, ErrTenantNotFound
 	}
-	found, err := cached(d.Cache.slugMap(), slug, d.Now(), func() (cachedSlug, error) {
+	now, unknown := d.Now(), d.Cache.unknownSlugMap()
+	_, gen, ok := unknown.get(slug, now)
+	if ok {
+		return store.Tenant{}, ErrTenantNotFound
+	}
+	return cached(d.Cache.slugMap(), slug, now, func() (store.Tenant, error) {
 		t, err := d.Store.Tenants().GetBySlug(ctx, slug)
 		switch {
 		case errors.Is(err, store.ErrNotFound):
-			return cachedSlug{}, nil
+			unknown.put(slug, struct{}{}, now, gen)
+			return store.Tenant{}, ErrTenantNotFound
 		case err != nil:
-			return cachedSlug{}, fmt.Errorf("looking up tenant: %w", err)
+			return store.Tenant{}, fmt.Errorf("looking up tenant: %w", err)
 		}
-		return cachedSlug{tenant: t, found: true}, nil
+		return t, nil
 	})
-	switch {
-	case err != nil:
-		return store.Tenant{}, err
-	case !found.found:
-		return store.Tenant{}, ErrTenantNotFound
-	}
-	return found.tenant, nil
 }
 
 // TenantByID returns the tenant with the given ID as stored at most

@@ -15,6 +15,10 @@ import (
 // the keys that are being limited. It holds at most a fixed number of keys;
 // beyond them, new keys are not limited.
 //
+// Callers count an event with Allow before the work that may produce it, so
+// that concurrent events cannot exceed the limit, and take it back with
+// Refund when the work does not produce it.
+//
 // A Limiter is safe for concurrent use.
 type Limiter[K comparable] struct {
 	interval time.Duration
@@ -44,50 +48,39 @@ func New[K comparable](burst int, interval time.Duration, maxKeys int) (*Limiter
 	}, nil
 }
 
-// Wait returns how long key must wait after now for its next event to be
-// allowed, or zero when it is allowed now. It counts nothing.
-func (l *Limiter[K]) Wait(key K, now time.Time) time.Duration {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.wait(key, now)
-}
-
-// Add counts an event of key at now, whether or not it is allowed.
-func (l *Limiter[K]) Add(key K, now time.Time) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.add(key, now)
-}
-
 // Allow counts an event of key at now and returns zero when the event is
 // allowed. Otherwise it counts nothing and returns how long key must wait.
 func (l *Limiter[K]) Allow(key K, now time.Time) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if wait := l.wait(key, now); wait > 0 {
-		return wait
+	whole, ok := l.whole[key]
+	switch {
+	case ok:
+		if wait := whole.Sub(now) - l.tolerance; wait > 0 {
+			return wait
+		}
+	case !l.room(now):
+		return 0
 	}
-	l.add(key, now)
+	l.whole[key] = later(whole, now).Add(l.interval)
 	return 0
 }
 
-func (l *Limiter[K]) wait(key K, now time.Time) time.Duration {
+// Refund takes back an event of key that Allow counted, because the work it
+// limits did not produce the event. A key whose burst is whole again is
+// forgotten.
+func (l *Limiter[K]) Refund(key K, now time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	whole, ok := l.whole[key]
 	if !ok {
-		return 0
+		return
 	}
-	return max(whole.Sub(now)-l.tolerance, 0)
-}
-
-func (l *Limiter[K]) add(key K, now time.Time) {
-	whole, ok := l.whole[key]
-	if !ok {
-		if !l.room(now) {
-			return
-		}
-		whole = now
+	if whole = whole.Add(-l.interval); whole.After(now) {
+		l.whole[key] = whole
+	} else {
+		delete(l.whole, key)
 	}
-	l.whole[key] = later(whole, now).Add(l.interval)
 }
 
 // room reports whether there is room for a new key. When it is time to, it

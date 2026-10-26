@@ -44,7 +44,7 @@ func (s *Server) handleResetPage(w http.ResponseWriter, r *http.Request, t tenan
 // whether or not the address has an account (ADR 0027).
 func (s *Server) handleReset(w http.ResponseWriter, r *http.Request, t tenant) {
 	form, ok := s.flowForm(w, r, t, resetFlow)
-	if !ok || s.pageLimited(w, r, t, s.limits.messages) {
+	if !ok {
 		return
 	}
 	var p *app.PendingAuthorization
@@ -58,10 +58,15 @@ func (s *Server) handleReset(w http.ResponseWriter, r *http.Request, t tenant) {
 		p, uiLocales = &pending, pending.Request.UILocales
 	}
 	l := s.locale(w, r, "", uiLocales)
+	res, ok := s.reservePage(w, r, t, s.limits.messages)
+	if !ok {
+		return
+	}
 	// The account pages have no binding cookie of their own; a reset binds
 	// to the browser like an authorization request does.
 	id, err := app.StartPasswordReset(r.Context(), s.deps, t.authorizationTenant(), p, form.Get("email"),
 		s.bindBrowser(w, r), s.catalogs.Printer(l), t.issuer+resetVerifyPath)
+	s.settle(res, err == nil)
 	switch {
 	case errors.Is(err, app.ErrInvalidEmail):
 		s.resetPage(w, r, t, p, l, form.Get("email"), i18n.SignupInvalidEmail)
@@ -76,7 +81,6 @@ func (s *Server) handleReset(w http.ResponseWriter, r *http.Request, t tenant) {
 		s.authorizationRequestError(w, r, t, err)
 		return
 	}
-	s.countClient(s.limits.messages, r)
 	seeOther(w, verificationURL(t, resetVerifyPath, id))
 }
 
