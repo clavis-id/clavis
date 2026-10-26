@@ -38,26 +38,53 @@ var (
 	tokenLimit = clientLimit{burst: 60, interval: time.Second}
 )
 
-// maxLimitedClients bounds the client addresses that each limit holds at a
-// time. Beyond it, new addresses are not limited: so many addresses are a
-// distributed attack, which the limits per account still bound.
+// networkFactor multiplies the burst and the rate of a limit for the /48
+// network of an IPv6 client. One party can hold a whole /48, such as a
+// tunnel broker gives away, and with it 65,536 /64 networks, each of which
+// would get the burst of a client; the people of one site share a /48 too,
+// so it gets more than one client.
+const networkFactor = 5
+
+// maxLimitedClients bounds the client addresses, and the networks, that
+// each limit holds at a time. Beyond it, new ones are not limited: so many
+// addresses are a distributed attack, which the limits per account still
+// bound.
 const maxLimitedClients = 1 << 15
 
-// clientKey is the key of a client address in the limits.
+// clientKey is the key of a client address, or of a network, in the limits.
 type clientKey = [16]byte
+
+// clientLimiter is a limit per client address. An IPv6 client also counts
+// against its /48 network.
+type clientLimiter struct {
+	clients  *ratelimit.Limiter[clientKey]
+	networks *ratelimit.Limiter[clientKey]
+}
+
+func newClientLimiter(l clientLimit) (*clientLimiter, error) {
+	clients, err := ratelimit.New[clientKey](l.burst, l.interval, maxLimitedClients)
+	if err != nil {
+		return nil, err
+	}
+	networks, err := ratelimit.New[clientKey](networkFactor*l.burst, l.interval/networkFactor, maxLimitedClients)
+	if err != nil {
+		return nil, err
+	}
+	return &clientLimiter{clients: clients, networks: networks}, nil
+}
 
 // clientLimits holds the limits per client address of a Server.
 type clientLimits struct {
-	passwords *ratelimit.Limiter[clientKey]
-	codes     *ratelimit.Limiter[clientKey]
-	messages  *ratelimit.Limiter[clientKey]
-	tokens    *ratelimit.Limiter[clientKey]
+	passwords *clientLimiter
+	codes     *clientLimiter
+	messages  *clientLimiter
+	tokens    *clientLimiter
 }
 
 func newClientLimits() (clientLimits, error) {
 	var l clientLimits
 	for _, c := range []struct {
-		limiter **ratelimit.Limiter[clientKey]
+		limiter **clientLimiter
 		limit   clientLimit
 	}{
 		{&l.passwords, passwordLimit},
@@ -66,61 +93,85 @@ func newClientLimits() (clientLimits, error) {
 		{&l.tokens, tokenLimit},
 	} {
 		var err error
-		if *c.limiter, err = ratelimit.New[clientKey](c.limit.burst, c.limit.interval, maxLimitedClients); err != nil {
+		if *c.limiter, err = newClientLimiter(c.limit); err != nil {
 			return clientLimits{}, err
 		}
 	}
 	return l, nil
 }
 
-// limitKey returns the key of the client of r in the limits per client
-// address, or false when its address is unknown, which no limit holds. An
-// IPv6 client counts by its /64 network, which one client usually holds
-// whole.
-func (s *Server) limitKey(r *http.Request) (clientKey, bool) {
+// limitKeys are the keys of a client in the limits per client address.
+type limitKeys struct {
+	// client is the address of the client, or the /64 network of an IPv6
+	// client, which one client usually holds whole.
+	client clientKey
+	// network is the /48 network of an IPv6 client, when ipv6 is true.
+	network clientKey
+	ipv6    bool
+}
+
+// limitKeys returns the keys of the client of r in the limits per client
+// address, or false when its address is unknown, which no limit holds.
+func (s *Server) limitKeys(r *http.Request) (limitKeys, bool) {
 	addr := clientAddr(r, s.proxies)
-	if !addr.IsValid() {
-		return clientKey{}, false
+	switch {
+	case !addr.IsValid():
+		return limitKeys{}, false
+	case addr.Is4():
+		return limitKeys{client: addr.As16()}, true
 	}
-	if addr.Is6() {
-		addr = netip.PrefixFrom(addr, 64).Masked().Addr()
-	}
-	return addr.As16(), true
+	return limitKeys{
+		client:  netip.PrefixFrom(addr, 64).Masked().Addr().As16(),
+		network: netip.PrefixFrom(addr, 48).Masked().Addr().As16(),
+		ipv6:    true,
+	}, true
 }
 
 // reservation is an event of a client that a limit counted before the
 // work that may produce it.
 type reservation struct {
-	limiter *ratelimit.Limiter[clientKey]
-	key     clientKey
+	limiter *clientLimiter
+	keys    limitKeys
 	counted bool
 }
 
 // reserve counts an event of the client of r in l, or returns how long the
 // client must wait before l allows it.
-func (s *Server) reserve(l *ratelimit.Limiter[clientKey], r *http.Request) (reservation, time.Duration) {
-	k, ok := s.limitKey(r)
+func (s *Server) reserve(l *clientLimiter, r *http.Request) (reservation, time.Duration) {
+	k, ok := s.limitKeys(r)
 	if !ok {
 		return reservation{}, 0
 	}
-	if wait := l.Allow(k, s.deps.Now()); wait > 0 {
+	now := s.deps.Now()
+	if wait := l.clients.Allow(k.client, now); wait > 0 {
 		return reservation{}, wait
 	}
-	return reservation{limiter: l, key: k, counted: true}, 0
+	if k.ipv6 {
+		if wait := l.networks.Allow(k.network, now); wait > 0 {
+			l.clients.Refund(k.client, now)
+			return reservation{}, wait
+		}
+	}
+	return reservation{limiter: l, keys: k, counted: true}, 0
 }
 
 // settle keeps the event of res when the work produced it, and refunds it
 // otherwise.
 func (s *Server) settle(res reservation, happened bool) {
-	if res.counted && !happened {
-		res.limiter.Refund(res.key, s.deps.Now())
+	if !res.counted || happened {
+		return
+	}
+	now := s.deps.Now()
+	res.limiter.clients.Refund(res.keys.client, now)
+	if res.keys.ipv6 {
+		res.limiter.networks.Refund(res.keys.network, now)
 	}
 }
 
 // reservePage reserves an event of the client of r in l for the work of a
 // hosted page. When the client must wait, it answers the request and
 // returns false.
-func (s *Server) reservePage(w http.ResponseWriter, r *http.Request, t tenant, l *ratelimit.Limiter[clientKey],
+func (s *Server) reservePage(w http.ResponseWriter, r *http.Request, t tenant, l *clientLimiter,
 ) (reservation, bool) {
 	res, wait := s.reserve(l, r)
 	if wait > 0 {

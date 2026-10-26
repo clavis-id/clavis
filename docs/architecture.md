@@ -385,7 +385,8 @@ year.
   - Limits per client address are kept in the memory of each instance: wrong passwords, wrong
     codes, messages, and failed client authentications and replayed codes or refresh tokens
     at the token, revocation and introspection endpoints. They allow a burst, then a steady
-    rate, and answer 429 with `Retry-After`.
+    rate, and answer 429 with `Retry-After`. An IPv6 client counts by its /64 network, and its
+    /48 network gets five times the limits of a client.
 - **Per-tenant cache:** see ADR 0031. Each server keeps tenants, unknown slugs, API resources,
   branding and logos for 30 seconds, and each tenant's signing keys for a minute. Changes from
   the same process apply at once; changes from the command line or another instance, within

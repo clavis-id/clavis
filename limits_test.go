@@ -468,21 +468,21 @@ func TestFailedTokenRequestsPerClient(t *testing.T) {
 	}
 }
 
-// Clients count by address, IPv6 clients by their /64 network, and behind
-// trusted proxies by the address that X-Forwarded-For names. A client
-// whose address is unknown is not limited.
-func TestLimitKey(t *testing.T) {
+// Clients count by address, IPv6 clients by their /64 network and their
+// /48 network, and behind trusted proxies by the address that
+// X-Forwarded-For names. A client whose address is unknown is not limited.
+func TestLimitKeys(t *testing.T) {
 	t.Parallel()
 	cfg := testConfig(t, openStore(t))
 	cfg.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
 	s := mustNew(t, cfg)
-	key := func(remote, forwarded string) (clientKey, bool) {
+	keys := func(remote, forwarded string) (limitKeys, bool) {
 		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/account/login", http.NoBody)
 		r.RemoteAddr = remote
 		if forwarded != "" {
 			r.Header.Set("X-Forwarded-For", forwarded)
 		}
-		return s.limitKey(r)
+		return s.limitKeys(r)
 	}
 	same := [][2][2]string{
 		{{"192.0.2.1:1234", ""}, {"192.0.2.1:5678", ""}},
@@ -491,8 +491,8 @@ func TestLimitKey(t *testing.T) {
 		{{"[2001:db8:1:2::1]:443", ""}, {"[2001:db8:1:2:ffff:ffff:ffff:ffff]:443", ""}},
 	}
 	for _, pair := range same {
-		a, okA := key(pair[0][0], pair[0][1])
-		b, okB := key(pair[1][0], pair[1][1])
+		a, okA := keys(pair[0][0], pair[0][1])
+		b, okB := keys(pair[1][0], pair[1][1])
 		if !okA || !okB || a != b {
 			t.Errorf("keys of %v and %v differ, want the same", pair[0], pair[1])
 		}
@@ -504,13 +504,68 @@ func TestLimitKey(t *testing.T) {
 		{{"192.0.2.1:1234", "192.0.2.2"}, {"192.0.2.2:1234", ""}},
 	}
 	for _, pair := range different {
-		a, _ := key(pair[0][0], pair[0][1])
-		b, _ := key(pair[1][0], pair[1][1])
-		if a == b {
-			t.Errorf("keys of %v and %v are the same, want them to differ", pair[0], pair[1])
+		a, _ := keys(pair[0][0], pair[0][1])
+		b, _ := keys(pair[1][0], pair[1][1])
+		if a.client == b.client {
+			t.Errorf("client keys of %v and %v are the same, want them to differ", pair[0], pair[1])
 		}
 	}
-	if _, ok := key("@", ""); ok {
-		t.Error("an unknown address has a key, want none")
+	if k, _ := keys("192.0.2.1:1234", ""); k.ipv6 {
+		t.Error("an IPv4 client counts against a network, want only its address")
+	}
+	a, _ := keys("[2001:db8:1:2::1]:443", "")
+	b, _ := keys("[2001:db8:1:ffff::1]:443", "")
+	c, _ := keys("[2001:db8:2:2::1]:443", "")
+	if !a.ipv6 || !b.ipv6 || a.network != b.network || a.network == c.network {
+		t.Errorf("networks of IPv6 clients = %v, %v and %v, want the first two the same /48", a, b, c)
+	}
+	if _, ok := keys("@", ""); ok {
+		t.Error("an unknown address has keys, want none")
+	}
+}
+
+// ADR 0030: the IPv6 clients of one /48 network get networkFactor times the
+// burst of a client together, as many /64 networks as they hold.
+func TestIPv6NetworksAreLimited(t *testing.T) {
+	t.Parallel()
+	s := newTestServer(t, openStore(t))
+	fixClock(s)
+	reserveFor := func(remote string) (reservation, time.Duration) {
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/account/login", http.NoBody)
+		r.RemoteAddr = remote
+		return s.reserve(s.limits.passwords, r)
+	}
+	reserve := func(remote string) time.Duration {
+		_, wait := reserveFor(remote)
+		return wait
+	}
+	for i := range networkFactor {
+		for j := range passwordLimit.burst {
+			if wait := reserve(fmt.Sprintf("[2001:db8:1:%x::1]:443", i)); wait != 0 {
+				t.Fatalf("event %d of /64 network %d waits %v, want none", j+1, i, wait)
+			}
+		}
+	}
+	if wait := reserve("[2001:db8:1:ff::1]:443"); wait != passwordLimit.interval/networkFactor {
+		t.Errorf("a new /64 network of a /48 after its burst waits %v, want %v", wait,
+			passwordLimit.interval/networkFactor)
+	}
+	if wait := reserve("[2001:db8:2::1]:443"); wait != 0 {
+		t.Errorf("another /48 network waits %v, want none", wait)
+	}
+	// Events that the work did not produce go back to both.
+	for i := range 2 * networkFactor * passwordLimit.burst {
+		res, wait := reserveFor("[2001:db8:3::1]:443")
+		if wait != 0 {
+			t.Fatalf("event %d, after as many refunds, waits %v, want none", i+1, wait)
+		}
+		s.settle(res, false)
+	}
+	// The /64 network got back the event that its /48 network refused.
+	client := netip.MustParseAddr("2001:db8:1:ff::").As16()
+	for range passwordLimit.burst {
+		if wait := s.limits.passwords.clients.Allow(client, s.deps.Now()); wait != 0 {
+			t.Fatalf("the /64 network whose event its /48 refused waits %v, want its whole burst", wait)
+		}
 	}
 }
