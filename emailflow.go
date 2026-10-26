@@ -115,23 +115,21 @@ func (s *Server) handleVerify(f emailFlow) tenantHandler {
 		if !ok {
 			return
 		}
-		// Links cannot be guessed, so only codes are limited.
-		token := form.Get("token")
-		if token == "" && s.pageLimited(w, r, t, s.limits.codes) {
-			return
-		}
 		v, p, ok := s.findVerification(w, r, t, f, form.Get("verification"))
 		if !ok {
 			return
 		}
 		var err error
-		if token != "" {
+		// Links cannot be guessed, so only codes are limited.
+		if token := form.Get("token"); token != "" {
 			err = app.VerifyLink(r.Context(), s.deps, v, token)
 		} else {
-			err = app.VerifyCode(r.Context(), s.deps, v, form.Get("code"))
-			if errors.Is(err, app.ErrWrongCode) || errors.Is(err, app.ErrTooManyAttempts) {
-				s.countClient(s.limits.codes, r)
+			res, ok := s.reservePage(w, r, t, s.limits.codes)
+			if !ok {
+				return
 			}
+			err = app.VerifyCode(r.Context(), s.deps, v, form.Get("code"))
+			s.settle(res, errors.Is(err, app.ErrWrongCode) || errors.Is(err, app.ErrTooManyAttempts))
 		}
 		switch {
 		case errors.Is(err, app.ErrWrongCode):

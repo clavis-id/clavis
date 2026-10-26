@@ -75,6 +75,63 @@ func TestWrongPasswordsLockTheAddress(t *testing.T) {
 	f.wrongPasswords(t, "ada@example.com", MaxSignInFailures)
 }
 
+// ADR 0030: wrong passwords that arrive together lock the address after
+// MaxSignInFailures, as they do one by one: each counts before its password
+// is checked, so the attempts beyond the limit end at once, while the others
+// wait in the verification.
+func TestConcurrentWrongPasswordsLockTheAddress(t *testing.T) {
+	t.Parallel()
+	f := newAuthzFixture(t)
+	const n = 3 * MaxSignInFailures
+	h := pausingHasher{fakeHasher: f.h, verified: make(chan struct{}, n), resume: make(chan struct{})}
+	results := make(chan error, n)
+	for range n {
+		go func() {
+			_, err := SignInToAccount(t.Context(), f.d, h, f.tenant.ID, "ada@example.com", "wrong horse", nil)
+			results <- err
+		}()
+	}
+	ended := 0
+	timeout := time.After(10 * time.Second)
+wait:
+	for ended < n-MaxSignInFailures {
+		select {
+		case err := <-results:
+			ended++
+			if !errors.Is(err, errLocked) {
+				t.Errorf("an attempt ended with %v while others wait in the verification, want the lock", err)
+			}
+		case <-timeout:
+			t.Errorf("%d attempts ended without a verification, want %d", ended, n-MaxSignInFailures)
+			break wait
+		}
+	}
+	close(h.resume)
+	for ; ended < n; ended++ {
+		<-results
+	}
+	if len(h.verified) != MaxSignInFailures {
+		t.Errorf("%d passwords verified, want %d", len(h.verified), MaxSignInFailures)
+	}
+	if events := eventsOf(t, f.d, f.tenant.ID, EventSignInLocked); len(events) != 1 {
+		t.Errorf("%d %s events, want 1", len(events), EventSignInLocked)
+	}
+}
+
+// ADR 0030: a right password forgets the wrong passwords of the address.
+func TestARightPasswordForgetsWrongOnes(t *testing.T) {
+	t.Parallel()
+	f := newAuthzFixture(t)
+	f.wrongPasswords(t, "ada@example.com", MaxSignInFailures-1)
+	if err := f.signInToAccount(t, "ada@example.com", "correct horse"); err != nil {
+		t.Fatalf("the right password = %v, want a sign-in", err)
+	}
+	f.wrongPasswords(t, "ada@example.com", MaxSignInFailures)
+	if err := f.signInToAccount(t, "ada@example.com", "correct horse"); !errors.Is(err, errLocked) {
+		t.Errorf("the right password after %d more wrong ones = %v, want the lock", MaxSignInFailures, err)
+	}
+}
+
 // ADR 0030: an address without an account locks like one with an account,
 // so the lock reveals nothing; a malformed address cannot have an account
 // and is not counted.
@@ -173,7 +230,6 @@ func TestSettingAPasswordUnlocksTheAddress(t *testing.T) {
 	t.Run("Change", func(t *testing.T) {
 		t.Parallel()
 		f := newAuthzFixture(t)
-		f.wrongPasswords(t, "ada@example.com", MaxSignInFailures-1)
 		login, err := SignInToAccount(t.Context(), f.d, f.h, f.tenant.ID, "ada@example.com", "correct horse", nil)
 		if err != nil {
 			t.Fatalf("SignInToAccount() unexpected error: %v", err)
@@ -182,6 +238,7 @@ func TestSettingAPasswordUnlocksTheAddress(t *testing.T) {
 		if err != nil {
 			t.Fatalf("FindAccount() unexpected error: %v", err)
 		}
+		f.wrongPasswords(t, "ada@example.com", MaxSignInFailures-1)
 		if err := ChangePassword(t.Context(), f.d, f.h, a, "correct horse", "new horse battery"); err != nil {
 			t.Fatalf("ChangePassword() unexpected error: %v", err)
 		}
@@ -235,30 +292,38 @@ func TestMessagesPerAddress(t *testing.T) {
 	}
 }
 
+// wrongCode returns a code that is not the code of msg.
+func wrongCode(t *testing.T, msg email.Message) string {
+	t.Helper()
+	code := []byte(codeOf(t, msg))
+	code[0] = '0' + (code[0]-'0'+1)%10
+	return string(code)
+}
+
+// wrongCodes submits n codes for v that are not the code of msg, each of
+// which must fail as a wrong code.
+func (f signupFixture) wrongCodes(t *testing.T, v store.EmailVerification, msg email.Message, n int) {
+	t.Helper()
+	for range n {
+		if err := VerifyCode(t.Context(), f.d, v, wrongCode(t, msg)); !errors.Is(err, ErrWrongCode) &&
+			!errors.Is(err, ErrTooManyAttempts) {
+			t.Fatalf("VerifyCode() with a wrong code = %v, want ErrWrongCode or ErrTooManyAttempts", err)
+		}
+	}
+}
+
 // ADR 0030: MaxCodeFailures wrong codes for an address, across its
 // verifications of either purpose, refuse its codes for CodeLockout. The
 // link still works.
 func TestWrongCodesLockTheCodesOfAnAddress(t *testing.T) {
 	t.Parallel()
 	f := newSignupFixture(t)
-	// wrong submits n codes for v that are not the code of msg.
-	wrong := func(v store.EmailVerification, msg email.Message, n int) {
-		t.Helper()
-		code := []byte(codeOf(t, msg))
-		code[0] = '0' + (code[0]-'0'+1)%10
-		for range n {
-			if err := VerifyCode(t.Context(), f.d, v, string(code)); !errors.Is(err, ErrWrongCode) &&
-				!errors.Is(err, ErrTooManyAttempts) {
-				t.Fatalf("VerifyCode() with a wrong code = %v, want ErrWrongCode or ErrTooManyAttempts", err)
-			}
-		}
-	}
 	signup, signupMsg := f.startSignup(t, "grace@example.com")
-	wrong(signup, signupMsg, MaxCodeAttempts)
+	f.wrongCodes(t, signup, signupMsg, MaxCodeAttempts)
 	if _, err := CreateUser(t.Context(), f.d, f.tenant.ID, UserSpec{Email: "grace@example.com"}); err != nil {
 		t.Fatalf("CreateUser() unexpected error: %v", err)
 	}
-	wrong(f.startReset(t, "grace@example.com"), f.mail.last(t), MaxCodeFailures-MaxCodeAttempts)
+	f.wrongCodes(t, f.startReset(t, "grace@example.com"), f.mail.last(t), MaxCodeFailures-MaxCodeAttempts)
 
 	v := f.startReset(t, "grace@example.com")
 	msg := f.mail.last(t)
@@ -276,6 +341,56 @@ func TestWrongCodesLockTheCodesOfAnAddress(t *testing.T) {
 	v = f.startReset(t, "grace@example.com")
 	if err := VerifyCode(t.Context(), f.d, v, codeOf(t, f.mail.last(t))); err != nil {
 		t.Errorf("the right code after the lock = %v, want it verified", err)
+	}
+}
+
+// ADR 0030: a right code forgets the wrong codes of the address.
+func TestARightCodeForgetsWrongOnes(t *testing.T) {
+	t.Parallel()
+	f := newSignupFixture(t)
+	f.wrongCodes(t, f.startReset(t, "ada@example.com"), f.mail.last(t), MaxCodeAttempts)
+	f.wrongCodes(t, f.startReset(t, "ada@example.com"), f.mail.last(t), MaxCodeFailures-MaxCodeAttempts-1)
+	if err := VerifyCode(t.Context(), f.d, f.startReset(t, "ada@example.com"), codeOf(t, f.mail.last(t))); err != nil {
+		t.Fatalf("the right code = %v, want it verified", err)
+	}
+	*f.now = f.now.Add(MessageWindow)
+	f.wrongCodes(t, f.startReset(t, "ada@example.com"), f.mail.last(t), MaxCodeAttempts)
+	f.wrongCodes(t, f.startReset(t, "ada@example.com"), f.mail.last(t), MaxCodeFailures-MaxCodeAttempts)
+	if err := VerifyCode(t.Context(), f.d, f.startReset(t, "ada@example.com"), codeOf(t, f.mail.last(t))); !errors.Is(err, ErrCodesLocked) {
+		t.Errorf("the right code after %d more wrong codes = %v, want ErrCodesLocked", MaxCodeFailures, err)
+	}
+}
+
+// ADR 0030: wrong codes that arrive together, for several verifications of
+// an address, lock its codes after MaxCodeFailures, as they do one by one:
+// each counts before it is compared.
+func TestConcurrentWrongCodesLockTheCodesOfAnAddress(t *testing.T) {
+	t.Parallel()
+	f := newSignupFixture(t)
+	const verifications = 3
+	n := verifications * MaxCodeAttempts
+	results := make(chan error, n)
+	for range verifications {
+		v := f.startReset(t, "ada@example.com")
+		code := wrongCode(t, f.mail.last(t))
+		for range MaxCodeAttempts {
+			go func() { results <- VerifyCode(t.Context(), f.d, v, code) }()
+		}
+	}
+	wrong, locked := 0, 0
+	for range n {
+		switch err := <-results; {
+		case errors.Is(err, ErrWrongCode), errors.Is(err, ErrTooManyAttempts):
+			wrong++
+		case errors.Is(err, ErrCodesLocked):
+			locked++
+		default:
+			t.Errorf("VerifyCode() with a wrong code = %v", err)
+		}
+	}
+	if wrong != MaxCodeFailures || locked != n-MaxCodeFailures {
+		t.Errorf("%d wrong codes compared and %d refused, want %d and %d", wrong, locked, MaxCodeFailures,
+			n-MaxCodeFailures)
 	}
 }
 
@@ -303,14 +418,7 @@ func TestPurgeExpiredRemovesLimitCounters(t *testing.T) {
 // failingLimitCounters fails the methods that its fields name.
 type failingLimitCounters struct {
 	store.LimitCounters
-	get, add, del bool
-}
-
-func (c failingLimitCounters) Get(ctx context.Context, k store.LimitKey) (store.LimitCount, error) {
-	if c.get {
-		return store.LimitCount{}, errUnavailable
-	}
-	return c.LimitCounters.Get(ctx, k)
+	add, del bool
 }
 
 func (c failingLimitCounters) Add(ctx context.Context, k store.LimitKey, now time.Time, window time.Duration,
@@ -337,8 +445,9 @@ type limitStore struct {
 
 func (s limitStore) LimitCounters() store.LimitCounters { return s.counters }
 
-// A lock that cannot be read fails the request; a failure, or an unlock,
-// that cannot be written is logged, and the request answers as it would.
+// An attempt or a message that cannot be counted fails the request: it is
+// counted before the work it limits. A count that cannot be forgotten is
+// logged, and the request answers as it would.
 func TestLimitCounterFailures(t *testing.T) {
 	t.Parallel()
 	f := newSignupFixture(t)
@@ -351,21 +460,16 @@ func TestLimitCounterFailures(t *testing.T) {
 		return g
 	}
 
-	g := withCounters(failingLimitCounters{get: true})
-	if err := g.signInToAccount(t, "ada@example.com", "correct horse"); !errors.Is(err, errUnavailable) {
-		t.Errorf("a sign-in whose lock cannot be read = %v, want the store error", err)
+	g := withCounters(failingLimitCounters{add: true})
+	for _, pw := range []string{"correct horse", "wrong horse"} {
+		if err := g.signInToAccount(t, "ada@example.com", pw); !errors.Is(err, errUnavailable) {
+			t.Errorf("a sign-in with %q that cannot be counted = %v, want the store error", pw, err)
+		}
 	}
 	v := f.startReset(t, "ada@example.com")
-	if err := VerifyCode(t.Context(), g.d, v, codeOf(t, f.mail.last(t))); !errors.Is(err, errUnavailable) {
-		t.Errorf("a code whose lock cannot be read = %v, want the store error", err)
-	}
-
-	g = withCounters(failingLimitCounters{add: true})
-	if err := g.signInToAccount(t, "ada@example.com", "wrong horse"); !errors.Is(err, ErrInvalidCredentials) {
-		t.Errorf("a wrong password that cannot be counted = %v, want ErrInvalidCredentials", err)
-	}
-	if !strings.Contains(logs.String(), `msg="failure not counted"`) || !strings.Contains(logs.String(), "kind=sign_in") {
-		t.Errorf("logs = %s", logs.String())
+	code := codeOf(t, f.mail.last(t))
+	if err := VerifyCode(t.Context(), g.d, v, code); !errors.Is(err, errUnavailable) {
+		t.Errorf("a code that cannot be counted = %v, want the store error", err)
 	}
 	if _, err := StartSignup(t.Context(), g.d, g.tenant, g.start(t, webRequest()), "grace@example.com", testBinding,
 		g.text, testVerifyURL); !errors.Is(err, errUnavailable) {
@@ -373,11 +477,23 @@ func TestLimitCounterFailures(t *testing.T) {
 	}
 
 	g = withCounters(failingLimitCounters{del: true})
+	if err := g.signInToAccount(t, "ada@example.com", "correct horse"); err != nil {
+		t.Errorf("a right password whose count cannot be forgotten = %v, want a sign-in", err)
+	}
+	if err := VerifyCode(t.Context(), g.d, v, code); err != nil {
+		t.Errorf("a right code whose count cannot be forgotten = %v, want it verified", err)
+	}
 	if err := SetPassword(t.Context(), g.d, g.h, g.user, "new horse battery"); err != nil {
 		t.Errorf("SetPassword() whose unlock fails = %v, want the password set", err)
 	}
-	if !strings.Contains(logs.String(), `msg="wrong passwords not forgotten after a password change"`) {
-		t.Errorf("logs = %s", logs.String())
+	for _, msg := range []string{
+		"wrong passwords not forgotten after a right one",
+		"wrong codes not forgotten after a right one",
+		"wrong passwords not forgotten after a password change",
+	} {
+		if !strings.Contains(logs.String(), `msg="`+msg+`"`) {
+			t.Errorf("logs lack %q:\n%s", msg, logs.String())
+		}
 	}
 }
 

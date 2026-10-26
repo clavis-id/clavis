@@ -1,6 +1,7 @@
 package clavis
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
@@ -9,10 +10,13 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+	"uuid"
 
 	"clavisid.org/clavis/internal/app"
+	"clavisid.org/clavis/store"
 )
 
 // ADR 0030: the lock of an address is stored, so the instances that share a
@@ -173,6 +177,21 @@ func TestWrongPasswordsPerClient(t *testing.T) {
 		if res, _ := signIn("ada@example.com", testPassword); res.StatusCode != http.StatusSeeOther {
 			t.Fatalf("a right password = %d, want a sign-in", res.StatusCode)
 		}
+		// A browser without a session, so that it signs in for the request.
+		fresh := newBrowser(t, s.Handler())
+		id := fresh.startLogin(issuer, authorizeQuery())
+		if res, _ := fresh.post(issuer+"/login", loginForm(id, testPassword), "same-origin"); res.StatusCode != http.StatusSeeOther {
+			t.Fatalf("a right password for an authorization request = %d, want a sign-in", res.StatusCode)
+		}
+	}
+	// An even number of changes ends with the first password.
+	passwords := [2]string{testPassword, "new horse battery staple"}
+	for i := range passwordLimit.burst + 2 {
+		if res, page := b.post(issuer+"/account/password", url.Values{"current_password": {passwords[i%2]},
+			"new_password": {passwords[(i+1)%2]}}, "same-origin"); res.StatusCode != http.StatusOK ||
+			!strings.Contains(page, "Your password has been changed") {
+			t.Fatalf("password change %d with the right password = %d:\n%s", i+1, res.StatusCode, page)
+		}
 	}
 	// Wrong passwords for other addresses each, so that no address locks.
 	for i := range passwordLimit.burst - 1 {
@@ -216,6 +235,76 @@ func TestWrongPasswordsPerClient(t *testing.T) {
 	wantTooManyRequests(t, "a second sign-in an interval later", res, page, retry)
 }
 
+// pausingStore holds every lookup of a user by email address, once paused,
+// until the test resumes them, and reports each one as it starts.
+type pausingStore struct {
+	store.Store
+	paused         *atomic.Bool
+	looked, resume chan struct{}
+}
+
+func (s pausingStore) Users() store.Users { return pausingUsers{s.Store.Users(), s} }
+
+type pausingUsers struct {
+	store.Users
+	s pausingStore
+}
+
+func (u pausingUsers) GetByEmail(ctx context.Context, tenantID uuid.UUID, email string) (store.User, error) {
+	if u.s.paused.Load() {
+		u.s.looked <- struct{}{}
+		<-u.s.resume
+	}
+	return u.Users.GetByEmail(ctx, tenantID, email)
+}
+
+// ADR 0030: wrong passwords that arrive together from one client address
+// get the burst, as they do one by one: each counts before its password is
+// checked, so the requests beyond the burst are refused at once, while the
+// others wait for their checks.
+func TestConcurrentWrongPasswordsPerClient(t *testing.T) {
+	t.Parallel()
+	n := 2 * passwordLimit.burst
+	st := pausingStore{Store: openStore(t), paused: new(atomic.Bool), looked: make(chan struct{}, n),
+		resume: make(chan struct{})}
+	s := newTestServer(t, st)
+	fixClock(s)
+	h := s.Handler()
+	st.paused.Store(true)
+	statuses := make(chan int, n)
+	for i := range n {
+		b := newBrowser(t, h)
+		go func() {
+			// Other addresses each, so that no address locks.
+			res, _ := b.post("/account/login", url.Values{"email": {fmt.Sprintf("user%d@example.com", i)},
+				"password": {"wrong"}}, "same-origin")
+			statuses <- res.StatusCode
+		}()
+	}
+	ended := 0
+	timeout := time.After(10 * time.Second)
+wait:
+	for ended < n-passwordLimit.burst {
+		select {
+		case status := <-statuses:
+			ended++
+			if status != http.StatusTooManyRequests {
+				t.Errorf("a request ended with %d while others wait for their checks, want 429", status)
+			}
+		case <-timeout:
+			t.Errorf("%d requests refused at once, want %d", ended, n-passwordLimit.burst)
+			break wait
+		}
+	}
+	close(st.resume)
+	for ; ended < n; ended++ {
+		<-statuses
+	}
+	if len(st.looked) != passwordLimit.burst {
+		t.Errorf("%d passwords checked, want %d", len(st.looked), passwordLimit.burst)
+	}
+}
+
 // ADR 0030: wrong codes from one client address wait after a burst; links
 // do not.
 func TestWrongCodesPerClient(t *testing.T) {
@@ -226,6 +315,18 @@ func TestWrongCodesPerClient(t *testing.T) {
 	b := newBrowser(t, s.Handler())
 	verify := func(form url.Values) (response, string) {
 		return b.post(issuer+"/signup/verify", form, "same-origin")
+	}
+	// Right codes do not count. Their signups come from other client
+	// addresses, so that the limit of messages does not meet them.
+	for i := range codeLimit.burst + 1 {
+		address := fmt.Sprintf("right%d@example.com", i)
+		b.addr = fmt.Sprintf("198.51.100.%d:1234", i+1)
+		verification := b.startSignup(address)
+		b.addr = ""
+		code := signupCode.FindStringSubmatch(mail.last(t, address).Text)[1]
+		if res, _ := verify(url.Values{"verification": {verification}, "code": {code}}); res.StatusCode != http.StatusSeeOther {
+			t.Fatalf("right code %d = %d, want the password page", i+1, res.StatusCode)
+		}
 	}
 	// Wrong codes for several addresses, so that no address locks.
 	for sent, i := 0, 0; sent < codeLimit.burst; i++ {
@@ -262,6 +363,18 @@ func TestMessagesPerClient(t *testing.T) {
 	b := newBrowser(t, s.Handler())
 	reset := func(address string) (response, string) {
 		return b.post(issuer+"/reset", url.Values{"email": {address}}, "same-origin")
+	}
+	// A request that sends no message does not count.
+	request := b.startLogin(issuer, authorizeQuery())
+	for range messageLimit.burst + 1 {
+		if res, page := reset("not an address"); res.StatusCode != http.StatusOK ||
+			!strings.Contains(page, "Enter a valid email address,") {
+			t.Fatalf("a reset of a malformed address = %d:\n%s", res.StatusCode, page)
+		}
+		if res, page := b.post(issuer+"/signup", url.Values{"request": {request}, "email": {"not an address"}},
+			"same-origin"); res.StatusCode != http.StatusOK || !strings.Contains(page, "Enter a valid email address,") {
+			t.Fatalf("a signup of a malformed address = %d:\n%s", res.StatusCode, page)
+		}
 	}
 	for i := range messageLimit.burst {
 		address := fmt.Sprintf("user%d@example.com", i)

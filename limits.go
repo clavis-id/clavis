@@ -20,7 +20,9 @@ type clientLimit struct {
 // Limits per client address, kept in the memory of each instance (ADR
 // 0030). They count what an attacker produces, wrong guesses and messages,
 // so that the clients behind one address, such as the people of an office,
-// rarely meet them.
+// rarely meet them. An event counts before the work that may produce it, so
+// that requests that arrive together cannot exceed a limit, and the work
+// refunds it when it does not produce it.
 var (
 	// passwordLimit counts wrong passwords: sign-ins for authorization
 	// requests and the account pages, and the current password of a
@@ -86,52 +88,67 @@ func (s *Server) limitKey(r *http.Request) (clientKey, bool) {
 	return addr.As16(), true
 }
 
-// clientWait returns how long the client of r must wait before l allows
-// its next event, or zero.
-func (s *Server) clientWait(l *ratelimit.Limiter[clientKey], r *http.Request) time.Duration {
+// reservation is an event of a client that a limit counted before the
+// work that may produce it.
+type reservation struct {
+	limiter *ratelimit.Limiter[clientKey]
+	key     clientKey
+	counted bool
+}
+
+// reserve counts an event of the client of r in l, or returns how long the
+// client must wait before l allows it.
+func (s *Server) reserve(l *ratelimit.Limiter[clientKey], r *http.Request) (reservation, time.Duration) {
 	k, ok := s.limitKey(r)
 	if !ok {
-		return 0
+		return reservation{}, 0
 	}
-	return l.Wait(k, s.deps.Now())
+	if wait := l.Allow(k, s.deps.Now()); wait > 0 {
+		return reservation{}, wait
+	}
+	return reservation{limiter: l, key: k, counted: true}, 0
 }
 
-// countClient counts an event of the client of r in l.
-func (s *Server) countClient(l *ratelimit.Limiter[clientKey], r *http.Request) {
-	if k, ok := s.limitKey(r); ok {
-		l.Add(k, s.deps.Now())
+// settle keeps the event of res when the work produced it, and refunds it
+// otherwise.
+func (s *Server) settle(res reservation, happened bool) {
+	if res.counted && !happened {
+		res.limiter.Refund(res.key, s.deps.Now())
 	}
 }
 
-// pageLimited answers a request to a hosted page whose client must wait
-// before l allows its next event, and reports whether it did.
-func (s *Server) pageLimited(w http.ResponseWriter, r *http.Request, t tenant, l *ratelimit.Limiter[clientKey]) bool {
-	wait := s.clientWait(l, r)
-	if wait == 0 {
-		return false
+// reservePage reserves an event of the client of r in l for the work of a
+// hosted page. When the client must wait, it answers the request and
+// returns false.
+func (s *Server) reservePage(w http.ResponseWriter, r *http.Request, t tenant, l *ratelimit.Limiter[clientKey],
+) (reservation, bool) {
+	res, wait := s.reserve(l, r)
+	if wait > 0 {
+		setRetryAfter(w, wait)
+		s.errorPage(w, r, t, s.locale(w, r, "", ""), http.StatusTooManyRequests, i18n.ErrorTooManyRequestsTitle,
+			i18n.ErrorTooManyRequests)
+		return reservation{}, false
 	}
-	setRetryAfter(w, wait)
-	s.errorPage(w, r, t, s.locale(w, r, "", ""), http.StatusTooManyRequests, i18n.ErrorTooManyRequestsTitle,
-		i18n.ErrorTooManyRequests)
-	return true
+	return res, true
 }
 
-// tokenLimited answers a request to the token, revocation or introspection
-// endpoint whose client must wait, and reports whether it did. OAuth 2.0
-// defines no error for it: the status is 429 (RFC 6585, section 4) and the
-// code temporarily_unavailable, which RFC 6749 defines for the
-// authorization endpoint.
-func (s *Server) tokenLimited(w http.ResponseWriter, r *http.Request) bool {
-	wait := s.clientWait(s.limits.tokens, r)
-	if wait == 0 {
-		return false
+// reserveTokenRequest reserves an event of the client of r in the limit of
+// the token, revocation and introspection endpoints. When the client must
+// wait, it answers the request and returns false. OAuth 2.0 defines no error
+// for it: the status is 429 (RFC 6585, section 4) and the code
+// temporarily_unavailable, which RFC 6749 defines for the authorization
+// endpoint.
+func (s *Server) reserveTokenRequest(w http.ResponseWriter, r *http.Request) (reservation, bool) {
+	res, wait := s.reserve(s.limits.tokens, r)
+	if wait > 0 {
+		setRetryAfter(w, wait)
+		s.writeNoStoreJSON(w, r, http.StatusTooManyRequests, struct {
+			Error       string `json:"error"`
+			Description string `json:"error_description"`
+		}{"temporarily_unavailable", "too many failed requests; retry later"})
+		return reservation{}, false
 	}
-	setRetryAfter(w, wait)
-	s.writeNoStoreJSON(w, r, http.StatusTooManyRequests, struct {
-		Error       string `json:"error"`
-		Description string `json:"error_description"`
-	}{"temporarily_unavailable", "too many failed requests; retry later"})
-	return true
+	return res, true
 }
 
 // setRetryAfter tells the client to retry after wait, in whole seconds

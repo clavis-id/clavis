@@ -25,87 +25,91 @@ const formContentType = "application/x-www-form-urlencoded"
 // authenticates first; only then is the grant examined.
 func (s *Server) handleToken(w http.ResponseWriter, r *http.Request, t tenant) {
 	allowCORS(w)
-	if s.tokenLimited(w, r) {
-		return
-	}
-	client, ok := s.authenticateClient(w, r, t)
+	s.serveTokenRequest(w, r, func() error {
+		client, err := s.authenticateClient(w, r, t)
+		if err != nil {
+			return err
+		}
+		at := t.authorizationTenant()
+		req, err := oauth.ParseTokenRequest(r.PostForm)
+		if err != nil {
+			return err
+		}
+		var resp app.TokenResponse
+		switch req.GrantType {
+		case oauth.GrantTypeAuthorizationCode:
+			resp, err = app.ExchangeCode(r.Context(), s.deps, s.signer, at, client, req)
+		case oauth.GrantTypeRefreshToken:
+			resp, err = app.RefreshToken(r.Context(), s.deps, s.signer, at, client, req)
+		case oauth.GrantTypeClientCredentials:
+			resp, err = app.ClientCredentialsToken(r.Context(), s.deps, s.signer, at, client, req)
+		default:
+			err = &oauth.Error{Code: oauth.ErrorUnsupportedGrantType, Description: "the grant type is not supported"}
+		}
+		if err != nil {
+			return err
+		}
+		s.writeNoStoreJSON(w, r, http.StatusOK, resp)
+		return nil
+	})
+}
+
+// serveTokenRequest serves a request to the token, revocation or
+// introspection endpoint with serve, which writes the response of a success
+// and returns the error of a failure. It answers the error, and counts the
+// request against the client address when the error counts (ADR 0030).
+func (s *Server) serveTokenRequest(w http.ResponseWriter, r *http.Request, serve func() error) {
+	res, ok := s.reserveTokenRequest(w, r)
 	if !ok {
 		return
 	}
-	at := t.authorizationTenant()
-	req, err := oauth.ParseTokenRequest(r.PostForm)
+	err := serve()
+	s.settle(res, countsAgainstClient(err))
 	if err != nil {
 		s.tokenError(w, r, err)
-		return
 	}
-	var resp app.TokenResponse
-	switch req.GrantType {
-	case oauth.GrantTypeAuthorizationCode:
-		resp, err = app.ExchangeCode(r.Context(), s.deps, s.signer, at, client, req)
-	case oauth.GrantTypeRefreshToken:
-		resp, err = app.RefreshToken(r.Context(), s.deps, s.signer, at, client, req)
-	case oauth.GrantTypeClientCredentials:
-		resp, err = app.ClientCredentialsToken(r.Context(), s.deps, s.signer, at, client, req)
-	default:
-		err = &oauth.Error{Code: oauth.ErrorUnsupportedGrantType, Description: "the grant type is not supported"}
-	}
-	if err != nil {
-		s.tokenError(w, r, err)
-		return
-	}
-	s.writeNoStoreJSON(w, r, http.StatusOK, resp)
 }
 
 // authenticateClient reads the form of a request to the token, revocation
 // or introspection endpoint and authenticates the client that sent it (RFC
-// 6749, section 2.3). On failure it writes the error response and returns
-// false.
-func (s *Server) authenticateClient(w http.ResponseWriter, r *http.Request, t tenant) (store.Client, bool) {
+// 6749, section 2.3).
+func (s *Server) authenticateClient(w http.ResponseWriter, r *http.Request, t tenant) (store.Client, error) {
 	if !hasContentType(r, formContentType) {
-		s.tokenError(w, r, &oauth.Error{Code: oauth.ErrorInvalidRequest,
-			Description: "the request must be application/x-www-form-urlencoded"})
-		return store.Client{}, false
+		return store.Client{}, &oauth.Error{Code: oauth.ErrorInvalidRequest,
+			Description: "the request must be application/x-www-form-urlencoded"}
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
 	if err := r.ParseForm(); err != nil {
-		s.tokenError(w, r, &oauth.Error{Code: oauth.ErrorInvalidRequest, Description: "the form is malformed"})
-		return store.Client{}, false
+		return store.Client{}, &oauth.Error{Code: oauth.ErrorInvalidRequest, Description: "the form is malformed"}
 	}
 	creds, err := oauth.ParseClientCredentials(r.Header.Get("Authorization"), r.PostForm)
 	if err != nil {
-		s.tokenError(w, r, err)
-		return store.Client{}, false
+		return store.Client{}, err
 	}
-	client, err := app.AuthenticateClient(r.Context(), s.deps, t.ID, creds)
-	if err != nil {
-		s.tokenError(w, r, err)
-		return store.Client{}, false
-	}
-	return client, true
+	return app.AuthenticateClient(r.Context(), s.deps, t.ID, creds)
 }
 
 // handleRevocation serves the revocation endpoint (RFC 7009, section 2),
 // which browser-based clients may call too.
 func (s *Server) handleRevocation(w http.ResponseWriter, r *http.Request, t tenant) {
 	allowCORS(w)
-	if s.tokenLimited(w, r) {
-		return
-	}
-	client, ok := s.authenticateClient(w, r, t)
-	if !ok {
-		return
-	}
-	token, err := oauth.ParseTokenReference(r.PostForm)
-	if err == nil {
-		err = app.RevokeToken(r.Context(), s.deps, s.signer, t.authorizationTenant(), client, token)
-	}
-	if err != nil {
-		s.tokenError(w, r, err)
-		return
-	}
-	// Section 2.2: the client ignores the body of a success response.
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusOK)
+	s.serveTokenRequest(w, r, func() error {
+		client, err := s.authenticateClient(w, r, t)
+		if err != nil {
+			return err
+		}
+		token, err := oauth.ParseTokenReference(r.PostForm)
+		if err != nil {
+			return err
+		}
+		if err := app.RevokeToken(r.Context(), s.deps, s.signer, t.authorizationTenant(), client, token); err != nil {
+			return err
+		}
+		// Section 2.2: the client ignores the body of a success response.
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		return nil
+	})
 }
 
 // handleIntrospection serves the introspection endpoint (RFC 7662, section
@@ -114,23 +118,22 @@ func (s *Server) handleRevocation(w http.ResponseWriter, r *http.Request, t tena
 // address: resource servers introspect expired tokens all the time, and
 // tokens are too long to be found by scanning (section 4).
 func (s *Server) handleIntrospection(w http.ResponseWriter, r *http.Request, t tenant) {
-	if s.tokenLimited(w, r) {
-		return
-	}
-	client, ok := s.authenticateClient(w, r, t)
-	if !ok {
-		return
-	}
-	token, err := oauth.ParseTokenReference(r.PostForm)
-	var resp app.Introspection
-	if err == nil {
-		resp, err = app.IntrospectToken(r.Context(), s.deps, s.signer, t.authorizationTenant(), client, token)
-	}
-	if err != nil {
-		s.tokenError(w, r, err)
-		return
-	}
-	s.writeNoStoreJSON(w, r, http.StatusOK, resp)
+	s.serveTokenRequest(w, r, func() error {
+		client, err := s.authenticateClient(w, r, t)
+		if err != nil {
+			return err
+		}
+		token, err := oauth.ParseTokenReference(r.PostForm)
+		if err != nil {
+			return err
+		}
+		resp, err := app.IntrospectToken(r.Context(), s.deps, s.signer, t.authorizationTenant(), client, token)
+		if err != nil {
+			return err
+		}
+		s.writeNoStoreJSON(w, r, http.StatusOK, resp)
+		return nil
+	})
 }
 
 // tokenError answers a request to the token, revocation or introspection
@@ -141,9 +144,6 @@ func (s *Server) tokenError(w http.ResponseWriter, r *http.Request, err error) {
 	if !errors.As(err, &e) {
 		s.internalError(w, r, "answering a token request", err)
 		return
-	}
-	if countsAgainstClient(err) {
-		s.countClient(s.limits.tokens, r)
 	}
 	status := http.StatusBadRequest
 	if e.Code == oauth.ErrorInvalidClient {

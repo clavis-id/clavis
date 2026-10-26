@@ -142,20 +142,21 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, t tenant) {
 		return
 	}
 	form := r.PostForm
-	if s.pageLimited(w, r, t, s.limits.passwords) {
-		return
-	}
 	p, err := app.FindAuthorizationRequest(r.Context(), s.deps, t.ID, form.Get("request"), bindingHash(r))
 	if err != nil {
 		s.authorizationRequestError(w, r, t, err)
 		return
 	}
+	res, ok := s.reservePage(w, r, t, s.limits.passwords)
+	if !ok {
+		return
+	}
 	email := form.Get("email")
 	login, err := app.CompletePasswordLogin(r.Context(), s.deps, s.passwords, t.authorizationTenant(), p, email,
 		form.Get("password"), sessionHash(r, t.ID))
+	s.settle(res, errors.Is(err, app.ErrInvalidCredentials))
 	switch {
 	case errors.Is(err, app.ErrInvalidCredentials):
-		s.countClient(s.limits.passwords, r)
 		s.loginPage(w, r, t, p, s.locale(w, r, "", p.Request.UILocales), email, i18n.LoginInvalidCredentials, "")
 		return
 	case errors.Is(err, app.ErrUserDisabled):

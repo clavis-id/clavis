@@ -220,18 +220,13 @@ func FindEmailVerification(ctx context.Context, d Deps, tenantID uuid.UUID, id s
 // Every submission counts as an attempt, before the comparison, so
 // concurrent guesses cannot exceed MaxCodeAttempts. A code that does not
 // match returns ErrWrongCode, or ErrTooManyAttempts when it used the last
-// attempt. Wrong codes also count against the address, across its
-// verifications: after MaxCodeFailures of them, its codes return
+// attempt. Codes also count against the address, across its verifications
+// and before the comparison, and a right code forgets the count: after
+// MaxCodeFailures wrong codes, the codes of the address return
 // ErrCodesLocked until CodeLockout has passed (ADR 0030).
 func VerifyCode(ctx context.Context, d Deps, v store.EmailVerification, typed string) error {
 	if !v.VerifiedAt.IsZero() {
 		return nil
-	}
-	switch locked, err := codesLocked(ctx, d, v); {
-	case err != nil:
-		return err
-	case locked:
-		return ErrCodesLocked
 	}
 	n, err := d.Store.EmailVerifications().AddAttempt(ctx, v.TenantID, v.ID)
 	switch {
@@ -243,14 +238,23 @@ func VerifyCode(ctx context.Context, d Deps, v store.EmailVerification, typed st
 	case n > MaxCodeAttempts:
 		return ErrTooManyAttempts
 	}
+	a, err := countCode(ctx, d, v)
+	switch {
+	case err != nil:
+		return err
+	case a.beyond(MaxCodeFailures):
+		return ErrCodesLocked
+	}
 	code, ok := NormalizeCode(typed)
 	if !ok || subtle.ConstantTimeCompare(codeHash(v.ID, code), v.CodeHash) != 1 {
-		countCodeFailure(ctx, d, v)
+		codeFailed(ctx, d, a, v)
 		if n == MaxCodeAttempts {
 			return ErrTooManyAttempts
 		}
 		return ErrWrongCode
 	}
+	forgetCounter(ctx, d, a.key, "wrong codes not forgotten after a right one",
+		slog.String("verification_id", v.ID))
 	return markVerified(ctx, d, v)
 }
 

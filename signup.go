@@ -37,7 +37,7 @@ func (s *Server) handleSignupPage(w http.ResponseWriter, r *http.Request, t tena
 // whether or not the address has an account (ADR 0026).
 func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request, t tenant) {
 	form, ok := s.flowForm(w, r, t, signupFlow)
-	if !ok || s.pageLimited(w, r, t, s.limits.messages) {
+	if !ok {
 		return
 	}
 	p, err := app.FindAuthorizationRequest(r.Context(), s.deps, t.ID, form.Get("request"), bindingHash(r))
@@ -46,8 +46,13 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request, t tenant) 
 		return
 	}
 	l := s.locale(w, r, "", p.Request.UILocales)
+	res, ok := s.reservePage(w, r, t, s.limits.messages)
+	if !ok {
+		return
+	}
 	id, err := app.StartSignup(r.Context(), s.deps, t.authorizationTenant(), p, form.Get("email"), bindingHash(r),
 		s.catalogs.Printer(l), t.issuer+signupVerifyPath)
+	s.settle(res, err == nil)
 	switch {
 	case errors.Is(err, app.ErrInvalidEmail):
 		s.signupPage(w, r, t, p, l, form.Get("email"), i18n.SignupInvalidEmail)
@@ -62,7 +67,6 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request, t tenant) 
 		s.authorizationRequestError(w, r, t, err)
 		return
 	}
-	s.countClient(s.limits.messages, r)
 	seeOther(w, verificationURL(t, signupVerifyPath, id))
 }
 

@@ -38,6 +38,13 @@ of ADR 0029. MFA endpoints come with milestone 4.
   failed client authentications and replays at the token endpoints, and messages, which cost
   whoever receives them. Right passwords and successful token requests do not count, so the
   people behind one address, such as an office, rarely meet a limit.
+- **Counting before the work.** Every limit counts an event before the work that may produce
+  it: a password before it is verified, a code before it is compared, a message before it is
+  queued. Otherwise the requests that arrive together would all pass the check while the
+  first ones are verified, and an attacker who sends many at once would exceed every limit.
+  When the work does not produce the event, the limit takes it back: a right password or code
+  forgets the counter of its address, and the request of a client address that produced no
+  event is refunded.
 - **Limits per email address.**
 
   | Limit | Counts | Effect |
@@ -50,12 +57,13 @@ of ADR 0029. MFA endpoints come with milestone 4.
   limit moves the end to one window after it. Events during a lock do not extend it. A
   malformed address, which no account can have, is not counted.
 - **Locked sign-ins.** A sign-in with a locked address does the work of a password
-  verification and gets the answer of a wrong password, the right password too. A password change whose address is locked
-  fails like a wrong current password. The audit log of ADR 0029 records
-  `user.sign_in_locked` (with `until`) when wrong passwords lock the address of an account, and
-  the reason `locked` for the sign-ins and password changes refused during the lock. Setting a
-  password forgets the wrong passwords of the address: a reset, `clavis users set-password`
-  or a password change.
+  verification and gets the answer of a wrong password, the right password too. A password
+  change whose address is locked fails like a wrong current password. The audit log of ADR
+  0029 records `user.sign_in_locked` (with `until`) when wrong passwords lock the address of an
+  account, and the reason `locked` for the sign-ins and password changes refused during the
+  lock. A right password, at a sign-in or as the current password of a password change,
+  forgets the wrong passwords of the address, and so does setting a password with a reset or
+  `clavis users set-password`.
 - **Locked codes.** Links still work while the codes of an address are refused: they carry a
   256-bit token that cannot be guessed. The page of a refused code says so.
 - **Limits per client address.**
@@ -98,8 +106,10 @@ of ADR 0029. MFA endpoints come with milestone 4.
 ## Consequences
 
 - Guessing the password of one account allows 10 tries per 15 minutes, about 1,000 a day,
-  from any number of addresses. One client address gets 20 wrong passwords, then 60 an hour,
-  across every account.
+  from any number of addresses, even when the tries arrive together. One client address gets
+  20 wrong passwords, then 60 an hour, across every account.
+- Each sign-in of the owner forgets the wrong passwords of the address, so an attacker gets
+  ten more tries after it. Owners sign in far less often than every 15 minutes.
 - Anyone who knows an address can lock its account for 15 minutes, and keep it locked with ten
   tries every 15 minutes. The user ends the lock with a reset, and an operator with
   `clavis users set-password`.
@@ -112,7 +122,7 @@ of ADR 0029. MFA endpoints come with milestone 4.
   address of the proxy and shares its limits. Operators must list their proxies.
 - Limits per client address are per instance: with several instances, one address gets the
   burst of each, and a restart forgets them. Limits per email address hold across instances.
-- Every failed sign-in for an address writes a counter, which the cleanup deletes once it
-  ends.
+- Every sign-in and every code writes the counter of its address, and a right one deletes it.
+  The cleanup deletes the counters that ended.
 - Tenant lookups for unknown slugs (#43) are bounded by the per-tenant cache of the third part
   of work item 3.5, not by these limits.

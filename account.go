@@ -45,15 +45,19 @@ func (s *Server) handleAccountLoginPage(w http.ResponseWriter, r *http.Request, 
 // credentials.
 func (s *Server) handleAccountLogin(w http.ResponseWriter, r *http.Request, t tenant) {
 	form, ok := s.accountForm(w, r, t)
-	if !ok || s.pageLimited(w, r, t, s.limits.passwords) {
+	if !ok {
+		return
+	}
+	res, ok := s.reservePage(w, r, t, s.limits.passwords)
+	if !ok {
 		return
 	}
 	email := form.Get("email")
 	login, err := app.SignInToAccount(r.Context(), s.deps, s.passwords, t.ID, email, form.Get("password"),
 		sessionHash(r, t.ID))
+	s.settle(res, errors.Is(err, app.ErrInvalidCredentials))
 	switch {
 	case errors.Is(err, app.ErrInvalidCredentials):
-		s.countClient(s.limits.passwords, r)
 		s.accountLoginPage(w, r, t, s.locale(w, r, "", ""), email, i18n.LoginInvalidCredentials, "")
 		return
 	case errors.Is(err, app.ErrUserDisabled):
@@ -131,18 +135,22 @@ func (s *Server) handleAccountPasswordPage(w http.ResponseWriter, r *http.Reques
 // ends every other session of the user.
 func (s *Server) handleAccountPassword(w http.ResponseWriter, r *http.Request, t tenant) {
 	form, ok := s.accountForm(w, r, t)
-	if !ok || s.pageLimited(w, r, t, s.limits.passwords) {
+	if !ok {
 		return
 	}
 	a, ok := s.account(w, r, t)
 	if !ok {
 		return
 	}
+	res, ok := s.reservePage(w, r, t, s.limits.passwords)
+	if !ok {
+		return
+	}
 	l := s.locale(w, r, "", "")
 	err := app.ChangePassword(r.Context(), s.deps, s.passwords, a, form.Get("current_password"), form.Get("new_password"))
+	s.settle(res, errors.Is(err, app.ErrInvalidCredentials))
 	switch {
 	case errors.Is(err, app.ErrInvalidCredentials):
-		s.countClient(s.limits.passwords, r)
 		s.accountPasswordPage(w, r, t, a, l, i18n.AccountWrongPassword, "")
 	case errors.Is(err, password.ErrPolicy):
 		s.accountPasswordPage(w, r, t, a, l, i18n.PasswordPolicy, "")
