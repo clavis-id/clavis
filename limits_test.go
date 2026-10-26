@@ -283,29 +283,58 @@ func TestMessagesPerClient(t *testing.T) {
 	}
 }
 
-// ADR 0030: errors of the token, revocation and introspection endpoints,
-// and inactive tokens of introspection, from one client address wait after
-// a burst; successful requests do not count.
+// ADR 0030: failed client authentications at the token, revocation and
+// introspection endpoints, and codes presented again, from one client
+// address wait after a burst. Successful requests, errors that clients meet
+// in normal use and inactive tokens of introspection do not count.
 func TestFailedTokenRequestsPerClient(t *testing.T) {
 	t.Parallel()
-	s, secret := tokenServer(t)
+	const issuer = "https://auth.example.com"
+	s, tn := newLoginServer(t, issuer, "")
 	now := fixClock(s)
 	h := s.Handler()
+	secret, err := app.RotateClientSecret(t.Context(), s.deps, tn.ID, "web")
+	if err != nil {
+		t.Fatalf("RotateClientSecret() unexpected error: %v", err)
+	}
 	basic := http.Header{"Authorization": {"Basic " + base64.StdEncoding.EncodeToString([]byte("web:"+secret))}}
 	wrong := http.Header{"Authorization": {"Basic " + base64.StdEncoding.EncodeToString([]byte("web:wrong"))}}
 	for range tokenLimit.burst + 1 {
 		if rec := post(t, h, "/oauth2/revoke", formContentType, "token=unknown", basic); rec.Code != http.StatusOK {
 			t.Fatalf("a revocation = %d %s, want 200", rec.Code, rec.Body.String())
 		}
+		if rec := post(t, h, "/oauth2/introspect", formContentType, "token=unknown", basic); rec.Code != http.StatusOK ||
+			!strings.Contains(rec.Body.String(), `"active":false`) {
+			t.Fatalf("an introspection = %d %s, want an inactive token", rec.Code, rec.Body.String())
+		}
+		if rec := post(t, h, "/oauth2/token", formContentType, "grant_type=refresh_token&refresh_token=unknown",
+			basic); rec.Code != http.StatusBadRequest || errorCode(t, rec) != "invalid_grant" {
+			t.Fatalf("an unknown refresh token = %d %s, want invalid_grant", rec.Code, rec.Body.String())
+		}
+	}
+
+	b := newBrowser(t, h)
+	id := b.startLogin(issuer, authorizeQuery())
+	res, _ := b.post(issuer+"/login", loginForm(id, testPassword), "same-origin")
+	loc, err := url.Parse(res.Header.Get("Location"))
+	if err != nil {
+		t.Fatalf("parsing the authorization response: %v", err)
+	}
+	exchange := url.Values{
+		"grant_type": {"authorization_code"}, "code": {loc.Query().Get("code")},
+		"redirect_uri": {"https://app.example.com/callback"}, "code_verifier": {"dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"},
+	}.Encode()
+	if rec := post(t, h, "/oauth2/token", formContentType, exchange, basic); rec.Code != http.StatusOK {
+		t.Fatalf("exchanging the code = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := post(t, h, "/oauth2/token", formContentType, exchange, basic); rec.Code != http.StatusBadRequest ||
+		errorCode(t, rec) != "invalid_grant" {
+		t.Fatalf("exchanging the code again = %d %s, want invalid_grant", rec.Code, rec.Body.String())
 	}
 	for range tokenLimit.burst - 1 {
 		if rec := post(t, h, "/oauth2/token", formContentType, "grant_type=client_credentials", wrong); rec.Code != http.StatusUnauthorized {
 			t.Fatalf("a wrong secret = %d %s, want 401", rec.Code, rec.Body.String())
 		}
-	}
-	if rec := post(t, h, "/oauth2/introspect", formContentType, "token=unknown", basic); rec.Code != http.StatusOK ||
-		!strings.Contains(rec.Body.String(), `"active":false`) {
-		t.Fatalf("an introspection = %d %s, want an inactive token", rec.Code, rec.Body.String())
 	}
 
 	for _, path := range []string{"/oauth2/token", "/oauth2/revoke", "/oauth2/introspect"} {

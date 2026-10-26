@@ -35,9 +35,9 @@ of ADR 0029. MFA endpoints come with milestone 4.
   - Limits per client address are kept in the memory of each instance. They bound what one
     client address can do, across every account.
 - **What counts.** The limits count what an attacker produces: wrong passwords, wrong codes,
-  errors of the token endpoints, and messages, which cost whoever receives them. Right
-  passwords and successful token requests do not count, so the people behind one address,
-  such as an office, rarely meet a limit.
+  failed client authentications and replays at the token endpoints, and messages, which cost
+  whoever receives them. Right passwords and successful token requests do not count, so the
+  people behind one address, such as an office, rarely meet a limit.
 - **Limits per email address.**
 
   | Limit | Counts | Effect |
@@ -65,7 +65,15 @@ of ADR 0029. MFA endpoints come with milestone 4.
   | 20, then one a minute | Wrong passwords, as above |
   | 10, then one a minute | Wrong codes |
   | 10, then one every two minutes | Messages of signup and reset |
-  | 60, then one a second | Errors of the token, revocation and introspection endpoints, and inactive tokens that introspection reports |
+  | 60, then one a second | Failed client authentications at the token, revocation and introspection endpoints, and codes and refresh tokens presented again |
+
+  Other errors of the token endpoints do not count, nor do the inactive tokens that
+  introspection reports: clients and resource servers meet them in normal use, such as an
+  expired refresh token or an expired access token, and the servers behind one address, such
+  as the NAT of a cluster, would see their valid requests refused. The codes, tokens and
+  secrets of these requests are too long to guess, so counting failed client authentications
+  is the throttling that RFC 7662, section 4, asks of introspection. A replay counts because
+  it revokes tokens and records an audit event each time.
 
   An IPv6 client counts by its /64 network, which one client usually holds whole. A client
   whose address is unknown is not limited. Links are not limited.

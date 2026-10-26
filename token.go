@@ -110,9 +110,9 @@ func (s *Server) handleRevocation(w http.ResponseWriter, r *http.Request, t tena
 
 // handleIntrospection serves the introspection endpoint (RFC 7662, section
 // 2) to confidential clients, which are servers, so it allows no
-// cross-origin requests. An inactive token counts like an error against the
-// client address, so the endpoint cannot be used to scan for tokens
-// (section 4).
+// cross-origin requests. Inactive tokens do not count against the client
+// address: resource servers introspect expired tokens all the time, and
+// tokens are too long to be found by scanning (section 4).
 func (s *Server) handleIntrospection(w http.ResponseWriter, r *http.Request, t tenant) {
 	if s.tokenLimited(w, r) {
 		return
@@ -130,23 +130,21 @@ func (s *Server) handleIntrospection(w http.ResponseWriter, r *http.Request, t t
 		s.tokenError(w, r, err)
 		return
 	}
-	if !resp.Active {
-		s.countClient(s.limits.tokens, r)
-	}
 	s.writeNoStoreJSON(w, r, http.StatusOK, resp)
 }
 
 // tokenError answers a request to the token, revocation or introspection
-// endpoint with an error response (RFC 6749, section 5.2), which counts
-// against the client address (ADR 0030). A failed client authentication
-// answers 401 with the scheme clients can use.
+// endpoint with an error response (RFC 6749, section 5.2). A failed client
+// authentication answers 401 with the scheme clients can use.
 func (s *Server) tokenError(w http.ResponseWriter, r *http.Request, err error) {
 	var e *oauth.Error
 	if !errors.As(err, &e) {
 		s.internalError(w, r, "answering a token request", err)
 		return
 	}
-	s.countClient(s.limits.tokens, r)
+	if countsAgainstClient(err) {
+		s.countClient(s.limits.tokens, r)
+	}
 	status := http.StatusBadRequest
 	if e.Code == oauth.ErrorInvalidClient {
 		status = http.StatusUnauthorized
@@ -156,6 +154,20 @@ func (s *Server) tokenError(w http.ResponseWriter, r *http.Request, err error) {
 		Error       string `json:"error"`
 		Description string `json:"error_description,omitzero"`
 	}{e.Code, e.Description})
+}
+
+// countsAgainstClient reports whether the error of a request to the token,
+// revocation or introspection endpoint counts against the client address
+// (ADR 0030): a failed client authentication, or a code or refresh token
+// presented again. Other errors are what clients meet in normal use, such as
+// an expired refresh token, and the codes, tokens and secrets that requests
+// carry are too long to guess.
+func countsAgainstClient(err error) bool {
+	if errors.Is(err, app.ErrReplayed) {
+		return true
+	}
+	var e *oauth.Error
+	return errors.As(err, &e) && e.Code == oauth.ErrorInvalidClient
 }
 
 // handleUserInfo serves the userinfo endpoint (OpenID Connect Core 1.0,

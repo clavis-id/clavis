@@ -30,9 +30,9 @@ var (
 	codeLimit = clientLimit{burst: 10, interval: time.Minute}
 	// messageLimit counts the messages of signup and password reset.
 	messageLimit = clientLimit{burst: 10, interval: 2 * time.Minute}
-	// tokenLimit counts the errors of the token, revocation and
-	// introspection endpoints, and the inactive tokens that introspection
-	// reports.
+	// tokenLimit counts failed client authentications at the token,
+	// revocation and introspection endpoints, and codes and refresh tokens
+	// presented again.
 	tokenLimit = clientLimit{burst: 60, interval: time.Second}
 )
 
