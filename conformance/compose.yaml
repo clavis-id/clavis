@@ -45,7 +45,7 @@ services:
       - server
 
   clavis:
-    image: gcr.io/distroless/static-debian13:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99
+    image: gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931
     command: ["/clavis", "serve"]
     volumes:
       # A Linux build of the current commit, written by run.sh.
@@ -60,7 +60,7 @@ services:
   # Terminates TLS for Clavis with a certificate from Caddy's internal CA. The
   # suite reaches the issuer https://clavis.test through this alias.
   clavis-tls:
-    image: caddy:2.11@sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489
+    image: caddy:2.11@sha256:4e2425f6009577e7c651010f16679c28f7d12df3e7b1914f941a7a3370746b3c
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     networks:
@@ -72,7 +72,7 @@ services:
 
   # Runs the suite's test plans through its API. Started on demand by run.sh.
   runner:
-    image: python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
+    image: python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
     profiles: [runner]
     working_dir: /conformance
     entrypoint: ["/conformance/runner.sh"]
