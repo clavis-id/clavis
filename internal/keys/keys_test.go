@@ -156,9 +156,9 @@ func TestSignaturesVerifyAgainstPublishedKeys(t *testing.T) {
 				t.Fatalf("CompactSerialize() unexpected error: %v", err)
 			}
 
-			parsed, err := jose.ParseSigned(compact, []jose.SignatureAlgorithm{jose.SignatureAlgorithm(alg)})
+			parsed, err := jose.ParseSignedCompact(compact, []jose.SignatureAlgorithm{jose.SignatureAlgorithm(alg)})
 			if err != nil {
-				t.Fatalf("ParseSigned() unexpected error: %v", err)
+				t.Fatalf("ParseSignedCompact() unexpected error: %v", err)
 			}
 			published := jwks.Key(parsed.Signatures[0].Header.KeyID)
 			if len(published) != 1 {
