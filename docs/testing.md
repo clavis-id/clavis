@@ -56,9 +56,15 @@ of the product. No change merges without the tests described here.
 
 ### Security tests
 
-- The threats in RFC 9700 (OAuth 2.0 Security Best Current Practice) are encoded as named
-  tests: open redirectors, authorization code injection and replay, PKCE downgrade, mix-up,
-  refresh token replay, token leakage through referrers, clickjacking headers, CSRF.
+- The attacks of RFC 9700 (OAuth 2.0 Security Best Current Practice), section 4, are tests
+  in `threats_test.go`, one per attack, run against the whole server: open redirects through
+  redirect URIs and logout, mix-up across tenants, authorization code injection and replay,
+  PKCE downgrade, refresh token replay, login CSRF, clients posing as users, clickjacking,
+  leakage through the Referer header, and credentials forwarded by a 307 redirect. Each test
+  also makes the legitimate request, so that it cannot pass only because nothing works, and
+  fails when the defense it names is turned off. The clickjacking, referrer and redirect tests
+  check every response of a walk through all the hosted pages, so a new page must join that
+  walk.
 - Native Go fuzzing. Current targets: issuer parsing (`internal/issuer`), configuration parsing
   (`internal/config`), ciphertext decryption (`kek`), tenant slugs and email addresses
   (`internal/app`), redirect URI validation and matching and authorization request parsing

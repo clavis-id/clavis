@@ -16,8 +16,12 @@ import (
 	"clavisid.org/clavis/store"
 )
 
-// testChallenge is a valid S256 code challenge (RFC 7636, appendix B).
-const testChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+// testChallenge is a valid S256 code challenge, and testVerifier its code
+// verifier (RFC 7636, appendix B).
+const (
+	testChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+	testVerifier  = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+)
 
 const testPassword = "correct horse battery"
 
