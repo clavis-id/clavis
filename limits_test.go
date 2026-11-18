@@ -435,7 +435,7 @@ func TestFailedTokenRequestsPerClient(t *testing.T) {
 	}
 	exchange := url.Values{
 		"grant_type": {"authorization_code"}, "code": {loc.Query().Get("code")},
-		"redirect_uri": {"https://app.example.com/callback"}, "code_verifier": {"dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"},
+		"redirect_uri": {"https://app.example.com/callback"}, "code_verifier": {testVerifier},
 	}.Encode()
 	if rec := post(t, h, "/oauth2/token", formContentType, exchange, basic); rec.Code != http.StatusOK {
 		t.Fatalf("exchanging the code = %d %s", rec.Code, rec.Body.String())
