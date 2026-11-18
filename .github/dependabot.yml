@@ -49,6 +49,11 @@ updates:
     commit-message:
       prefix: build
       include: scope
+    # Version updates cover only direct dependencies by default, and the
+    # compiled requirements.txt pins the indirect ones too, which would
+    # otherwise never move.
+    allow:
+      - dependency-type: all
     groups:
       conformance-runner:
         patterns: ["*"]
