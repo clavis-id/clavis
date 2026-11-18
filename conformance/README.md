@@ -93,4 +93,4 @@ Plans are added as the plan for Phase 1 lands their features (see
   ```
 
 Dependabot proposes updates for the images, except the suite images and MongoDB, which move
-with the suite release, and for the Python dependencies.
+with the suite release, and for the Python dependencies, direct and indirect.
