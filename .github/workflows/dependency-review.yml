@@ -36,5 +36,10 @@ jobs:
           # MIT, and its lsp directory, which only the templ command uses, is
           # BSD-3-Clause; GitHub reports the pair as
           # LicenseRef-bad-mit-bsd-3-clause instead of both licenses.
+          # github.com/sassoftware/relic/v8, which GoReleaser requires, is
+          # Apache-2.0; GitHub adds LicenseRef-scancode-dco-1.1 for its
+          # ContributorAgreement.txt, the Developer Certificate of Origin that
+          # contributors sign off, which sets no terms for users.
           allow-dependencies-licenses: >-
-            pkg:golang/github.com/a-h/templ
+            pkg:golang/github.com/a-h/templ,
+            pkg:golang/github.com/sassoftware/relic/v8
