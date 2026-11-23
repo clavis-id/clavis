@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"unicode"
 	"unicode/utf8"
 	"uuid"
@@ -31,6 +32,9 @@ var (
 	ErrTenantExists    = errors.New("tenant already exists")
 	ErrTenantNotFound  = errors.New("tenant not found")
 	ErrProtectedTenant = errors.New("the default and admin tenants cannot be deleted")
+	// ErrSignupNotAllowed reports an attempt to let people sign up to the
+	// admin tenant, whose users administer Clavis (ADR 0026).
+	ErrSignupNotAllowed = errors.New("the admin tenant cannot allow signup")
 )
 
 // ValidateTenantSlug reports whether slug can name a tenant: 1 to 63
@@ -112,6 +116,8 @@ func CreateTenant(ctx context.Context, d Deps, createKeys func(context.Context, 
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "created tenant",
 		slog.String("tenant_id", t.ID.String()), slog.String("tenant", t.Slug))
 
+	d.Cache.forgetSlug(t.Slug)
+
 	if err := createKeys(ctx, t.ID); err != nil {
 		return t, fmt.Errorf("tenant %q was created, but creating its signing keys failed "+
 			"(key rotation retries on the next check): %w", slug, err)
@@ -121,19 +127,44 @@ func CreateTenant(ctx context.Context, d Deps, createKeys func(context.Context, 
 
 // TenantBySlug returns the tenant served under /t/{slug}. The default tenant
 // is served only at the root issuer, so it is not found by slug; neither is
-// any slug that fails validation.
+// any slug that fails validation. The Cache of d keeps the answer, a tenant
+// or none, for TenantCacheTTL.
 func TenantBySlug(ctx context.Context, d Deps, slug string) (store.Tenant, error) {
 	if slug == DefaultTenantSlug || ValidateTenantSlug(slug) != nil {
 		return store.Tenant{}, ErrTenantNotFound
 	}
-	t, err := d.Store.Tenants().GetBySlug(ctx, slug)
-	switch {
-	case errors.Is(err, store.ErrNotFound):
+	now, unknown := d.Now(), d.Cache.unknownSlugMap()
+	_, gen, ok := unknown.get(slug, now)
+	if ok {
 		return store.Tenant{}, ErrTenantNotFound
-	case err != nil:
-		return store.Tenant{}, fmt.Errorf("looking up tenant: %w", err)
 	}
-	return t, nil
+	return cached(d.Cache.slugMap(), slug, now, func() (store.Tenant, error) {
+		t, err := d.Store.Tenants().GetBySlug(ctx, slug)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			unknown.put(slug, struct{}{}, now, gen)
+			return store.Tenant{}, ErrTenantNotFound
+		case err != nil:
+			return store.Tenant{}, fmt.Errorf("looking up tenant: %w", err)
+		}
+		return t, nil
+	})
+}
+
+// TenantByID returns the tenant with the given ID as stored at most
+// TenantCacheTTL ago, which the Cache of d keeps, so a request sees the
+// recent settings of a tenant that it found earlier.
+func TenantByID(ctx context.Context, d Deps, id uuid.UUID) (store.Tenant, error) {
+	return cached(d.Cache.tenantMap(), id, d.Now(), func() (store.Tenant, error) {
+		t, err := d.Store.Tenants().Get(ctx, id)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			return store.Tenant{}, ErrTenantNotFound
+		case err != nil:
+			return store.Tenant{}, fmt.Errorf("looking up tenant: %w", err)
+		}
+		return t, nil
+	})
 }
 
 // ListTenants returns every tenant in ID order, which follows creation time
@@ -184,7 +215,58 @@ func DeleteTenant(ctx context.Context, d Deps, slug string) error {
 	case err != nil:
 		return fmt.Errorf("deleting tenant %q: %w", slug, err)
 	}
+	d.Cache.forgetTenant(t)
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "deleted tenant",
 		slog.String("tenant_id", t.ID.String()), slog.String("tenant", t.Slug))
 	return nil
+}
+
+// TenantChanges are the changes that UpdateTenant makes; nil fields keep
+// their values.
+type TenantChanges struct {
+	Name *string
+	// SignupEnabled lets people create their own accounts (ADR 0026).
+	SignupEnabled *bool
+}
+
+// UpdateTenant changes the name or the settings of the tenant with the given
+// slug and returns the result. The admin tenant cannot allow signup.
+func UpdateTenant(ctx context.Context, d Deps, slug string, c TenantChanges) (store.Tenant, error) {
+	t, err := FindTenant(ctx, d, slug)
+	if err != nil {
+		return store.Tenant{}, err
+	}
+	if c.Name != nil {
+		if err := validateDisplayName(*c.Name); err != nil {
+			return store.Tenant{}, fmt.Errorf("%w: %w", ErrInvalidTenant, err)
+		}
+		t.Name = *c.Name
+	}
+	if c.SignupEnabled != nil {
+		if *c.SignupEnabled && t.Slug == AdminTenantSlug {
+			return store.Tenant{}, ErrSignupNotAllowed
+		}
+		t.SignupEnabled = *c.SignupEnabled
+	}
+	t.UpdatedAt = d.Now()
+	switch err := d.Store.Tenants().Update(ctx, t); {
+	case errors.Is(err, store.ErrNotFound):
+		return store.Tenant{}, fmt.Errorf("%w: %q", ErrTenantNotFound, slug)
+	case err != nil:
+		return store.Tenant{}, fmt.Errorf("updating tenant %q: %w", slug, err)
+	}
+	d.Cache.forgetTenant(t)
+	d.Logger.LogAttrs(ctx, slog.LevelInfo, "updated tenant",
+		slog.String("tenant_id", t.ID.String()), slog.String("tenant", t.Slug),
+		slog.Bool("signup_enabled", t.SignupEnabled))
+	details := make(map[string]string)
+	if c.Name != nil {
+		details["name"] = t.Name
+	}
+	if c.SignupEnabled != nil {
+		details["signup_enabled"] = strconv.FormatBool(t.SignupEnabled)
+	}
+	audit(ctx, d, store.AuditEvent{TenantID: t.ID, Type: EventTenantUpdated, Actor: store.ActorOperator,
+		Details: details})
+	return t, nil
 }

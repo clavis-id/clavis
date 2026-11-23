@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strings"
@@ -19,10 +20,13 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
+	"clavisid.org/clavis/email"
 	"clavisid.org/clavis/internal/app"
 	"clavisid.org/clavis/internal/authn/password"
+	"clavisid.org/clavis/internal/i18n"
 	"clavisid.org/clavis/internal/issuer"
 	"clavisid.org/clavis/internal/keys"
+	"clavisid.org/clavis/internal/mailer"
 	"clavisid.org/clavis/internal/oidc"
 	"clavisid.org/clavis/internal/ui"
 	"clavisid.org/clavis/kek"
@@ -84,6 +88,27 @@ type Config struct {
 	// Passwords configures password hashing. Zero fields take their
 	// defaults.
 	Passwords PasswordPolicy
+
+	// Email delivers the messages Clavis sends to users, such as
+	// verification codes (ADR 0024). Clavis queues each message and sends it
+	// in the background, so responses do not wait for delivery. When nil,
+	// the features that need email are unavailable. email.NewSMTP sends
+	// through an SMTP server; email.NewConsole writes messages to the log
+	// and is for development only.
+	Email email.Sender
+
+	// TrustedProxies are the networks of the reverse proxies in front of
+	// Clavis. A request whose connection comes from one of them is from the
+	// client that its X-Forwarded-For header names, read from the right over
+	// the trusted proxies (ADR 0029). Any other request is from the address
+	// of its connection, and when TrustedProxies is empty the header is
+	// ignored. Audit events record this address.
+	TrustedProxies []netip.Prefix
+
+	// AuditRetention is how long audit events are kept (ADR 0029). The
+	// cleanup deletes older ones. Zero takes the default of 90 days; a
+	// negative value keeps them forever.
+	AuditRetention time.Duration
 }
 
 // PasswordPolicy configures password hashing (ADR 0015). Zero fields take
@@ -172,12 +197,17 @@ type Server struct {
 	signer        tokenSigner
 	passwords     *password.Hasher
 	assets        *ui.Assets
+	catalogs      *i18n.Catalogs
 	crossOrigin   *http.CrossOriginProtection
 	deps          app.Deps
 	defaultTenant store.Tenant
 	logger        *slog.Logger
 	tracer        trace.TracerProvider
 	meter         metric.MeterProvider
+	mailer        *mailer.Mailer // nil without Config.Email
+	proxies       []netip.Prefix
+	limits        clientLimits
+	retention     time.Duration // of audit events; not positive keeps them
 	handler       http.Handler
 	wellKnown     http.Handler
 
@@ -189,9 +219,9 @@ type Server struct {
 // New validates cfg, prepares the store (creating the default tenant and its
 // signing keys on first use) and returns a ready-to-use Server.
 //
-// New starts signing key rotation and the cleanup of expired records in the
-// background. Call Close to stop them when the Server is no longer needed;
-// canceling ctx stops them too.
+// New starts signing key rotation, the cleanup of expired records and, with
+// Config.Email, email delivery in the background. Call Close to stop them
+// when the Server is no longer needed; canceling ctx stops them too.
 // Background work never outlives ctx, so ctx must live as long as the Server
 // is in use.
 func New(ctx context.Context, cfg Config) (*Server, error) {
@@ -216,7 +246,23 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("clavis: invalid Passwords: %w", err)
 	}
+	proxies, err := trustedProxies(cfg.TrustedProxies)
+	if err != nil {
+		return nil, fmt.Errorf("clavis: invalid TrustedProxies: %w", err)
+	}
+	retention := cfg.AuditRetention
+	if retention == 0 {
+		retention = app.DefaultAuditRetention
+	}
 	assets, err := ui.NewAssets()
+	if err != nil {
+		return nil, fmt.Errorf("clavis: %w", err)
+	}
+	catalogs, err := i18n.Load()
+	if err != nil {
+		return nil, fmt.Errorf("clavis: %w", err)
+	}
+	limits, err := newClientLimits()
 	if err != nil {
 		return nil, fmt.Errorf("clavis: %w", err)
 	}
@@ -234,7 +280,7 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	}
 
 	// Everything is validated before the first write to the store.
-	deps := app.Deps{Store: cfg.Store, Logger: logger, Now: time.Now, NewID: uuid.NewV7}
+	deps := app.Deps{Store: cfg.Store, Logger: logger, Now: time.Now, NewID: uuid.NewV7, Cache: app.NewCache()}
 	manager, err := keys.NewManager(keys.Config{
 		Store:         cfg.Store,
 		Encrypter:     cfg.KeyEncrypter,
@@ -254,6 +300,15 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	if err := manager.RotateAll(ctx); err != nil {
 		return nil, fmt.Errorf("clavis: preparing signing keys: %w", err)
 	}
+	var mail *mailer.Mailer
+	if cfg.Email != nil {
+		if _, ok := cfg.Email.(*email.Console); ok {
+			logger.LogAttrs(ctx, slog.LevelWarn, "the console email driver writes messages, including codes "+
+				"and links that grant access, to the log; use it only for development")
+		}
+		mail = mailer.New(cfg.Email, logger)
+		deps.Mail = mail
+	}
 	bgCtx, stop := context.WithCancel(ctx) //nolint:gosec // stop is kept in the Server and called by Close.
 	s := &Server{
 		issuer:        iss,
@@ -262,12 +317,17 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 		signer:        tokenSigner{manager},
 		passwords:     passwords,
 		assets:        assets,
+		catalogs:      catalogs,
 		crossOrigin:   http.NewCrossOriginProtection(),
 		deps:          deps,
 		defaultTenant: tenant,
 		logger:        logger,
 		tracer:        tracer,
 		meter:         meter,
+		mailer:        mail,
+		proxies:       proxies,
+		limits:        limits,
+		retention:     retention,
 		stop:          stop,
 	}
 	s.wellKnown = allowGet(s.instrument(http.MethodGet+" "+oidc.AuthorizationServerMetadataPath,
@@ -275,12 +335,16 @@ func New(ctx context.Context, cfg Config) (*Server, error) {
 	s.handler = s.routes()
 	s.work.Go(func() { manager.Run(bgCtx) })
 	s.work.Go(func() { s.runCleanup(bgCtx) })
+	if s.mailer != nil {
+		s.work.Go(func() { s.mailer.Run(bgCtx) })
+	}
 	return s, nil
 }
 
-// runCleanup deletes expired authorization requests, sessions and codes
-// every cleanupInterval until ctx is canceled. Instances that share a store
-// may all run it; deleting an expired record twice is harmless.
+// runCleanup deletes expired records, such as authorization requests,
+// sessions and codes, and the audit events older than the retention, every
+// cleanupInterval until ctx is canceled. Instances that share a store may
+// all run it; deleting a record twice is harmless.
 func (s *Server) runCleanup(ctx context.Context) {
 	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
@@ -293,8 +357,30 @@ func (s *Server) runCleanup(ctx context.Context) {
 				s.logger.LogAttrs(ctx, slog.LevelError, "deleting expired records failed",
 					slog.String("error", err.Error()))
 			}
+			if err := app.PurgeAuditEvents(ctx, s.deps, s.retention); err != nil && ctx.Err() == nil {
+				s.logger.LogAttrs(ctx, slog.LevelError, "deleting old audit events failed",
+					slog.String("error", err.Error()))
+			}
 		}
 	}
+}
+
+// trustedProxies validates the networks of Config.TrustedProxies and returns
+// them masked, with IPv4 networks written in IPv6 form as IPv4 networks, so
+// they compare with the unmapped addresses of clientIP.
+func trustedProxies(prefixes []netip.Prefix) ([]netip.Prefix, error) {
+	out := make([]netip.Prefix, 0, len(prefixes))
+	for _, p := range prefixes {
+		if !p.IsValid() {
+			return nil, fmt.Errorf("invalid network %q", p.String())
+		}
+		p = p.Masked()
+		if p.Addr().Is4In6() && p.Bits() >= 96 {
+			p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+		}
+		out = append(out, p)
+	}
+	return out, nil
 }
 
 // Close stops the background work started by New and waits for it to
@@ -356,9 +442,32 @@ func (s *Server) routes() http.Handler {
 	s.handleTenant(mux, http.MethodPost, loginPath, s.handleLogin)
 	s.handleTenant(mux, http.MethodGet, consentPath, s.handleConsentPage)
 	s.handleTenant(mux, http.MethodPost, consentPath, s.handleConsent)
+	s.handleTenant(mux, http.MethodGet, signupPath, s.handleSignupPage)
+	s.handleTenant(mux, http.MethodPost, signupPath, s.handleSignup)
+	s.handleTenant(mux, http.MethodGet, signupVerifyPath, s.handleVerifyPage(signupFlow))
+	s.handleTenant(mux, http.MethodPost, signupVerifyPath, s.handleVerify(signupFlow))
+	s.handleTenant(mux, http.MethodGet, signupPasswordPath, s.handlePasswordPage(signupFlow))
+	s.handleTenant(mux, http.MethodPost, signupPasswordPath, s.handleSignupPassword)
+	s.handleTenant(mux, http.MethodGet, resetPath, s.handleResetPage)
+	s.handleTenant(mux, http.MethodPost, resetPath, s.handleReset)
+	s.handleTenant(mux, http.MethodGet, resetVerifyPath, s.handleVerifyPage(resetFlow))
+	s.handleTenant(mux, http.MethodPost, resetVerifyPath, s.handleVerify(resetFlow))
+	s.handleTenant(mux, http.MethodGet, resetPasswordPath, s.handlePasswordPage(resetFlow))
+	s.handleTenant(mux, http.MethodPost, resetPasswordPath, s.handleResetPassword)
 	s.handleTenant(mux, http.MethodGet, oidc.EndSessionPath, s.handleEndSession)
 	s.handleTenant(mux, http.MethodPost, oidc.EndSessionPath, s.handleEndSession)
 	s.handleTenant(mux, http.MethodPost, logoutPath, s.handleLogout)
+	s.handleTenant(mux, http.MethodGet, brandingPath+"{name}", s.handleLogo)
+	s.handleTenant(mux, http.MethodGet, "/{$}", s.handleRoot)
+	s.handleTenant(mux, http.MethodGet, accountPath, s.handleAccountPage)
+	s.handleTenant(mux, http.MethodPost, accountPath, s.handleAccount)
+	s.handleTenant(mux, http.MethodGet, accountLoginPath, s.handleAccountLoginPage)
+	s.handleTenant(mux, http.MethodPost, accountLoginPath, s.handleAccountLogin)
+	s.handleTenant(mux, http.MethodPost, accountLogoutPath, s.handleAccountLogout)
+	s.handleTenant(mux, http.MethodGet, accountPasswordPath, s.handleAccountPasswordPage)
+	s.handleTenant(mux, http.MethodPost, accountPasswordPath, s.handleAccountPassword)
+	s.handleTenant(mux, http.MethodGet, accountApplicationsPath, s.handleAccountApplicationsPage)
+	s.handleTenant(mux, http.MethodPost, accountApplicationsPath, s.handleAccountApplications)
 	// Assets are the same for every tenant and are not instrumented, like
 	// the probes.
 	mux.HandleFunc(http.MethodGet+" "+assetsPath+"{name}", s.handleAsset)
@@ -375,12 +484,18 @@ type tenant struct {
 	store.Tenant
 	issuer string
 	path   string
+	// signup tells whether people can sign up: the tenant allows it, it is
+	// not the admin tenant, and email is enabled (ADR 0026).
+	signup bool
+	// reset tells whether users can reset their password, which needs email
+	// (ADR 0027).
+	reset bool
 }
 
 // authorizationTenant returns what the authorization use cases need to know
 // about t.
 func (t tenant) authorizationTenant() app.AuthorizationTenant {
-	return app.AuthorizationTenant{ID: t.ID, Issuer: t.issuer}
+	return app.AuthorizationTenant{ID: t.ID, Issuer: t.issuer, Signup: t.signup}
 }
 
 // tenantHandler serves a request addressed to one tenant.
@@ -401,26 +516,41 @@ func (s *Server) handleTenant(mux *http.ServeMux, method, path string, h tenantH
 
 // serveTenant resolves the tenant with the given slug, or the default tenant
 // when slug is empty, and passes the request to h. Unknown tenants get a 404
-// response.
+// response. Tenants, the default one too, and slugs of no tenant come from
+// the cache of app.Deps, so a change made elsewhere applies within
+// app.TenantCacheTTL (ADR 0031).
 func (s *Server) serveTenant(w http.ResponseWriter, r *http.Request, slug string, h tenantHandler) {
+	var t store.Tenant
+	var err error
 	if slug == "" {
-		h(w, r, tenant{Tenant: s.defaultTenant, issuer: s.issuer.String(), path: s.issuer.Path})
-		return
+		t, err = app.TenantByID(r.Context(), s.deps, s.defaultTenant.ID)
+	} else {
+		t, err = app.TenantBySlug(r.Context(), s.deps, slug)
 	}
-	t, err := app.TenantBySlug(r.Context(), s.deps, slug)
 	switch {
-	case errors.Is(err, app.ErrTenantNotFound):
+	case errors.Is(err, app.ErrTenantNotFound) && slug != "":
 		s.notFound(w)
 		return
 	case err != nil:
 		s.internalError(w, r, "resolving the tenant", err)
 		return
 	}
-	h(w, r, tenant{
+	resolved := tenant{
 		Tenant: t,
-		issuer: s.issuer.String() + tenantPathPrefix + t.Slug,
-		path:   s.issuer.Path + tenantPathPrefix + t.Slug,
-	})
+		issuer: s.issuer.String(),
+		path:   s.issuer.Path,
+		// UpdateTenant refuses signup for the admin tenant; a stored setting
+		// that says otherwise is ignored.
+		signup: t.SignupEnabled && t.Slug != app.AdminTenantSlug && s.deps.Mail != nil,
+		reset:  s.deps.Mail != nil,
+	}
+	if slug != "" {
+		resolved.issuer += tenantPathPrefix + t.Slug
+		resolved.path += tenantPathPrefix + t.Slug
+	}
+	r = r.WithContext(app.WithRequest(r.Context(), app.RequestInfo{IP: clientIP(r, s.proxies),
+		UserAgent: r.UserAgent()}))
+	h(w, r, resolved)
 }
 
 // instrument wraps h so that it records a span and HTTP metrics named after
@@ -472,7 +602,7 @@ func (s *Server) handleJWKS(w http.ResponseWriter, r *http.Request, t tenant) {
 // handleMetadata serves the provider metadata of a tenant, for OpenID
 // Connect Discovery 1.0, section 4, and RFC 8414, section 3.
 func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request, t tenant) {
-	s.writePublicJSON(w, r, "application/json", metadataMaxAge, oidc.NewMetadata(t.issuer))
+	s.writePublicJSON(w, r, "application/json", metadataMaxAge, oidc.NewMetadata(t.issuer, t.signup))
 }
 
 // allowGet answers requests other than GET and HEAD with 405 before they

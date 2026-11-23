@@ -69,7 +69,7 @@ multi-architecture.
 ```
 clavis/
   cmd/clavis/            CLI and server entry point (serve, migrate, tenants, clients, users,
-                         keys; later plan, apply, import)
+                         resources, grants, email, keys; later plan, apply, import)
   clavis.go              Public embed API (New, Config, Server, Server.Handler, Server.Verifier)
                          and the HTTP handlers of the protocol endpoints
   middleware/            Public: resource-server token validation for net/http
@@ -81,6 +81,7 @@ clavis/
     postgres/            Public: PostgreSQL adapter (pgx v5), same structure as sqlite/
     storetest/           Public: contract suite every adapter must pass
   kek/                   Public: key encryption (Encrypter interface, AES-256-GCM Local)
+  email/                 Public: email delivery (Sender interface, SMTP and console senders)
   hooks/                 Public: hook payload types and WebAssembly ABI
   client/                Public: generated Go client for the admin API
   internal/
@@ -92,7 +93,10 @@ clavis/
     authn/               Authenticators: password, passkeys, TOTP, magic link, upstream IdPs
     keys/                Signing key lifecycle, rotation, envelope encryption at rest
     adminapi/            Admin REST handlers generated from api/openapi.yaml
-    ui/                  templ components, static assets, i18n catalogs
+    ui/                  templ components, static assets, tenant themes
+    i18n/                Message catalogs (English, Spanish) and locale selection
+    emailtmpl/           Email templates: plain text with an HTML alternative
+    mailer/              Background email delivery with retries
     webhook/             Outbound event delivery (Standard Webhooks)
     wasmhooks/           wazero runtime for WebAssembly hooks
     ratelimit/           In-process and store-backed limiters
@@ -290,7 +294,8 @@ year.
     consent. Each use moves its idle expiry.
   - A new sign-in is needed for `prompt=login`, `max_age=0`, an authentication older than
     `max_age`, or an `id_token_hint` of another user. Until account selection exists,
-    `prompt=select_account` shows the sign-in form too. With `prompt=none`, a request that
+    `prompt=select_account` shows the sign-in form too, and `prompt=create` shows the signup
+    page. With `prompt=none`, a request that
     needs a sign-in fails with `login_required`.
   - RP-initiated logout (ADR 0023): a browser with an active session confirms on a page,
     which posts only from Clavis itself; so does a `POST` without the session cookie, which a
@@ -315,15 +320,77 @@ year.
   - `clavis grants list|revoke` lists and revokes the grants of a user. Revoking a grant
     revokes the client's refresh and access tokens for the user and deletes its unexchanged
     codes, and the next request asks again.
-- **Hosted pages:** rendered on the server with templ, without scripts. They send a Content
+- **Hosted pages:** rendered on the server with templ, without scripts except the one that
+  submits a form post response, which the policy allows by its hash. They send a Content
   Security Policy that allows only same-origin stylesheets and images, forbids framing, and
   lets forms submit only to Clavis and, on the login page, to the origin of the client's
   redirect URI, because browsers apply `form-action` to the redirect after a sign-in. The
   sign-in form is protected by `http.CrossOriginProtection`, and pages are never cached and
-  send no referrer.
+  send no referrer. A tenant's theme is a `style` element allowed by its hash, built only from
+  validated colors and a radius, and its logo is a validated PNG, JPEG or WebP image served by
+  Clavis (ADR 0025).
+- **Languages:** pages and emails come from embedded catalogs in English and Spanish. The
+  language is the one the user picked on the page, then the request's `ui_locales`, then the
+  browser's (ADR 0025). A cookie remembers the choice only when the request comes from the
+  same origin, judged as `http.CrossOriginProtection` judges a form, so a link or a form on
+  another site cannot change the language of later pages.
+- **Email:** see ADR 0024. Requests queue messages, and background workers send them, so a
+  response takes the same time whether or not a message goes out. Messages stay in memory and
+  are retried twice. SMTP requires STARTTLS or implicit TLS with a verified certificate;
+  plain text is accepted only for a loopback host and without credentials. The console
+  driver, for development, is never a default.
+- **Signup:** see ADR 0026. A tenant allows it with `clavis tenants update SLUG --signup`,
+  and it needs email. The sign-in page links to it, and `prompt=create` opens it.
+  - The user types an address first. Clavis answers the same way whether or not it has an
+    account, with the same work. It queues a code and a link for a new address, and a notice
+    for an address with an account.
+  - The code and the link are stored as hashes and work only in the browser that started,
+    for 15 minutes. Five codes may be tried.
+  - The user then chooses a password. The account is created with the address verified,
+    and the user is signed in and returns to the application.
+- **Password reset:** see ADR 0027. With email enabled, the sign-in page links to "Forgot your
+  password?".
+  - The user types the address and proves it with the code or the link of signup.
+  - Every address gets the same pages, but only an active account gets the message.
+  - The user chooses a new password and signs in with it on the same sign-in form.
+  - A new password, after a reset or from `clavis users set-password`, ends every session of
+    the user and revokes the user's codes, access tokens and refresh token families.
+- **Account pages:** see ADR 0028. `<issuer>/account`, where the issuer root leads.
+  - They use the session of single sign-on, or sign the user in on `/account/login` without an
+    authorization request.
+  - The profile edits every standard claim except the email address, each one validated.
+  - A password change needs the current password and signs out the user's other sessions.
+  - The connected applications page removes the access of a client the user allowed.
 - **Comparisons:** every secret comparison is constant time.
 - **Logging:** secrets, tokens, passwords, codes and full authorization requests are never
   logged. Audit events record who, what, when and from where, without credential material.
+- **Audit log:** see ADR 0029.
+  - Each tenant keeps events for sign-ins (failed ones too), sign-outs, account changes,
+    consent, grant and token revocations, token reuse, and client changes.
+  - Events outlive the users and clients they name and are deleted after `audit.retention` (90
+    days by default; 0 keeps them).
+  - `clavis audit list` reads them.
+- **Client addresses:** a request is from the address of its connection. Only a connection from
+  `server.trusted_proxies` is from the client that X-Forwarded-For names, read from the right
+  over the trusted proxies; without trusted proxies the header is ignored.
+- **Rate limits and lockout:** see ADR 0030.
+  - Every limit counts an event before the work that may produce it, so requests that arrive
+    together cannot exceed it, and takes it back when the work does not produce it.
+  - Limits per email address are stored, so they hold across instances, and count addresses
+    with and without accounts alike. Ten wrong passwords within 15 minutes lock an address for
+    15 minutes, answered like a wrong password; a right password, or setting a password,
+    forgets them. Ten wrong codes within a day refuse the codes of an address for a day, while
+    links still work; a right code forgets them. Five messages within an hour refuse more for
+    an hour.
+  - Limits per client address are kept in the memory of each instance: wrong passwords, wrong
+    codes, messages, and failed client authentications and replayed codes or refresh tokens
+    at the token, revocation and introspection endpoints. They allow a burst, then a steady
+    rate, and answer 429 with `Retry-After`. An IPv6 client counts by its /64 network, and its
+    /48 network gets five times the limits of a client.
+- **Per-tenant cache:** see ADR 0031. Each server keeps tenants, unknown slugs, API resources,
+  branding and logos for 30 seconds, and each tenant's signing keys for a minute. Changes from
+  the same process apply at once; changes from the command line or another instance, within
+  30 seconds. Clients, users, sessions and tokens are never cached.
 - **FIPS mode:** builds with `GOFIPS140=certified` restrict algorithms to the validated module.
 
 ## Observability
@@ -350,7 +417,7 @@ year.
 | Port | Default adapter | Purpose |
 |---|---|---|
 | `store.Store` | SQLite, PostgreSQL | Persistence |
-| `Sender` | SMTP | Email delivery |
+| `email.Sender` | `email.SMTP`; `email.Console` for development | Email delivery (ADR 0024) |
 | `kek.Encrypter` | `kek.Local` (AES-256-GCM) | Signing key protection (KMS adapters later) |
 | `Hook` | Webhook, WebAssembly | Lifecycle customization |
 | `RateLimiter` | In-process, store-backed | Abuse protection |

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/mail"
 	"strings"
+	"time"
 	"uuid"
 
 	"clavisid.org/clavis/internal/authn/password"
@@ -104,8 +105,15 @@ type UserSpec struct {
 	FamilyName string
 }
 
-// CreateUser creates an active user without credentials.
+// CreateUser creates an active user without credentials, as an operator
+// does.
 func CreateUser(ctx context.Context, d Deps, tenantID uuid.UUID, spec UserSpec) (store.User, error) {
+	return createUser(ctx, d, tenantID, spec, store.ActorOperator)
+}
+
+// createUser is CreateUser, with the actor of its audit event.
+func createUser(ctx context.Context, d Deps, tenantID uuid.UUID, spec UserSpec, actor store.AuditActor,
+) (store.User, error) {
 	email, err := NormalizeEmail(spec.Email)
 	if err != nil {
 		return store.User{}, err
@@ -141,6 +149,7 @@ func CreateUser(ctx context.Context, d Deps, tenantID uuid.UUID, spec UserSpec) 
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "created user",
 		slog.String("tenant_id", tenantID.String()), slog.String("user_id", u.ID.String()))
+	audit(ctx, d, store.AuditEvent{TenantID: tenantID, Type: EventUserCreated, Actor: actor, UserID: u.ID})
 	return u, nil
 }
 
@@ -193,11 +202,15 @@ func DeleteUser(ctx context.Context, d Deps, tenantID uuid.UUID, email string) e
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "deleted user",
 		slog.String("tenant_id", tenantID.String()), slog.String("user_id", u.ID.String()))
+	audit(ctx, d, store.AuditEvent{TenantID: tenantID, Type: EventUserDeleted, Actor: store.ActorOperator,
+		UserID: u.ID})
 	return nil
 }
 
 // SetPassword checks pw against the password policy and makes it the
-// password of a user, replacing any previous one.
+// password of a user, replacing any previous one. Like any password change,
+// it ends every session of the user and revokes the user's tokens, so an
+// operator's reset also locks out whoever held the account.
 func SetPassword(ctx context.Context, d Deps, h PasswordHasher, u store.User, pw string) error {
 	if err := h.CheckNew(pw); err != nil {
 		return err
@@ -215,6 +228,45 @@ func SetPassword(ctx context.Context, d Deps, h PasswordHasher, u store.User, pw
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "set password",
 		slog.String("tenant_id", u.TenantID.String()), slog.String("user_id", u.ID.String()))
+	audit(ctx, d, store.AuditEvent{TenantID: u.TenantID, Type: EventPasswordChanged, Actor: store.ActorOperator,
+		UserID: u.ID, Details: map[string]string{"how": "operator"}})
+	unlockSignIn(ctx, d, u)
+	return endUserAccess(ctx, d, u, uuid.Nil())
+}
+
+// endUserAccess ends what a user holds after a password change: every
+// session but the one with the ID keep, the codes not redeemed yet, and
+// every access token and refresh token family. Pass the zero UUID to keep
+// no session.
+func endUserAccess(ctx context.Context, d Deps, u store.User, keep uuid.UUID) error {
+	now := d.Now()
+	sessions, err := d.Store.Sessions().DeleteByUser(ctx, u.TenantID, u.ID, keep)
+	if err != nil {
+		return fmt.Errorf("ending the sessions of the user: %w", err)
+	}
+	// The sessions go first, so no new code comes from them.
+	codes, err := d.Store.AuthorizationCodes().DeleteByUser(ctx, u.TenantID, u.ID)
+	if err != nil {
+		return fmt.Errorf("deleting the codes of the user: %w", err)
+	}
+	// Refresh token families come before access tokens, as when a grant is
+	// revoked: a refresh records its access token before it rotates the
+	// refresh token, so it either fails on the revoked family or its access
+	// token is revoked below (ADR 0021).
+	families, err := d.Store.RefreshTokens().RevokeByUser(ctx, u.TenantID, u.ID, now)
+	if err != nil {
+		return fmt.Errorf("revoking the refresh tokens of the user: %w", err)
+	}
+	tokens, err := d.Store.AccessTokens().RevokeByUser(ctx, u.TenantID, u.ID, now)
+	if err != nil {
+		return fmt.Errorf("revoking the access tokens of the user: %w", err)
+	}
+	if sessions+codes+tokens+families > 0 {
+		d.Logger.LogAttrs(ctx, slog.LevelInfo, "ended the access of the user after a password change",
+			slog.String("tenant_id", u.TenantID.String()), slog.String("user_id", u.ID.String()),
+			slog.Int64("sessions", sessions), slog.Int64("authorization_codes", codes),
+			slog.Int64("access_tokens", tokens), slog.Int64("refresh_token_families", families))
+	}
 	return nil
 }
 
@@ -222,29 +274,83 @@ func SetPassword(ctx context.Context, d Deps, h PasswordHasher, u store.User, pw
 // match. Every failure that could reveal whether the account exists returns
 // ErrInvalidCredentials after the work of a password verification (ADR
 // 0015). ErrUserDisabled is returned only for a correct password. A hash
-// below the current policy is replaced with a new one.
+// below the current policy is replaced with a new one. Each attempt counts
+// against the address before its password is checked, and a right password
+// forgets the count, so that MaxSignInFailures wrong passwords lock the
+// address even when they arrive together: a locked address fails like a
+// wrong password (ADR 0030).
 func AuthenticatePassword(ctx context.Context, d Deps, h PasswordHasher, tenantID uuid.UUID,
 	email, pw string,
 ) (store.User, error) {
+	u, _, err := authenticatePassword(ctx, d, h, tenantID, email, pw)
+	if err != nil {
+		return store.User{}, err
+	}
+	return u, nil
+}
+
+// authenticatePassword is AuthenticatePassword, and also returns when the
+// password that matched was set. On ErrInvalidCredentials and
+// ErrUserDisabled it returns the user that the address names, if any, for
+// the audit event of the failure, which the caller must not reveal.
+func authenticatePassword(ctx context.Context, d Deps, h PasswordHasher, tenantID uuid.UUID,
+	email, pw string,
+) (store.User, time.Time, error) {
+	a, err := countSignIn(ctx, d, tenantID, email)
+	if err != nil {
+		return store.User{}, time.Time{}, err
+	}
+	if a.beyond(MaxSignInFailures) {
+		return lockedSignIn(ctx, d, h, tenantID, email, pw)
+	}
+	u, setAt, err := checkPassword(ctx, d, h, tenantID, email, pw)
+	switch {
+	// A disabled account fails only with the right password.
+	case err == nil, errors.Is(err, ErrUserDisabled):
+		signInSucceeded(ctx, d, a)
+	case errors.Is(err, ErrInvalidCredentials):
+		signInFailed(ctx, d, a, u)
+	}
+	return u, setAt, err
+}
+
+// lockedSignIn fails a sign-in with an address that wrong passwords locked,
+// after the work of a password verification, like a wrong password. It
+// returns the user that the address names, if any, for the audit event.
+func lockedSignIn(ctx context.Context, d Deps, h PasswordHasher, tenantID uuid.UUID, email, pw string,
+) (store.User, time.Time, error) {
+	u, err := FindUser(ctx, d, tenantID, email)
+	if err != nil && !errors.Is(err, ErrUserNotFound) {
+		return store.User{}, time.Time{}, err
+	}
+	if err := h.VerifyDummy(ctx, pw); err != nil {
+		return store.User{}, time.Time{}, fmt.Errorf("verifying password: %w", err)
+	}
+	return u, time.Time{}, errLocked
+}
+
+// checkPassword is authenticatePassword without the lock.
+func checkPassword(ctx context.Context, d Deps, h PasswordHasher, tenantID uuid.UUID, email, pw string,
+) (store.User, time.Time, error) {
 	u, err := FindUser(ctx, d, tenantID, email)
 	if errors.Is(err, ErrUserNotFound) {
 		// Look up a password that cannot exist, so an unknown account makes
 		// as many queries as a known one and the time of a round trip to the
 		// database does not reveal which accounts exist.
 		if _, err := d.Store.Passwords().Get(ctx, tenantID, uuid.Nil()); err != nil && !errors.Is(err, store.ErrNotFound) {
-			return store.User{}, fmt.Errorf("looking up password: %w", err)
+			return store.User{}, time.Time{}, fmt.Errorf("looking up password: %w", err)
 		}
-		return store.User{}, failLogin(ctx, h, pw)
+		return store.User{}, time.Time{}, failLogin(ctx, h, pw)
 	}
 	if err != nil {
-		return store.User{}, err
+		return store.User{}, time.Time{}, err
 	}
 	stored, err := d.Store.Passwords().Get(ctx, tenantID, u.ID)
 	if errors.Is(err, store.ErrNotFound) {
-		return store.User{}, failLogin(ctx, h, pw)
+		return u, time.Time{}, failLogin(ctx, h, pw)
 	}
 	if err != nil {
-		return store.User{}, fmt.Errorf("looking up password: %w", err)
+		return store.User{}, time.Time{}, fmt.Errorf("looking up password: %w", err)
 	}
 
 	v, err := h.Verify(ctx, stored.Hash, pw)
@@ -254,18 +360,18 @@ func AuthenticatePassword(ctx context.Context, d Deps, h PasswordHasher, tenantI
 		d.Logger.LogAttrs(ctx, slog.LevelWarn, "cannot verify the password hash of a user; the user must reset "+
 			"the password", slog.String("tenant_id", tenantID.String()), slog.String("user_id", u.ID.String()),
 			slog.String("error", err.Error()))
-		return store.User{}, ErrInvalidCredentials
+		return u, time.Time{}, ErrInvalidCredentials
 	case err != nil:
-		return store.User{}, fmt.Errorf("verifying password: %w", err)
+		return store.User{}, time.Time{}, fmt.Errorf("verifying password: %w", err)
 	case !v.Match:
-		return store.User{}, ErrInvalidCredentials
+		return u, time.Time{}, ErrInvalidCredentials
 	case u.Status != store.UserActive:
-		return store.User{}, ErrUserDisabled
+		return u, time.Time{}, ErrUserDisabled
 	}
 	if v.Rehash {
 		rehash(ctx, d, h, u, stored.Hash, pw, v.Algorithm)
 	}
-	return u, nil
+	return u, stored.SetAt, nil
 }
 
 // failLogin spends the time of a password verification and returns

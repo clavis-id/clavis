@@ -31,6 +31,20 @@ type ApiResource struct {
 	UpdatedAt  int64
 }
 
+type AuditEvent struct {
+	ID         string
+	TenantID   string
+	OccurredAt int64
+	Type       string
+	Actor      string
+	UserID     sql.NullString
+	ClientID   string
+	SessionID  sql.NullString
+	Ip         string
+	UserAgent  string
+	Details    string
+}
+
 type AuthorizationCode struct {
 	Hash                []byte
 	TenantID            string
@@ -74,6 +88,16 @@ type AuthorizationRequest struct {
 	ForceConsent        int64
 	SessionID           sql.NullString
 	ResponseMode        string
+	UiLocales           string
+}
+
+type Branding struct {
+	TenantID  string
+	Theme     string
+	Logo      []byte
+	LogoType  string
+	LogoHash  string
+	UpdatedAt int64
 }
 
 type Client struct {
@@ -98,6 +122,21 @@ type Client struct {
 	ResourceServerFor                   string
 }
 
+type EmailVerification struct {
+	ID                     string
+	TenantID               string
+	Purpose                string
+	Email                  string
+	CodeHash               []byte
+	LinkHash               []byte
+	BindingHash            []byte
+	AuthorizationRequestID string
+	Attempts               int64
+	VerifiedAt             sql.NullInt64
+	CreatedAt              int64
+	ExpiresAt              int64
+}
+
 type Grant struct {
 	ID        string
 	TenantID  string
@@ -106,6 +145,14 @@ type Grant struct {
 	Scopes    string
 	CreatedAt int64
 	UpdatedAt int64
+}
+
+type LimitCounter struct {
+	TenantID string
+	Kind     string
+	KeyHash  []byte
+	Hits     int64
+	EndsAt   int64
 }
 
 type Password struct {
@@ -173,11 +220,12 @@ type SigningKey struct {
 }
 
 type Tenant struct {
-	ID        string
-	Slug      string
-	Name      string
-	CreatedAt int64
-	UpdatedAt int64
+	ID            string
+	Slug          string
+	Name          string
+	CreatedAt     int64
+	UpdatedAt     int64
+	SignupEnabled int64
 }
 
 type User struct {

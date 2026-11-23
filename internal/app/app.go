@@ -9,6 +9,7 @@ import (
 	"time"
 	"uuid"
 
+	"clavisid.org/clavis/email"
 	"clavisid.org/clavis/store"
 )
 
@@ -16,12 +17,25 @@ import (
 const DefaultTenantSlug = "default"
 
 // Deps holds the dependencies shared by the use cases. Now and NewID are
-// injected so tests control time and identifiers.
+// injected so tests control time and identifiers. Mail is nil when email
+// is disabled, which disables the features that need it (ADR 0024). Cache
+// keeps what requests read about tenants (ADR 0031); it is nil when every
+// read must reach the store, as on the command line.
 type Deps struct {
 	Store  store.Store
 	Logger *slog.Logger
 	Now    func() time.Time
 	NewID  func() uuid.UUID
+	Mail   Mailer
+	Cache  *Cache
+}
+
+// Mailer queues email messages and delivers them in the background;
+// *mailer.Mailer implements it (ADR 0024).
+type Mailer interface {
+	// Enqueue queues msg and returns at once, or fails when the message
+	// cannot be queued.
+	Enqueue(ctx context.Context, msg email.Message) error
 }
 
 // EnsureDefaultTenant returns the default tenant, creating it the first time

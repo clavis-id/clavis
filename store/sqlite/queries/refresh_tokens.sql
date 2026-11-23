@@ -50,6 +50,11 @@ UPDATE refresh_token_families
 SET revoked_at = sqlc.arg(revoked_at)
 WHERE tenant_id = sqlc.arg(tenant_id) AND code_hash = sqlc.arg(code_hash) AND revoked_at IS NULL;
 
+-- name: RevokeRefreshTokenFamiliesByUser :execrows
+UPDATE refresh_token_families
+SET revoked_at = sqlc.arg(revoked_at)
+WHERE tenant_id = sqlc.arg(tenant_id) AND user_id = sqlc.arg(user_id) AND revoked_at IS NULL;
+
 -- name: RevokeRefreshTokenFamiliesByUserAndClient :execrows
 UPDATE refresh_token_families
 SET revoked_at = sqlc.arg(revoked_at)

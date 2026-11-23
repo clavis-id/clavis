@@ -15,8 +15,12 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"time"
+
+	"clavisid.org/clavis/internal/i18n"
+	"clavisid.org/clavis/store"
 )
 
 //go:embed assets
@@ -93,7 +97,7 @@ func (a *Assets) ServeAsset(w http.ResponseWriter, r *http.Request, name string)
 
 // SetPageHeaders sets the headers of a hosted page: no caching, no framing,
 // no referrer, and the Content Security Policy csp, built with
-// ContentSecurityPolicy.
+// Layout.ContentSecurityPolicy.
 func SetPageHeaders(h http.Header, csp string) {
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
@@ -103,30 +107,91 @@ func SetPageHeaders(h http.Header, csp string) {
 	h.Set("Referrer-Policy", "no-referrer")
 }
 
-// ContentSecurityPolicy returns the policy of a hosted page. Pages load only
-// stylesheets and images from their own origin, run no scripts, cannot be
-// framed, and submit forms only to their own origin and to formTargets.
-// Browsers also apply form-action to the redirects that follow a form
-// submission, so a login page must allow the redirect URI it sends the user
-// to; FormTarget converts one. Without any form target and without
-// allowSelf, the page cannot submit forms at all.
-func ContentSecurityPolicy(allowSelf bool, formTargets ...string) string {
-	return contentSecurityPolicy("", allowSelf, formTargets)
+// LocaleParam is the parameter with which the language selector sends the
+// chosen locale.
+const LocaleParam = "clavis_locale"
+
+// Layout holds what every page needs.
+type Layout struct {
+	// Stylesheet is the URL of the main stylesheet.
+	Stylesheet string
+	// Text writes the page's text in its locale.
+	Text i18n.Printer
+	// theme is the tenant's style sheet, which SetTheme sets, and
+	// themeSource its hash as a Content Security Policy source.
+	theme       string
+	themeSource string
+	// LogoURL is the URL of the tenant's logo, or empty, and TenantName
+	// is its text alternative.
+	LogoURL    string
+	TenantName string
+	// Languages sets up the language selector, or is nil for a page
+	// without one.
+	Languages *LanguageSelector
+	// Wide makes the card of the page wider, for pages with more content
+	// than a sign-in form, such as the account pages.
+	Wide bool
+}
+
+// T returns the message of key in the page's locale; see i18n.Printer.T.
+func (l Layout) T(key i18n.Key, args ...string) string { return l.Text.T(key, args...) }
+
+// LanguageSelector sends the request of the page again, with the chosen
+// locale in LocaleParam: a form with Method and Action that carries Fields.
+type LanguageSelector struct {
+	Method string
+	Action string
+	Fields []Field
+}
+
+// ContentSecurityPolicy returns the policy of a page with layout l. Pages
+// load only stylesheets and images from their own origin, plus the
+// tenant's theme element by its hash, run no scripts, cannot be framed, and
+// submit forms only to their own origin and to formTargets. Browsers also
+// apply form-action to the redirects that follow a form submission, so a
+// login page must allow the redirect URI it sends the user to; FormTarget
+// converts one. Without any form target and without allowSelf, the page
+// cannot submit forms at all.
+func (l Layout) ContentSecurityPolicy(allowSelf bool, formTargets ...string) string {
+	return contentSecurityPolicy("", l.styleSources(), allowSelf, formTargets)
 }
 
 // FormPostContentSecurityPolicy returns the policy of the page that FormPost
-// renders: the policy of ContentSecurityPolicy for a form that submits only
-// to formTarget, which FormTarget returns for the redirect URI, plus the one
-// script that submits the form, allowed by its hash.
-func FormPostContentSecurityPolicy(formTarget string) string {
+// renders with layout l: the policy of ContentSecurityPolicy for a form
+// that submits only to formTarget, which FormTarget returns for the
+// redirect URI, plus the one script that submits the form, allowed by its
+// hash.
+func (l Layout) FormPostContentSecurityPolicy(formTarget string) string {
 	var targets []string
 	if formTarget != "" {
 		targets = append(targets, formTarget)
 	}
-	return contentSecurityPolicy("script-src '"+formPostScriptHash+"'; ", false, targets)
+	return contentSecurityPolicy("script-src '"+formPostScriptHash+"'; ", l.styleSources(), false, targets)
 }
 
-func contentSecurityPolicy(scripts string, allowSelf bool, formTargets []string) string {
+// SetTheme makes css, which ThemeStyle returns, the tenant's style sheet of
+// the page, and records its hash for the page's Content Security Policy.
+func (l *Layout) SetTheme(css string) {
+	l.theme, l.themeSource = css, ""
+	if css != "" {
+		sum := sha256.Sum256([]byte(css))
+		l.themeSource = "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+	}
+}
+
+// Theme returns the tenant's style sheet of the page, or empty.
+func (l Layout) Theme() string { return l.theme }
+
+// styleSources returns the style-src sources of a page: its own origin, and
+// the hash of the theme element when there is one.
+func (l Layout) styleSources() string {
+	if l.themeSource == "" {
+		return "'self'"
+	}
+	return "'self' " + l.themeSource
+}
+
+func contentSecurityPolicy(scripts, styles string, allowSelf bool, formTargets []string) string {
 	var sources []string
 	if allowSelf {
 		sources = append(sources, "'self'")
@@ -135,7 +200,7 @@ func contentSecurityPolicy(scripts string, allowSelf bool, formTargets []string)
 	if len(sources) == 0 {
 		sources = []string{"'none'"}
 	}
-	return "default-src 'none'; " + scripts + "style-src 'self'; img-src 'self'; form-action " +
+	return "default-src 'none'; " + scripts + "style-src " + styles + "; img-src 'self'; form-action " +
 		strings.Join(sources, " ") + "; frame-ancestors 'none'; base-uri 'none'"
 }
 
@@ -185,10 +250,41 @@ func isPlainHost(host string) bool {
 	return !hasPort || (port != "" && strings.Trim(port, "0123456789") == "")
 }
 
-// Layout holds what every page needs.
-type Layout struct {
-	// Stylesheet is the URL of the main stylesheet.
-	Stylesheet string
+// ThemeStyle returns the style sheet that applies a tenant's theme over the
+// default one, or empty for a theme without values. Values that are not
+// #rrggbb colors or a radius between 0 and 64 pixels are left out, whatever
+// the store holds, so the style sheet holds nothing else. The light colors
+// apply outside the dark color scheme only, so a tenant that sets only them
+// keeps the default dark colors.
+func ThemeStyle(theme store.Theme) string {
+	var b strings.Builder
+	light, dark := declarations(theme.Light), declarations(theme.Dark)
+	if theme.Radius != nil && *theme.Radius >= 0 && *theme.Radius <= maxRadius {
+		b.WriteString(":root{--clavis-radius:" + strconv.Itoa(*theme.Radius) + "px}")
+	}
+	if light != "" {
+		b.WriteString("@media not all and (prefers-color-scheme: dark){:root{" + light + "}}")
+	}
+	if dark != "" {
+		b.WriteString("@media (prefers-color-scheme: dark){:root{" + dark + "}}")
+	}
+	return b.String()
+}
+
+// maxRadius bounds the radius that ThemeStyle writes.
+const maxRadius = 64
+
+// declarations returns the custom property declarations of the valid colors
+// in c.
+func declarations(c store.ThemeColors) string {
+	var b strings.Builder
+	for _, color := range c.List() {
+		if len(color.Value) == 7 && color.Value[0] == '#' &&
+			strings.Trim(color.Value[1:], "0123456789abcdefABCDEF") == "" {
+			b.WriteString("--clavis-" + strings.ReplaceAll(color.Name, "_", "-") + ":" + color.Value + ";")
+		}
+	}
+	return b.String()
 }
 
 // LoginPage is the password sign-in form.
@@ -205,6 +301,181 @@ type LoginPage struct {
 	Email string
 	// Error explains why the previous attempt failed.
 	Error string
+	// Notice is news for the user, such as a password that has just
+	// changed, or empty.
+	Notice string
+	// SignupURL is the URL of the signup page, or empty when the tenant
+	// offers none.
+	SignupURL string
+	// ResetURL is the URL of the password reset page, or empty when the
+	// server cannot reset passwords.
+	ResetURL string
+}
+
+// SignupPage asks for the email address of a new account (ADR 0026).
+type SignupPage struct {
+	Layout
+	// ClientName names the application the user signs up for.
+	ClientName string
+	// Action is the URL the form posts to.
+	Action string
+	// RequestID identifies the stored authorization request.
+	RequestID string
+	// Email fills the email field again after a malformed address.
+	Email string
+	// Error explains why the previous attempt failed.
+	Error string
+	// LoginURL is the URL of the sign-in page.
+	LoginURL string
+}
+
+// VerifyPage asks for the code sent to Email or, when Token is set,
+// confirms the link that the user followed. Reset tells a password reset
+// from a signup.
+type VerifyPage struct {
+	Layout
+	Reset bool
+	// Email is the address the message went to.
+	Email string
+	// Action is the URL the form posts to.
+	Action string
+	// VerificationID identifies the stored email verification.
+	VerificationID string
+	// Token is the token of the link, or empty for the code form.
+	Token string
+	// Error explains why the previous code failed.
+	Error string
+	// RestartURL is the URL of the signup page, to start again.
+	RestartURL string
+}
+
+// PasswordPage asks for the password of a new account or, when Reset is
+// set, for the new password of an account.
+type PasswordPage struct {
+	Layout
+	Reset bool
+	// Email is the address of the new account.
+	Email string
+	// Action is the URL the form posts to.
+	Action string
+	// VerificationID identifies the stored email verification.
+	VerificationID string
+	// MinLength and MaxLength bound the length of the password, in
+	// characters.
+	MinLength int
+	MaxLength int
+	// Error explains why the previous password was refused.
+	Error string
+}
+
+// SignedUpPage says that the new account is ready.
+type SignedUpPage struct {
+	Layout
+}
+
+// ResetPage asks for the email address of the account whose password the
+// user resets (ADR 0027).
+type ResetPage struct {
+	Layout
+	// Action is the URL the form posts to.
+	Action string
+	// RequestID identifies the stored authorization request.
+	RequestID string
+	// Email fills the email field: with the login hint of the request, or
+	// again after a malformed address.
+	Email string
+	// Error explains why the previous attempt failed.
+	Error string
+	// LoginURL is the URL of the sign-in page.
+	LoginURL string
+}
+
+// AccountNav holds the URLs of the account pages, and the URL of the page
+// that shows it in Current.
+type AccountNav struct {
+	ProfileURL      string
+	PasswordURL     string
+	ApplicationsURL string
+	LogoutURL       string
+	Current         string
+}
+
+// ProfileField is an input of the profile form.
+type ProfileField struct {
+	// Name is the name of the form field and the ID of the input.
+	Name  string
+	Label string
+	Value string
+	// Type is the type of the input, such as text or url, unless Lines is
+	// set, which asks for a text area.
+	Type  string
+	Lines bool
+	// Autocomplete is the autofill token of the input (HTML, section
+	// 4.10.18.7).
+	Autocomplete string
+	// Hint explains the format, or is empty.
+	Hint string
+	// Full makes the field take the whole width of a wide page, where
+	// other fields come in pairs.
+	Full bool
+}
+
+// ProfileSection is a group of profile fields.
+type ProfileSection struct {
+	Title  string
+	Fields []ProfileField
+}
+
+// AccountPage shows the profile of the signed-in user (ADR 0028).
+type AccountPage struct {
+	Layout
+	Nav AccountNav
+	// Email is the address of the account, which the profile cannot
+	// change.
+	Email    string
+	Action   string
+	Sections []ProfileSection
+	// Notice says what the last change did, or is empty, and Errors
+	// explain why it was refused.
+	Notice string
+	Errors []string
+}
+
+// AccountPasswordPage changes the password of the signed-in user.
+type AccountPasswordPage struct {
+	Layout
+	Nav AccountNav
+	// Email is the address of the account, for password managers.
+	Email     string
+	Action    string
+	MinLength int
+	MaxLength int
+	Notice    string
+	Errors    []string
+}
+
+// AccountApplication is an application that the user allowed.
+type AccountApplication struct {
+	Name     string
+	ClientID string
+	// Scopes describes what the application may do, one line each.
+	Scopes []string
+}
+
+// AccountApplicationsPage lists the applications that the signed-in user
+// allowed.
+type AccountApplicationsPage struct {
+	Layout
+	Nav          AccountNav
+	Action       string
+	Applications []AccountApplication
+	Notice       string
+}
+
+// PasswordChangedPage says that the password has changed, after a reset
+// whose authorization request was gone.
+type PasswordChangedPage struct {
+	Layout
 }
 
 // ConsentPage asks the user to allow or deny a client.
@@ -264,28 +535,25 @@ type Field struct {
 	Value string
 }
 
-// ScopeDescription describes, for the consent page, what a scope lets an
-// application do. resource is the name of the API resource that defines the
-// scope, or empty for an OpenID Connect scope.
-func ScopeDescription(scope, resource string) string {
-	switch {
-	case resource != "":
-		return "Use " + resource + " (" + scope + ")"
-	case scope == "openid":
-		return "Know who you are"
-	case scope == "profile":
-		return "See your name and profile"
-	case scope == "email":
-		return "See your email address"
-	case scope == "address":
-		return "See your postal address"
-	case scope == "phone":
-		return "See your phone number"
-	case scope == "offline_access":
-		return "Keep access while you are signed out"
-	default:
+// ScopeDescription describes, for the consent page in the locale of t, what
+// a scope lets an application do. resource is the name of the API resource
+// that defines the scope, or empty for an OpenID Connect scope.
+func ScopeDescription(t i18n.Printer, scope, resource string) string {
+	if resource != "" {
+		return t.T(i18n.ScopeResource, "resource", resource, "scope", scope)
+	}
+	key, ok := map[string]i18n.Key{
+		"openid":         i18n.ScopeOpenID,
+		"profile":        i18n.ScopeProfile,
+		"email":          i18n.ScopeEmail,
+		"address":        i18n.ScopeAddress,
+		"phone":          i18n.ScopePhone,
+		"offline_access": i18n.ScopeOfflineAccess,
+	}[scope]
+	if !ok {
 		return scope
 	}
+	return t.T(key)
 }
 
 // ErrorPage explains a request that cannot continue.
@@ -293,4 +561,13 @@ type ErrorPage struct {
 	Layout
 	Title   string
 	Message string
+}
+
+// pick returns ifTrue when cond holds, and otherwise ifFalse, for pages that
+// two flows share.
+func pick(cond bool, ifTrue, ifFalse i18n.Key) i18n.Key {
+	if cond {
+		return ifTrue
+	}
+	return ifFalse
 }

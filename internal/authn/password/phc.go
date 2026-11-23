@@ -85,15 +85,17 @@ func parse(encoded string) (params, error) {
 			return params{}, err
 		}
 		p.memory, p.iterations = values[0], values[1]
-		switch lanes := values[2]; {
-		case lanes < 1 || lanes > maxArgon2Lanes:
+		lanes := values[2]
+		if lanes < 1 || lanes > maxArgon2Lanes {
 			return params{}, fmt.Errorf("%w: argon2id parallelism %d", ErrMalformedHash, lanes)
-		case p.iterations < 1 || p.iterations > maxArgon2Iterations:
+		}
+		// The check above bounds lanes by maxArgon2Lanes, which fits in a uint8.
+		p.lanes = uint8(lanes)
+		if p.iterations < 1 || p.iterations > maxArgon2Iterations {
 			return params{}, fmt.Errorf("%w: argon2id iterations %d", ErrMalformedHash, p.iterations)
-		case p.memory < 8*lanes || p.memory > maxArgon2Memory:
+		}
+		if p.memory < 8*lanes || p.memory > maxArgon2Memory {
 			return params{}, fmt.Errorf("%w: argon2id memory %d", ErrMalformedHash, p.memory)
-		default:
-			p.lanes = uint8(lanes)
 		}
 		body = rest
 	case PBKDF2SHA256:

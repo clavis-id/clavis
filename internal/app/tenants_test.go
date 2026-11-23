@@ -275,3 +275,51 @@ func TestDeleteTenant(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateTenant(t *testing.T) {
+	t.Parallel()
+	st := openStore(t)
+	d := newDeps(t, st)
+	var keys keyRecorder
+	acme, err := CreateTenant(t.Context(), d, keys.create, "acme", "")
+	if err != nil {
+		t.Fatalf("CreateTenant() unexpected error: %v", err)
+	}
+	name, on, off := "Acme Corporation", true, false
+	got, err := UpdateTenant(t.Context(), d, "acme", TenantChanges{Name: &name, SignupEnabled: &on})
+	if err != nil || got.Name != name || !got.SignupEnabled || got.ID != acme.ID {
+		t.Fatalf("UpdateTenant() = %+v, %v; want the new name with signup", got, err)
+	}
+	// Fields without a change keep their values.
+	got, err = UpdateTenant(t.Context(), d, "acme", TenantChanges{SignupEnabled: &off})
+	if err != nil || got.Name != name || got.SignupEnabled {
+		t.Errorf("UpdateTenant() of signup only = %+v, %v", got, err)
+	}
+	if stored, err := TenantByID(t.Context(), d, acme.ID); err != nil || stored.Name != name || stored.SignupEnabled {
+		t.Errorf("TenantByID() = %+v, %v; want the update stored", stored, err)
+	}
+
+	empty := ""
+	if _, err := UpdateTenant(t.Context(), d, "acme", TenantChanges{Name: &empty}); !errors.Is(err, ErrInvalidTenant) {
+		t.Errorf("UpdateTenant() with an empty name = %v, want ErrInvalidTenant", err)
+	}
+	if _, err := UpdateTenant(t.Context(), d, "missing", TenantChanges{SignupEnabled: &on}); !errors.Is(err, ErrTenantNotFound) {
+		t.Errorf("UpdateTenant() of an unknown tenant = %v, want ErrTenantNotFound", err)
+	}
+	if _, err := TenantByID(t.Context(), d, uuid.NewV7()); !errors.Is(err, ErrTenantNotFound) {
+		t.Errorf("TenantByID() of an unknown tenant = %v, want ErrTenantNotFound", err)
+	}
+
+	// ADR 0026: the admin tenant, which Clavis creates itself, never allows
+	// signup.
+	admin := store.Tenant{ID: uuid.NewV7(), Slug: AdminTenantSlug, Name: "Admin", CreatedAt: d.Now(), UpdatedAt: d.Now()}
+	if err := st.Tenants().Create(t.Context(), admin); err != nil {
+		t.Fatalf("creating the admin tenant: %v", err)
+	}
+	if _, err := UpdateTenant(t.Context(), d, AdminTenantSlug, TenantChanges{SignupEnabled: &on}); !errors.Is(err, ErrSignupNotAllowed) {
+		t.Errorf("UpdateTenant() enabling signup on the admin tenant = %v, want ErrSignupNotAllowed", err)
+	}
+	if _, err := UpdateTenant(t.Context(), d, AdminTenantSlug, TenantChanges{SignupEnabled: &off}); err != nil {
+		t.Errorf("UpdateTenant() disabling signup on the admin tenant = %v, want nil", err)
+	}
+}

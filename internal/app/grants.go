@@ -13,10 +13,13 @@ import (
 // ErrGrantNotFound reports that a user has no grant for a client.
 var ErrGrantNotFound = errors.New("grant not found")
 
-// UserGrant is a grant of a user, with its client.
+// UserGrant is a grant of a user, with its client and, in ScopeResources,
+// the name of the API resource that defines each scope of an API, as the
+// consent page names it (ADR 0020).
 type UserGrant struct {
 	store.Grant
-	Client store.Client
+	Client         store.Client
+	ScopeResources map[string]string
 }
 
 // ListGrants returns the grants of the user of a tenant with the given email
@@ -30,6 +33,10 @@ func ListGrants(ctx context.Context, d Deps, tenantID uuid.UUID, email string) (
 	if err != nil {
 		return nil, fmt.Errorf("listing grants: %w", err)
 	}
+	owners, err := scopeOwners(ctx, d, tenantID)
+	if err != nil {
+		return nil, err
+	}
 	list := make([]UserGrant, 0, len(grants))
 	for _, g := range grants {
 		c, err := d.Store.Clients().Get(ctx, tenantID, g.ClientID)
@@ -40,7 +47,13 @@ func ListGrants(ctx context.Context, d Deps, tenantID uuid.UUID, email string) (
 		case err != nil:
 			return nil, fmt.Errorf("looking up the client of a grant: %w", err)
 		}
-		list = append(list, UserGrant{Grant: g, Client: c})
+		resources := make(map[string]string)
+		for _, scope := range g.Scopes {
+			if owner, ok := owners[scope]; ok {
+				resources[scope] = owner.Name
+			}
+		}
+		list = append(list, UserGrant{Grant: g, Client: c, ScopeResources: resources})
 	}
 	return list, nil
 }
@@ -90,5 +103,9 @@ func RevokeGrant(ctx context.Context, d Deps, tenantID uuid.UUID, email, clientI
 		slog.Int64("deleted_authorization_codes", codes),
 		slog.Int64("revoked_refresh_token_families", families),
 		slog.Int64("revoked_access_tokens", tokens))
+	// The user revokes a grant on the account pages, and an operator with the
+	// CLI, whose context says so.
+	audit(ctx, d, store.AuditEvent{TenantID: tenantID, Type: EventGrantRevoked, Actor: store.ActorUser,
+		UserID: u.ID, ClientID: c.ClientID})
 	return nil
 }

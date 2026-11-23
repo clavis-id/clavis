@@ -57,8 +57,8 @@ const tenantPageSize = 100
 // JWKSCacheTTL, so a key must be published well before it signs.
 const MinPublishAhead = 15 * time.Minute
 
-// JWKSCacheTTL is how long the Manager reuses a tenant's JWK set before
-// reading the store again.
+// JWKSCacheTTL is how long the Manager reuses a tenant's JWK set, and the
+// list of keys it signs with, before reading the store again.
 const JWKSCacheTTL = time.Minute
 
 // ErrNoActiveKey is returned by Signer when no key is active for the tenant
@@ -170,6 +170,14 @@ type Manager struct {
 	mu      sync.Mutex
 	signers map[uuid.UUID]crypto.Signer // decrypted private keys by record ID
 	jwks    map[uuid.UUID]cachedSet     // published key sets by tenant ID
+	lists   map[uuid.UUID]cachedKeys    // stored keys by tenant ID, for Signer
+}
+
+// cachedKeys is the list of a tenant's keys and the time it stops being
+// reused.
+type cachedKeys struct {
+	keys    []store.SigningKey
+	expires time.Time
 }
 
 // cachedSet is a tenant's JWK set and the time it stops being reused.
@@ -212,6 +220,7 @@ func NewManager(cfg Config) (*Manager, error) {
 		failures:  failures,
 		signers:   make(map[uuid.UUID]crypto.Signer),
 		jwks:      make(map[uuid.UUID]cachedSet),
+		lists:     make(map[uuid.UUID]cachedKeys),
 	}, nil
 }
 
@@ -349,6 +358,7 @@ func (m *Manager) create(ctx context.Context, tenantID uuid.UUID, alg string, ge
 	}
 	m.mu.Lock()
 	delete(m.jwks, tenantID)
+	delete(m.lists, tenantID)
 	m.mu.Unlock()
 	m.created.Add(ctx, 1, metric.WithAttributes(attribute.String("algorithm", alg)))
 	m.logger.LogAttrs(ctx, slog.LevelInfo, "created signing key",
@@ -360,28 +370,68 @@ func (m *Manager) create(ctx context.Context, tenantID uuid.UUID, alg string, ge
 	return nil
 }
 
-// Signer returns the key that signs for the tenant and algorithm now.
+// Signer returns the key that signs for the tenant and algorithm now. It
+// reuses the list of the tenant's keys for JWKSCacheTTL. A successor is
+// stored at least MinPublishAhead before it signs, so the reused list has
+// it; only a key that signs at once, for a new tenant or after an outage,
+// can be missing, and then the store is read again.
 func (m *Manager) Signer(ctx context.Context, tenantID uuid.UUID, alg string) (Signer, error) {
-	all, err := m.store.SigningKeys().List(ctx, tenantID)
-	if err != nil {
-		return Signer{}, fmt.Errorf("keys: listing keys of tenant %s: %w", tenantID, err)
-	}
 	now := m.now()
-	var current *store.SigningKey
-	for i := range all {
-		k := &all[i]
-		if k.Algorithm == alg && signsAt(*k, now) && (current == nil || k.Generation > current.Generation) {
-			current = k
-		}
+	all, cached, err := m.list(ctx, tenantID, now, true)
+	if err != nil {
+		return Signer{}, err
 	}
-	if current == nil {
+	current, ok := signerAt(all, alg, now)
+	if !ok && cached {
+		if all, _, err = m.list(ctx, tenantID, now, false); err != nil {
+			return Signer{}, err
+		}
+		current, ok = signerAt(all, alg, now)
+	}
+	if !ok {
 		return Signer{}, fmt.Errorf("%w for tenant %s and algorithm %s", ErrNoActiveKey, tenantID, alg)
 	}
-	key, err := m.decrypt(ctx, *current)
+	key, err := m.decrypt(ctx, current)
 	if err != nil {
 		return Signer{}, err
 	}
 	return Signer{KeyID: current.KeyID, Algorithm: alg, Key: key}, nil
+}
+
+// list returns the keys of a tenant, reused from an earlier call when reuse
+// is true and the list is younger than JWKSCacheTTL, and reports whether it
+// was. Callers must not change the list.
+func (m *Manager) list(ctx context.Context, tenantID uuid.UUID, now time.Time, reuse bool,
+) ([]store.SigningKey, bool, error) {
+	if reuse {
+		m.mu.Lock()
+		c, ok := m.lists[tenantID]
+		m.mu.Unlock()
+		if ok && now.Before(c.expires) {
+			return c.keys, true, nil
+		}
+	}
+	all, err := m.store.SigningKeys().List(ctx, tenantID)
+	if err != nil {
+		return nil, false, fmt.Errorf("keys: listing keys of tenant %s: %w", tenantID, err)
+	}
+	m.mu.Lock()
+	m.lists[tenantID] = cachedKeys{keys: all, expires: now.Add(JWKSCacheTTL)}
+	m.mu.Unlock()
+	return all, false, nil
+}
+
+// signerAt returns the key of the highest generation that signs for alg at
+// time t, if any.
+func signerAt(all []store.SigningKey, alg string, t time.Time) (store.SigningKey, bool) {
+	var current store.SigningKey
+	found := false
+	for _, k := range all {
+		if k.Algorithm == alg && signsAt(k, t) && (!found || k.Generation > current.Generation) {
+			current, found = k, true
+		}
+	}
+	return current, found
 }
 
 // JWKS returns the public keys of the tenant that relying parties must
@@ -462,13 +512,14 @@ func (m *Manager) decrypt(ctx context.Context, k store.SigningKey) (crypto.Signe
 	return signer, nil
 }
 
-// forgetDeleted drops cached JWK sets and private keys after expired keys are
-// deleted. Expired keys never sign, so this only bounds memory and keeps the
-// published sets in step with the store.
+// forgetDeleted drops cached JWK sets, key lists and private keys after
+// expired keys are deleted. Expired keys never sign, so this only bounds
+// memory and keeps the published sets in step with the store.
 func (m *Manager) forgetDeleted(ctx context.Context) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.jwks = make(map[uuid.UUID]cachedSet)
+	m.lists = make(map[uuid.UUID]cachedKeys)
 	if len(m.signers) == 0 {
 		return
 	}

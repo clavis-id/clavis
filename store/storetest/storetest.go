@@ -84,6 +84,26 @@ func Run(t *testing.T, open OpenFunc) {
 		t.Parallel()
 		runGrants(t, open)
 	})
+	t.Run("Brandings", func(t *testing.T) {
+		t.Parallel()
+		runBrandings(t, open)
+	})
+	t.Run("EmailVerifications", func(t *testing.T) {
+		t.Parallel()
+		runEmailVerifications(t, open)
+	})
+	t.Run("RecordsOfAUser", func(t *testing.T) {
+		t.Parallel()
+		runUserRecords(t, open)
+	})
+	t.Run("AuditEvents", func(t *testing.T) {
+		t.Parallel()
+		runAuditEvents(t, open)
+	})
+	t.Run("LimitCounters", func(t *testing.T) {
+		t.Parallel()
+		runLimitCounters(t, open)
+	})
 }
 
 func runTenants(t *testing.T, open OpenFunc) {
@@ -91,6 +111,7 @@ func runTenants(t *testing.T, open OpenFunc) {
 		t.Parallel()
 		tenants := open(t).Tenants()
 		want := newTenant("acme")
+		want.SignupEnabled = true
 		mustCreate(t, tenants, want)
 
 		got, err := tenants.Get(t.Context(), want.ID)
@@ -143,6 +164,50 @@ func runTenants(t *testing.T, open OpenFunc) {
 		}
 		if err := tenants.Delete(t.Context(), missing); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("Delete() error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("Update", func(t *testing.T) {
+		t.Parallel()
+		tenants := open(t).Tenants()
+		tn := newTenant("acme")
+		mustCreate(t, tenants, tn)
+		other := newTenant("other")
+		mustCreate(t, tenants, other)
+
+		// The slug and the creation time never change.
+		update := tn
+		update.Slug = "renamed"
+		update.Name = "Acme Corporation"
+		update.SignupEnabled = true
+		update.CreatedAt = tn.CreatedAt.Add(-time.Hour)
+		update.UpdatedAt = tn.UpdatedAt.Add(time.Hour)
+		if err := tenants.Update(t.Context(), update); err != nil {
+			t.Fatalf("Update() unexpected error: %v", err)
+		}
+		want := tn
+		want.Name, want.SignupEnabled, want.UpdatedAt = update.Name, true, update.UpdatedAt
+		got, err := tenants.GetBySlug(t.Context(), tn.Slug)
+		if err != nil {
+			t.Fatalf("GetBySlug() unexpected error: %v", err)
+		}
+		if diff := cmp.Diff(normalize(want), got); diff != "" {
+			t.Errorf("tenant after Update() mismatch (-want +got):\n%s", diff)
+		}
+		if got, err := tenants.Get(t.Context(), other.ID); err != nil || got.SignupEnabled || got.Name != other.Name {
+			t.Errorf("Update() changed another tenant: %+v, %v", got, err)
+		}
+
+		update.SignupEnabled = false
+		if err := tenants.Update(t.Context(), update); err != nil {
+			t.Fatalf("Update() unexpected error: %v", err)
+		}
+		if got, err := tenants.Get(t.Context(), tn.ID); err != nil || got.SignupEnabled {
+			t.Errorf("tenant after disabling signup = %+v, %v; want SignupEnabled false", got, err)
+		}
+		missing := newTenant("missing")
+		if err := tenants.Update(t.Context(), missing); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Update() of an unknown tenant = %v, want ErrNotFound", err)
 		}
 	})
 
@@ -768,6 +833,52 @@ func runUsers(t *testing.T, open OpenFunc) {
 		}
 		if diff := cmp.Diff(normalizeUser(want), got); diff != "" {
 			t.Errorf("GetByEmail() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("Update", func(t *testing.T) {
+		t.Parallel()
+		s := open(t)
+		tn := newTenant("acme")
+		mustCreate(t, s.Tenants(), tn)
+		u := newUser(tn.ID, "ada@example.com")
+		u.EmailVerified = false
+		mustCreateUser(t, s.Users(), u)
+		other := newUser(tn.ID, "grace@example.com")
+		mustCreateUser(t, s.Users(), other)
+
+		// The email address and the creation time never change.
+		update := u
+		update.Email = "changed@example.com"
+		update.EmailVerified = true
+		update.Status = store.UserDisabled
+		update.Profile = store.Profile{Name: "Ada King", Locale: "en-GB"}
+		update.CreatedAt = u.CreatedAt.Add(-time.Hour)
+		update.UpdatedAt = u.UpdatedAt.Add(time.Hour)
+		if err := s.Users().Update(t.Context(), update); err != nil {
+			t.Fatalf("Update() unexpected error: %v", err)
+		}
+		want := u
+		want.EmailVerified, want.Status, want.Profile, want.UpdatedAt = true, store.UserDisabled, update.Profile,
+			update.UpdatedAt
+		got, err := s.Users().GetByEmail(t.Context(), tn.ID, u.Email)
+		if err != nil {
+			t.Fatalf("GetByEmail() unexpected error: %v", err)
+		}
+		if diff := cmp.Diff(normalizeUser(want), got); diff != "" {
+			t.Errorf("user after Update() mismatch (-want +got):\n%s", diff)
+		}
+		if got, err := s.Users().Get(t.Context(), tn.ID, other.ID); err != nil || got.Status != store.UserActive {
+			t.Errorf("Update() changed another user: %+v, %v", got, err)
+		}
+		missing := newUser(tn.ID, "missing@example.com")
+		if err := s.Users().Update(t.Context(), missing); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Update() of an unknown user = %v, want ErrNotFound", err)
+		}
+		foreign := update
+		foreign.TenantID = uuid.NewV7()
+		if err := s.Users().Update(t.Context(), foreign); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("Update() through another tenant = %v, want ErrNotFound", err)
 		}
 	})
 

@@ -79,21 +79,25 @@ func (e *RedirectError) Error() string { return "authorization error: " + e.Err.
 func (e *RedirectError) Unwrap() error { return e.Err }
 
 // AuthorizationTenant is the tenant that receives an authorization request,
-// with its issuer identifier, which responses carry (RFC 9207).
+// with its issuer identifier, which responses carry (RFC 9207), and whether
+// it offers signup (ADR 0026).
 type AuthorizationTenant struct {
 	ID     uuid.UUID
 	Issuer string
+	Signup bool
 }
 
 // Authorization is the outcome of a valid authorization request. When the
 // browser's session answers the request, Response is the authorization
 // response. Otherwise its RedirectURI is empty, and the request is stored
-// under RequestID: it waits for the user to sign in or, when Consent is
-// true, for the consent of the session's user.
+// under RequestID: it waits for the user to sign in, or to sign up when
+// Signup is true (prompt=create), or, when Consent is true, for the consent
+// of the session's user.
 type Authorization struct {
 	Response  AuthorizationResponse
 	RequestID string
 	Consent   bool
+	Signup    bool
 }
 
 // StartAuthorization validates an authorization request (ADR 0013). When the
@@ -123,6 +127,12 @@ func StartAuthorization(ctx context.Context, d Deps, signer TokenSigner, t Autho
 			return Authorization{}, fmt.Errorf("parsing the authorization request: %w", err)
 		}
 		return Authorization{}, fail(oauthErr, r.State)
+	}
+	// Initiating User Registration via OpenID Connect 1.0, section 4.1: a
+	// prompt value the tenant does not support is an invalid request.
+	if r.HasPrompt(oauth.PromptCreate) && !t.Signup {
+		return Authorization{}, fail(&oauth.Error{Code: oauth.ErrorInvalidRequest,
+			Description: "prompt contains an unsupported value"}, r.State)
 	}
 	if !slices.Contains(client.GrantTypes, oauth.GrantTypeAuthorizationCode) {
 		return Authorization{}, fail(&oauth.Error{Code: oauth.ErrorUnauthorizedClient,
@@ -182,6 +192,7 @@ func StartAuthorization(ctx context.Context, d Deps, signer TokenSigner, t Autho
 		HintSubject:         subject,
 		ResponseMode:        r.ResponseMode,
 		ForceConsent:        r.HasPrompt(oauth.PromptConsent),
+		UILocales:           r.UILocales,
 		CreatedAt:           now,
 		ExpiresAt:           now.Add(AuthorizationRequestLifetime),
 	}
@@ -238,7 +249,7 @@ func StartAuthorization(ctx context.Context, d Deps, signer TokenSigner, t Autho
 	if err := d.Store.AuthorizationRequests().Create(ctx, stored); err != nil {
 		return Authorization{}, fmt.Errorf("storing the authorization request: %w", err)
 	}
-	return Authorization{RequestID: stored.ID}, nil
+	return Authorization{RequestID: stored.ID, Signup: r.HasPrompt(oauth.PromptCreate)}, nil
 }
 
 // verifyIDTokenHint returns the user that an id_token_hint names, or the
@@ -331,7 +342,9 @@ func resumeSession(ctx context.Context, d Deps, tenantID uuid.UUID, tokenHash []
 ) (store.Session, bool, error) {
 	// Until account selection exists, the sign-in form answers
 	// prompt=select_account: it lets the user choose the account.
-	if tokenHash == nil || r.HasPrompt(oauth.PromptLogin) || r.HasPrompt(oauth.PromptSelectAccount) {
+	// prompt=create asks for the signup page instead of the session.
+	if tokenHash == nil || r.HasPrompt(oauth.PromptLogin) || r.HasPrompt(oauth.PromptSelectAccount) ||
+		r.HasPrompt(oauth.PromptCreate) {
 		return store.Session{}, false, nil
 	}
 	s, err := d.Store.Sessions().GetByTokenHash(ctx, tenantID, tokenHash)
@@ -359,14 +372,21 @@ func resumeSession(ctx context.Context, d Deps, tenantID uuid.UUID, tokenHash []
 	case err != nil:
 		return store.Session{}, false, fmt.Errorf("looking up the user of the session: %w", err)
 	}
+	return touchSession(ctx, d, s)
+}
+
+// touchSession records a use of session s, which moves its idle expiry, and
+// returns the session as stored. ok is false when the session ended in the
+// meantime.
+func touchSession(ctx context.Context, d Deps, s store.Session) (store.Session, bool, error) {
+	now := d.Now()
 	s.LastSeenAt = now
 	s.IdleExpiresAt = now.Add(SessionIdleTimeout)
 	if s.IdleExpiresAt.After(s.ExpiresAt) {
 		s.IdleExpiresAt = s.ExpiresAt
 	}
-	switch err := d.Store.Sessions().Touch(ctx, tenantID, s.ID, s.LastSeenAt, s.IdleExpiresAt); {
+	switch err := d.Store.Sessions().Touch(ctx, s.TenantID, s.ID, s.LastSeenAt, s.IdleExpiresAt); {
 	case errors.Is(err, store.ErrNotFound):
-		// The session ended in the meantime.
 		return store.Session{}, false, nil
 	case err != nil:
 		return store.Session{}, false, fmt.Errorf("recording the use of the session: %w", err)
@@ -392,11 +412,13 @@ func authorizationTarget(ctx context.Context, d Deps, tenantID uuid.UUID, params
 		return store.Client{}, "", false, fmt.Errorf("looking up the client: %w", err)
 	}
 	if redirectURI != "" {
-		if !oauth.MatchRedirectURI(client.RedirectURIs, redirectURI) {
+		// Responses go to the registered URI, never to the request's string.
+		resolved, ok := oauth.ResolveRedirectURI(client.RedirectURIs, redirectURI)
+		if !ok {
 			return store.Client{}, "", false, fmt.Errorf("%w: redirect_uri is not registered for the client",
 				oauth.ErrInvalidAuthorizationTarget)
 		}
-		return client, redirectURI, true, nil
+		return client, resolved, true, nil
 	}
 	// OAuth 2.1 lets a request omit the redirect URI when the client has
 	// only one; OpenID Connect Core 1.0, section 3.1.2.1, always requires it.
@@ -467,37 +489,82 @@ type Login struct {
 	// SessionExpiresAt.
 	SessionToken     string
 	SessionExpiresAt time.Time
+	// sessionID identifies the new session.
+	sessionID uuid.UUID
 }
 
 // CompletePasswordLogin signs a user in with a password and answers the
-// authorization request p, which FindAuthorizationRequest returned. It
-// replaces the session whose token hashes to previousSession, if any, with
-// a new one, as replaceSession describes, and issues an authorization code
-// bound to the request
-// (ADR 0014). When the request names another user, through id_token_hint or
-// the sub claim, the response is a login_required error instead (OpenID
-// Connect Core 1.0, sections 3.1.2.1 and 5.5.1), and the new session stays.
-// When the request needs the user's consent (ADR 0020), it keeps waiting,
-// with the new session, and Login.Consent is true.
-//
-// Wrong credentials return ErrInvalidCredentials and leave the request in
-// place for another attempt; a request completed in the meantime returns
-// ErrAuthorizationRequestNotFound.
+// authorization request p, which FindAuthorizationRequest returned, as
+// signIn describes. Wrong credentials return ErrInvalidCredentials and leave
+// the request in place for another attempt; a request completed in the
+// meantime returns ErrAuthorizationRequestNotFound.
 func CompletePasswordLogin(ctx context.Context, d Deps, h PasswordHasher, t AuthorizationTenant,
 	p PendingAuthorization, email, pw string, previousSession []byte,
 ) (Login, error) {
-	r := p.Request
-	if r.SessionID != uuid.Nil() {
+	if p.Request.SessionID != uuid.Nil() {
 		// A user signed in for the request already; it waits for consent.
 		return Login{}, ErrAuthorizationRequestNotFound
 	}
-	u, err := AuthenticatePassword(ctx, d, h, t.ID, email, pw)
+	u, setAt, err := authenticatePassword(ctx, d, h, t.ID, email, pw)
+	if err != nil {
+		auditSignInFailure(ctx, d, t.ID, u, p.Client.ClientID, err)
+		return Login{}, err
+	}
+	login, err := signIn(ctx, d, t, p, u, previousSession)
 	if err != nil {
 		return Login{}, err
 	}
+	if err := confirmPassword(ctx, d, t.ID, u, setAt, login); err != nil {
+		auditSignInFailure(ctx, d, t.ID, u, p.Client.ClientID, err)
+		return Login{}, err
+	}
+	auditSignIn(ctx, d, t.ID, u.ID, p.Client.ClientID, login.sessionID)
+	return login, nil
+}
+
+// confirmPassword checks that the password of user u is still the one set at
+// setAt, which a sign-in verified before it started the session of login. A
+// password change in the meantime ended every session that existed then
+// (ADR 0027), and this session must not outlive it: confirmPassword ends it,
+// with the codes issued in it, and returns ErrInvalidCredentials. Whatever
+// the order of the two, the session ends: either the change finds it, or
+// this check finds the change.
+func confirmPassword(ctx context.Context, d Deps, tenantID uuid.UUID, u store.User, setAt time.Time, login Login,
+) error {
+	current, err := d.Store.Passwords().Get(ctx, tenantID, u.ID)
+	switch {
+	case err == nil && current.SetAt.Equal(setAt):
+		return nil
+	case err != nil && !errors.Is(err, store.ErrNotFound):
+		return fmt.Errorf("looking up password: %w", err)
+	}
+	if _, _, err := endSession(ctx, d, tenantID, store.Session{ID: login.sessionID}); err != nil {
+		return err
+	}
+	d.Logger.LogAttrs(ctx, slog.LevelWarn, "the password changed during a sign-in; ended the new session",
+		slog.String("tenant_id", tenantID.String()), slog.String("user_id", u.ID.String()),
+		slog.String("session_id", login.sessionID.String()))
+	return ErrInvalidCredentials
+}
+
+// signIn starts a session of user u, who has just authenticated with a
+// password, and answers the authorization request p with it. It replaces
+// the session whose token hashes to previousSession, if any, as
+// replaceSession describes, and issues an authorization code bound to the
+// request (ADR 0014). When the request names another user, through
+// id_token_hint or the sub claim, the response is a login_required error
+// instead (OpenID Connect Core 1.0, sections 3.1.2.1 and 5.5.1), and the new
+// session stays. When the request needs the user's consent (ADR 0020), it
+// keeps waiting, with the new session, and Login.Consent is true. A request
+// completed in the meantime returns ErrAuthorizationRequestNotFound.
+func signIn(ctx context.Context, d Deps, t AuthorizationTenant, p PendingAuthorization, u store.User,
+	previousSession []byte,
+) (Login, error) {
+	r := p.Request
 	otherUser := r.HintSubject != uuid.Nil() && r.HintSubject != u.ID
 	consent := false
 	if !otherUser {
+		var err error
 		if consent, err = needsConsent(ctx, d, p.Client, u.ID, r); err != nil {
 			return Login{}, err
 		}
@@ -517,28 +584,9 @@ func CompletePasswordLogin(ctx context.Context, d Deps, h PasswordHasher, t Auth
 		return Login{}, fmt.Errorf("completing the authorization request: %w", err)
 	}
 
-	if previousSession != nil {
-		if err := replaceSession(ctx, d, t.ID, previousSession, sessionID, u.ID); err != nil {
-			return Login{}, err
-		}
-	}
-	now := d.Now()
-	token := oauth.NewToken()
-	session := store.Session{
-		ID:            sessionID,
-		TenantID:      t.ID,
-		TokenHash:     oauth.HashToken(token),
-		UserID:        u.ID,
-		AuthTime:      now,
-		AMR:           []string{amrPassword},
-		ACR:           oidc.ACRPassword,
-		CreatedAt:     now,
-		LastSeenAt:    now,
-		IdleExpiresAt: now.Add(SessionIdleTimeout),
-		ExpiresAt:     now.Add(SessionLifetime),
-	}
-	if err := d.Store.Sessions().Create(ctx, session); err != nil {
-		return Login{}, fmt.Errorf("creating the session: %w", err)
+	session, token, err := startSession(ctx, d, t.ID, sessionID, u.ID, previousSession)
+	if err != nil {
+		return Login{}, err
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "user signed in",
 		slog.String("tenant_id", t.ID.String()),
@@ -546,7 +594,7 @@ func CompletePasswordLogin(ctx context.Context, d Deps, h PasswordHasher, t Auth
 		slog.String("client_id", p.Client.ClientID),
 		slog.String("session_id", session.ID.String()))
 
-	login := Login{SessionToken: token, SessionExpiresAt: session.ExpiresAt, Consent: consent}
+	login := Login{SessionToken: token, SessionExpiresAt: session.ExpiresAt, Consent: consent, sessionID: session.ID}
 	switch {
 	case otherUser:
 		login.Response = errorResponse(r.RedirectURI, r.ResponseMode, t.Issuer, r.State, &oauth.Error{
@@ -557,6 +605,38 @@ func CompletePasswordLogin(ctx context.Context, d Deps, h PasswordHasher, t Auth
 		}
 	}
 	return login, nil
+}
+
+// startSession stores a new session with the ID sessionID for user userID,
+// who has just authenticated with a password, and returns it with the value
+// of its cookie. It replaces the session whose token hashes to
+// previousSession, if any, as replaceSession describes.
+func startSession(ctx context.Context, d Deps, tenantID, sessionID, userID uuid.UUID, previousSession []byte,
+) (store.Session, string, error) {
+	if previousSession != nil {
+		if err := replaceSession(ctx, d, tenantID, previousSession, sessionID, userID); err != nil {
+			return store.Session{}, "", err
+		}
+	}
+	now := d.Now()
+	token := oauth.NewToken()
+	session := store.Session{
+		ID:            sessionID,
+		TenantID:      tenantID,
+		TokenHash:     oauth.HashToken(token),
+		UserID:        userID,
+		AuthTime:      now,
+		AMR:           []string{amrPassword},
+		ACR:           oidc.ACRPassword,
+		CreatedAt:     now,
+		LastSeenAt:    now,
+		IdleExpiresAt: now.Add(SessionIdleTimeout),
+		ExpiresAt:     now.Add(SessionLifetime),
+	}
+	if err := d.Store.Sessions().Create(ctx, session); err != nil {
+		return store.Session{}, "", fmt.Errorf("creating the session: %w", err)
+	}
+	return session, token, nil
 }
 
 // issueCode issues an authorization code that answers r for the user of
@@ -621,6 +701,8 @@ func replaceSession(ctx context.Context, d Deps, tenantID uuid.UUID, tokenHash [
 			slog.String("session_id", s.ID.String()),
 			slog.Int64("deleted_authorization_codes", codes),
 			slog.Int64("revoked_access_tokens", tokens))
+		audit(ctx, d, store.AuditEvent{TenantID: tenantID, Type: EventSignedOut, Actor: store.ActorAnonymous,
+			UserID: s.UserID, SessionID: s.ID, Details: map[string]string{"reason": "another_user_signed_in"}})
 		return nil
 	}
 	// The session goes first, so no new code comes from it.
@@ -634,9 +716,10 @@ func replaceSession(ctx context.Context, d Deps, tenantID uuid.UUID, tokenHash [
 }
 
 // PurgeExpired deletes the expired authorization requests, sessions, access
-// token records, refresh tokens and refresh token families of every tenant,
-// and the codes that expired more than AuthorizationCodeRetention ago. It
-// goes on after a failure and returns every error.
+// token records, refresh tokens, refresh token families, email
+// verifications and limit counters of every tenant, and the codes that
+// expired more than AuthorizationCodeRetention ago. It goes on after a
+// failure and returns every error.
 func PurgeExpired(ctx context.Context, d Deps) error {
 	now := d.Now()
 	var errs []error
@@ -653,13 +736,17 @@ func PurgeExpired(ctx context.Context, d Deps) error {
 		now.Add(-AuthorizationCodeRetention))
 	tokens := purge("access tokens", d.Store.AccessTokens().DeleteExpired, now)
 	families := purge("refresh tokens", d.Store.RefreshTokens().DeleteExpired, now)
-	if requests+sessions+codes+tokens+families > 0 {
+	verifications := purge("email verifications", d.Store.EmailVerifications().DeleteExpired, now)
+	counters := purge("limit counters", d.Store.LimitCounters().DeleteExpired, now)
+	if requests+sessions+codes+tokens+families+verifications+counters > 0 {
 		d.Logger.LogAttrs(ctx, slog.LevelInfo, "deleted expired records",
 			slog.Int64("authorization_requests", requests),
 			slog.Int64("sessions", sessions),
 			slog.Int64("authorization_codes", codes),
 			slog.Int64("access_tokens", tokens),
-			slog.Int64("refresh_token_families", families))
+			slog.Int64("refresh_token_families", families),
+			slog.Int64("email_verifications", verifications),
+			slog.Int64("limit_counters", counters))
 	}
 	return errors.Join(errs...)
 }

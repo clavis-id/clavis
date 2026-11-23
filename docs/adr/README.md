@@ -31,4 +31,12 @@ request. Status values: Proposed, Accepted, Superseded by NNNN, Deprecated.
 | [0020](0020-consent-and-grants.md) | Consent and grants | Accepted |
 | [0021](0021-refresh-token-rotation.md) | Refresh token rotation | Accepted |
 | [0022](0022-revocation-and-introspection.md) | Revocation and introspection | Accepted |
-| [0023](0023-logout-and-form-post.md) | Logout and the form post response mode | Accepted |
+| [0023](0023-logout-and-form-post.md) | Logout and the form post response mode | Accepted; ignoring ui_locales superseded by 0025 |
+| [0024](0024-email-delivery.md) | Email delivery | Accepted |
+| [0025](0025-internationalization-and-theming.md) | Internationalization and theming | Accepted |
+| [0026](0026-signup-and-email-verification.md) | Signup and email verification | Accepted |
+| [0027](0027-password-reset.md) | Password reset | Accepted |
+| [0028](0028-account-pages.md) | Account pages | Accepted |
+| [0029](0029-audit-log-and-client-addresses.md) | Audit log and client addresses | Accepted |
+| [0030](0030-rate-limits-and-account-lockout.md) | Rate limits and account lockout | Accepted |
+| [0031](0031-per-tenant-cache.md) | Per-tenant cache | Accepted |

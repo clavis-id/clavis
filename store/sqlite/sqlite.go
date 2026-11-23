@@ -54,6 +54,10 @@ type Store struct {
 	refresh     refreshTokens
 	resources   apiResources
 	grants      grants
+	brandings   brandings
+	emailVerifs emailVerifications
+	audit       auditEvents
+	limits      limitCounters
 }
 
 var _ store.Store = (*Store)(nil)
@@ -109,6 +113,10 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		refresh:     refreshTokens{db: conn, q: q},
 		resources:   apiResources{q: q},
 		grants:      grants{q: q},
+		brandings:   brandings{q: q},
+		emailVerifs: emailVerifications{q: q},
+		audit:       auditEvents{q: q},
+		limits:      limitCounters{db: conn, q: q},
 	}
 
 	if err := s.Ping(ctx); err != nil {
@@ -225,17 +233,30 @@ func (s *Store) APIResources() store.APIResources { return s.resources }
 // Grants returns the grant repository.
 func (s *Store) Grants() store.Grants { return s.grants }
 
+// Brandings returns the branding repository.
+func (s *Store) Brandings() store.Brandings { return s.brandings }
+
+// EmailVerifications returns the email verification repository.
+func (s *Store) EmailVerifications() store.EmailVerifications { return s.emailVerifs }
+
+// AuditEvents returns the audit event repository.
+func (s *Store) AuditEvents() store.AuditEvents { return s.audit }
+
+// LimitCounters returns the limit counter repository.
+func (s *Store) LimitCounters() store.LimitCounters { return s.limits }
+
 type tenants struct {
 	q *db.Queries
 }
 
 func (r tenants) Create(ctx context.Context, t store.Tenant) error {
 	err := r.q.CreateTenant(ctx, db.CreateTenantParams{
-		ID:        t.ID.String(),
-		Slug:      t.Slug,
-		Name:      t.Name,
-		CreatedAt: t.CreatedAt.UnixMicro(),
-		UpdatedAt: t.UpdatedAt.UnixMicro(),
+		ID:            t.ID.String(),
+		Slug:          t.Slug,
+		Name:          t.Name,
+		SignupEnabled: boolInt(t.SignupEnabled),
+		CreatedAt:     t.CreatedAt.UnixMicro(),
+		UpdatedAt:     t.UpdatedAt.UnixMicro(),
 	})
 	return mapError("creating tenant", err)
 }
@@ -276,6 +297,22 @@ func (r tenants) List(ctx context.Context, after uuid.UUID, limit int) ([]store.
 	return out, nil
 }
 
+func (r tenants) Update(ctx context.Context, t store.Tenant) error {
+	n, err := r.q.UpdateTenant(ctx, db.UpdateTenantParams{
+		Name:          t.Name,
+		SignupEnabled: boolInt(t.SignupEnabled),
+		UpdatedAt:     t.UpdatedAt.UnixMicro(),
+		ID:            t.ID.String(),
+	})
+	if err != nil {
+		return mapError("updating tenant", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("sqlite: updating tenant: %w", store.ErrNotFound)
+	}
+	return nil
+}
+
 func (r tenants) Delete(ctx context.Context, id uuid.UUID) error {
 	n, err := r.q.DeleteTenant(ctx, id.String())
 	if err != nil {
@@ -293,11 +330,12 @@ func tenantFromRow(row db.Tenant) (store.Tenant, error) {
 		return store.Tenant{}, fmt.Errorf("sqlite: corrupt tenant id %q: %w", row.ID, err)
 	}
 	return store.Tenant{
-		ID:        id,
-		Slug:      row.Slug,
-		Name:      row.Name,
-		CreatedAt: time.UnixMicro(row.CreatedAt).UTC(),
-		UpdatedAt: time.UnixMicro(row.UpdatedAt).UTC(),
+		ID:            id,
+		Slug:          row.Slug,
+		Name:          row.Name,
+		SignupEnabled: row.SignupEnabled != 0,
+		CreatedAt:     time.UnixMicro(row.CreatedAt).UTC(),
+		UpdatedAt:     time.UnixMicro(row.UpdatedAt).UTC(),
 	}, nil
 }
 
@@ -530,6 +568,28 @@ func (r users) Create(ctx context.Context, u store.User) error {
 		UpdatedAt:     u.UpdatedAt.UnixMicro(),
 	})
 	return mapError("creating user", err)
+}
+
+func (r users) Update(ctx context.Context, u store.User) error {
+	profile, err := json.Marshal(u.Profile)
+	if err != nil {
+		return fmt.Errorf("sqlite: updating user: encoding the profile: %w", err)
+	}
+	n, err := r.q.UpdateUser(ctx, db.UpdateUserParams{
+		EmailVerified: boolInt(u.EmailVerified),
+		Status:        string(u.Status),
+		Profile:       string(profile),
+		UpdatedAt:     u.UpdatedAt.UnixMicro(),
+		TenantID:      u.TenantID.String(),
+		ID:            u.ID.String(),
+	})
+	if err != nil {
+		return mapError("updating user", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("sqlite: updating user: %w", store.ErrNotFound)
+	}
+	return nil
 }
 
 func (r users) Get(ctx context.Context, tenantID, id uuid.UUID) (store.User, error) {

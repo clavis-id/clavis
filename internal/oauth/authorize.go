@@ -49,13 +49,22 @@ const (
 // (RFC 7636, section 4.2; ADR 0018).
 const CodeChallengeMethodS256 = "S256"
 
-// Values of the prompt parameter (OpenID Connect Core 1.0, section 3.1.2.1).
+// Values of the prompt parameter (OpenID Connect Core 1.0, section 3.1.2.1,
+// and Initiating User Registration via OpenID Connect 1.0, section 4 for
+// create).
 const (
 	PromptNone          = "none"
 	PromptLogin         = "login"
 	PromptConsent       = "consent"
 	PromptSelectAccount = "select_account"
+	PromptCreate        = "create"
 )
+
+// PromptValues lists the prompt values that ParseAuthorizationRequest
+// accepts. A tenant without signup refuses create later (ADR 0026).
+func PromptValues() []string {
+	return []string{PromptNone, PromptLogin, PromptConsent, PromptSelectAccount, PromptCreate}
+}
 
 // Bounds of authorization request parameters, in bytes. They limit what one
 // request can make Clavis store and send back.
@@ -67,6 +76,8 @@ const (
 	// issues, which hold a few claims.
 	MaxIDTokenHintLength = 16 << 10
 	MaxClaimsLength      = 4096
+	// MaxUILocalesLength holds several language tags.
+	MaxUILocalesLength = 256
 	// maxMaxAge keeps max_age within a 32-bit integer: about 68 years.
 	maxMaxAge = 1<<31 - 1
 )
@@ -109,6 +120,8 @@ type AuthorizationRequest struct {
 	// Claims holds the claims parameter (OpenID Connect Core 1.0, section
 	// 5.5).
 	Claims ClaimsRequest
+	// UILocales is the ui_locales parameter, or empty; see UILocales.
+	UILocales string
 }
 
 // OpenID reports whether r is an OpenID Connect request, which is one whose
@@ -239,6 +252,8 @@ func ParseAuthorizationRequest(params url.Values) (AuthorizationRequest, error) 
 	if err := r.parseHints(params); err != nil {
 		return r, err
 	}
+	r.UILocales = UILocales(params)
+
 	claims, ok := single(params, "claims")
 	switch {
 	case !ok:
@@ -293,7 +308,7 @@ func (r *AuthorizationRequest) parsePrompt(params url.Values) error {
 		switch value {
 		case "":
 			continue
-		case PromptNone, PromptLogin, PromptConsent, PromptSelectAccount:
+		case PromptNone, PromptLogin, PromptConsent, PromptSelectAccount, PromptCreate:
 		default:
 			return invalidRequest("prompt contains an unsupported value")
 		}
@@ -348,6 +363,20 @@ func (r *AuthorizationRequest) parseHints(params url.Values) error {
 	}
 	r.IDTokenHint = hint
 	return nil
+}
+
+// UILocales returns the ui_locales parameter of an authorization or logout
+// request: the user's preferred languages for the hosted pages, as BCP 47
+// tags separated by spaces (OpenID Connect Core 1.0, section 3.1.2.1;
+// RP-Initiated Logout 1.0, section 2). The parameter only expresses a
+// preference, so a value that is repeated, longer than MaxUILocalesLength
+// or not printable ASCII is ignored rather than refused.
+func UILocales(params url.Values) string {
+	locales, ok := single(params, "ui_locales")
+	if !ok || len(locales) > MaxUILocalesLength || !visibleASCII(locales) {
+		return ""
+	}
+	return locales
 }
 
 // printableText reports whether s is valid UTF-8 without control

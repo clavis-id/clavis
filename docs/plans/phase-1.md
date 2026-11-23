@@ -31,6 +31,14 @@ The design decisions this plan relies on are recorded as ADRs:
 | [0021](../adr/0021-refresh-token-rotation.md) | Refresh tokens with `offline_access` or for OAuth requests; one family per code exchange; concurrent refreshes count as reuse; tokens recorded before the step that validates them |
 | [0022](../adr/0022-revocation-and-introspection.md) | Revoking a refresh token revokes its family; clients introspect their own tokens, and resource server clients the access tokens for their API resources |
 | [0023](../adr/0023-logout-and-form-post.md) | Logout asks for confirmation and ends the session's online access; post-logout redirects need an `id_token_hint`; retired keys stay published 15 days; form post responses |
+| [0024](../adr/0024-email-delivery.md) | A public `email.Sender` port with SMTP and console senders; messages queued in memory and sent in the background; TLS required except to a loopback host |
+| [0025](../adr/0025-internationalization-and-theming.md) | Embedded JSON catalogs checked for missing keys; locale from the selector, `ui_locales`, then `Accept-Language`; per-tenant colors, radius and logo, applied without loosening the Content Security Policy |
+| [0026](../adr/0026-signup-and-email-verification.md) | Signup per tenant, address first: a code or a link bound to the browser, then the password; the same responses and work for new and existing addresses; `prompt=create` |
+| [0027](../adr/0027-password-reset.md) | Reset with the email verifications of 0026; only active accounts get the message; the user signs in again; a new password ends every session and token of the user |
+| [0028](../adr/0028-account-pages.md) | Account pages at `<issuer>/account` on the session of single sign-on: profile of the standard claims, password change, connected applications; the issuer root leads there |
+| [0029](../adr/0029-audit-log-and-client-addresses.md) | Audit events per tenant for sign-ins, accounts, consent, tokens and clients, without credential material, kept 90 days by default; client addresses from X-Forwarded-For only behind trusted proxies |
+| [0030](../adr/0030-rate-limits-and-account-lockout.md) | Stored limits per email address (lockout after 10 wrong passwords in 15 minutes, wrong codes, messages) that reveal nothing about accounts; in-memory limits per client address on wrong guesses, messages and token endpoint errors; 429 with Retry-After |
+| [0031](../adr/0031-per-tenant-cache.md) | Each server keeps tenants (and unknown slugs), API resources, branding and logos for 30 seconds, and each tenant's signing keys for a minute; changes from the same process apply at once, from the command line within 30 seconds |
 
 ## Rules for every work item
 

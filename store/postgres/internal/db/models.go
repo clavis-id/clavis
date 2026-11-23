@@ -33,6 +33,20 @@ type ApiResource struct {
 	UpdatedAt  time.Time
 }
 
+type AuditEvent struct {
+	ID         uuid.UUID
+	TenantID   uuid.UUID
+	OccurredAt time.Time
+	Type       string
+	Actor      string
+	UserID     *uuid.UUID
+	ClientID   string
+	SessionID  *uuid.UUID
+	Ip         string
+	UserAgent  string
+	Details    []byte
+}
+
 type AuthorizationCode struct {
 	Hash                []byte
 	TenantID            uuid.UUID
@@ -76,6 +90,16 @@ type AuthorizationRequest struct {
 	ForceConsent        bool
 	SessionID           *uuid.UUID
 	ResponseMode        string
+	UiLocales           string
+}
+
+type Branding struct {
+	TenantID  uuid.UUID
+	Theme     []byte
+	Logo      []byte
+	LogoType  string
+	LogoHash  string
+	UpdatedAt time.Time
 }
 
 type Client struct {
@@ -100,6 +124,21 @@ type Client struct {
 	ResourceServerFor                   []string
 }
 
+type EmailVerification struct {
+	ID                     string
+	TenantID               uuid.UUID
+	Purpose                string
+	Email                  string
+	CodeHash               []byte
+	LinkHash               []byte
+	BindingHash            []byte
+	AuthorizationRequestID string
+	Attempts               int64
+	VerifiedAt             *time.Time
+	CreatedAt              time.Time
+	ExpiresAt              time.Time
+}
+
 type Grant struct {
 	ID        uuid.UUID
 	TenantID  uuid.UUID
@@ -108,6 +147,14 @@ type Grant struct {
 	Scopes    []string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type LimitCounter struct {
+	TenantID uuid.UUID
+	Kind     string
+	KeyHash  []byte
+	Hits     int64
+	EndsAt   time.Time
 }
 
 type Password struct {
@@ -175,11 +222,12 @@ type SigningKey struct {
 }
 
 type Tenant struct {
-	ID        uuid.UUID
-	Slug      string
-	Name      string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID            uuid.UUID
+	Slug          string
+	Name          string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	SignupEnabled bool
 }
 
 type User struct {

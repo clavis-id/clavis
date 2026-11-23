@@ -6,16 +6,18 @@ single static binary in front of any stack.
 
 Clavis is Latin for "key".
 
-> Status: pre-alpha. Phase 1 is in progress, and its first two milestones are complete. The
+> Status: pre-alpha. Phase 1 is in progress, and its first three milestones are complete. The
 > protocol core: tenants with their own issuer, OAuth clients and API resources, users with
 > password sign-in on a hosted login page, the authorization code flow with PKCE, client
 > credentials, ID tokens, JWT access tokens (RFC 9068) and userinfo. Sessions and the token
 > lifecycle: single sign-on, consent, refresh token rotation with reuse detection, revocation
 > (RFC 7009), introspection (RFC 7662), RP-initiated logout and the form post response mode.
-> The OpenID conformance suite runs the Config OP, Basic OP, Form Post and RP-Initiated Logout
-> plans in CI. Self-service accounts, with email verification and password reset, arrive in
-> the next milestone. Interfaces may change in any release before v1.0; see the
-> [roadmap](docs/roadmap.md).
+> Accounts: email over SMTP, self-service signup with email verification, password reset,
+> account pages for the profile, the password and the allowed applications, hosted pages and
+> emails in English and Spanish with per-tenant branding, rate limits, account lockout and an
+> audit log. The OpenID conformance suite runs the Config OP, Basic OP, Form Post and
+> RP-Initiated Logout plans in CI. TOTP and passkeys arrive in the next milestone. Interfaces
+> may change in any release before v1.0; see the [roadmap](docs/roadmap.md).
 
 ## Why Clavis
 

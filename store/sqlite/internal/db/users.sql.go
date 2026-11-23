@@ -232,3 +232,34 @@ func (q *Queries) SetPassword(ctx context.Context, arg SetPasswordParams) (int64
 	}
 	return result.RowsAffected()
 }
+
+const updateUser = `-- name: UpdateUser :execrows
+UPDATE users
+SET email_verified = ?1, status = ?2, profile = ?3,
+    updated_at = ?4
+WHERE tenant_id = ?5 AND id = ?6
+`
+
+type UpdateUserParams struct {
+	EmailVerified int64
+	Status        string
+	Profile       string
+	UpdatedAt     int64
+	TenantID      string
+	ID            string
+}
+
+func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateUser,
+		arg.EmailVerified,
+		arg.Status,
+		arg.Profile,
+		arg.UpdatedAt,
+		arg.TenantID,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

@@ -76,7 +76,7 @@ func runAuthorizationRequests(t *testing.T, open OpenFunc) {
 		want := newAuthorizationRequest(f.client)
 		want.Scopes, want.State, want.Nonce, want.CodeChallenge, want.CodeChallengeMethod = nil, "", "", "", ""
 		want.LoginHint, want.HintSubject, want.UserInfoClaims, want.IDTokenClaims = "", uuid.Nil(), nil, nil
-		want.SessionID, want.ForceConsent, want.ResponseMode = uuid.Nil(), false, ""
+		want.SessionID, want.ForceConsent, want.ResponseMode, want.UILocales = uuid.Nil(), false, "", ""
 		want.RedirectURIProvided = false
 		want.ExpiresAt = want.CreatedAt.Add(-time.Second)
 		mustCreateAuthorizationRequest(t, f.s, want)
@@ -639,6 +639,7 @@ func newAuthorizationRequest(c store.Client) store.AuthorizationRequest {
 		// Not a reference either.
 		SessionID:    uuid.NewV7(),
 		ResponseMode: "form_post",
+		UILocales:    "es-419 en",
 		CreatedAt:    created,
 		ExpiresAt:    created.Add(10 * time.Minute),
 	}

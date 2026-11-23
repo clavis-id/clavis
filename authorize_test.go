@@ -16,8 +16,12 @@ import (
 	"clavisid.org/clavis/store"
 )
 
-// testChallenge is a valid S256 code challenge (RFC 7636, appendix B).
-const testChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+// testChallenge is a valid S256 code challenge, and testVerifier its code
+// verifier (RFC 7636, appendix B).
+const (
+	testChallenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+	testVerifier  = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+)
 
 const testPassword = "correct horse battery"
 
@@ -71,11 +75,13 @@ func authorizeQuery() url.Values {
 }
 
 // browser sends requests to a handler and keeps the cookies it receives,
-// like a browser would for one host.
+// like a browser would for one host. Its requests come from addr, the
+// address of httptest requests unless a test sets it.
 type browser struct {
-	t   *testing.T
-	h   http.Handler
-	jar map[string]string
+	t    *testing.T
+	h    http.Handler
+	jar  map[string]string
+	addr string
 }
 
 func newBrowser(t *testing.T, h http.Handler) *browser {
@@ -110,6 +116,9 @@ func (b *browser) send(req *http.Request) (res response, body string) {
 	b.t.Helper()
 	for name, value := range b.jar {
 		req.AddCookie(&http.Cookie{Name: name, Value: value})
+	}
+	if b.addr != "" {
+		req.RemoteAddr = b.addr
 	}
 	rec := httptest.NewRecorder()
 	b.h.ServeHTTP(rec, req)

@@ -86,11 +86,11 @@ Plans are added as the plan for Phase 1 lands their features (see
   runner image:
 
   ```
-  docker run --rm -v "$PWD/conformance:/w" -w /w python:3.14-slim@<digest from compose.yaml> \
+  docker run --rm -v "$PWD/conformance:/w" -w /w python:3.15-slim@<digest from compose.yaml> \
     sh -c 'pip install --root-user-action=ignore -q pip-tools &&
            pip-compile --quiet --generate-hashes --strip-extras --allow-unsafe \
              -o requirements.txt requirements.in'
   ```
 
-Dependabot proposes updates for the images, except MongoDB, which moves with the suite, and
-for the Python dependencies.
+Dependabot proposes updates for the images, except the suite images and MongoDB, which move
+with the suite release, and for the Python dependencies, direct and indirect.

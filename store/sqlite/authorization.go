@@ -40,6 +40,7 @@ func (r authorizationRequests) Create(ctx context.Context, a store.Authorization
 		ForceConsent:        boolInt(a.ForceConsent),
 		SessionID:           optionalID(a.SessionID),
 		ResponseMode:        a.ResponseMode,
+		UiLocales:           a.UILocales,
 		CreatedAt:           a.CreatedAt.UnixMicro(),
 		ExpiresAt:           a.ExpiresAt.UnixMicro(),
 	})
@@ -82,6 +83,7 @@ func (r authorizationRequests) Get(ctx context.Context, tenantID uuid.UUID, id s
 		ForceConsent:        row.ForceConsent != 0,
 		SessionID:           optional[1],
 		ResponseMode:        row.ResponseMode,
+		UILocales:           row.UiLocales,
 		CreatedAt:           time.UnixMicro(row.CreatedAt).UTC(),
 		ExpiresAt:           time.UnixMicro(row.ExpiresAt).UTC(),
 	}
@@ -207,6 +209,18 @@ func (r sessions) Delete(ctx context.Context, tenantID, id uuid.UUID) error {
 		return fmt.Errorf("sqlite: deleting session: %w", store.ErrNotFound)
 	}
 	return nil
+}
+
+func (r sessions) DeleteByUser(ctx context.Context, tenantID, userID, keep uuid.UUID) (int64, error) {
+	n, err := r.q.DeleteSessionsByUser(ctx, db.DeleteSessionsByUserParams{
+		TenantID: tenantID.String(),
+		UserID:   userID.String(),
+		KeepID:   keep.String(),
+	})
+	if err != nil {
+		return 0, mapError("deleting the sessions of a user", err)
+	}
+	return n, nil
 }
 
 func (r sessions) DeleteExpired(ctx context.Context, now time.Time) (int64, error) {
@@ -377,6 +391,17 @@ func (r authorizationCodes) DeleteBySession(ctx context.Context, tenantID, sessi
 	})
 	if err != nil {
 		return 0, mapError("deleting the authorization codes of a session", err)
+	}
+	return n, nil
+}
+
+func (r authorizationCodes) DeleteByUser(ctx context.Context, tenantID, userID uuid.UUID) (int64, error) {
+	n, err := r.q.DeleteUnredeemedAuthorizationCodesByUser(ctx, db.DeleteUnredeemedAuthorizationCodesByUserParams{
+		TenantID: tenantID.String(),
+		UserID:   userID.String(),
+	})
+	if err != nil {
+		return 0, mapError("deleting the authorization codes of a user", err)
 	}
 	return n, nil
 }

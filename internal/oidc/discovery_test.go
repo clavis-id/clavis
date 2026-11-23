@@ -9,7 +9,7 @@ import (
 func TestNewMetadata(t *testing.T) {
 	t.Parallel()
 
-	m := NewMetadata("https://auth.example.com/t/acme")
+	m := NewMetadata("https://auth.example.com/t/acme", false)
 	if m.Issuer != "https://auth.example.com/t/acme" ||
 		m.AuthorizationEndpoint != "https://auth.example.com/t/acme/oauth2/authorize" ||
 		m.TokenEndpoint != "https://auth.example.com/t/acme/oauth2/token" ||
@@ -36,12 +36,27 @@ func TestNewMetadata(t *testing.T) {
 	}
 }
 
+// Initiating User Registration via OpenID Connect 1.0, section 4.2: the
+// list names every supported prompt value, and create only where a tenant
+// offers signup.
+func TestMetadataPromptValues(t *testing.T) {
+	t.Parallel()
+	for signup, want := range map[bool][]string{
+		false: {"none", "login", "consent", "select_account"},
+		true:  {"none", "login", "consent", "select_account", "create"},
+	} {
+		if got := NewMetadata("https://auth.example.com", signup).PromptValuesSupported; !slices.Equal(got, want) {
+			t.Errorf("prompt_values_supported with signup %v = %v, want %v", signup, got, want)
+		}
+	}
+}
+
 // TestMetadataOverridesMisleadingDefaults checks the fields whose
 // specification defaults would advertise features Clavis does not support.
 func TestMetadataOverridesMisleadingDefaults(t *testing.T) {
 	t.Parallel()
 
-	body, err := json.Marshal(NewMetadata("https://auth.example.com"))
+	body, err := json.Marshal(NewMetadata("https://auth.example.com", false))
 	if err != nil {
 		t.Fatalf("encoding metadata: %v", err)
 	}

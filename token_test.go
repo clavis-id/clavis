@@ -136,7 +136,7 @@ func TestUserinfoTokenMethods(t *testing.T) {
 	rec := post(t, h, "/oauth2/token", formContentType, url.Values{
 		"grant_type": {"authorization_code"}, "code": {loc.Query().Get("code")},
 		"redirect_uri": {"https://app.example.com/callback"}, "client_id": {"web"}, "client_secret": {secret},
-		"code_verifier": {"dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"},
+		"code_verifier": {testVerifier},
 	}.Encode(), nil)
 	var token app.TokenResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &token); err != nil || rec.Code != http.StatusOK || token.IDToken == "" {

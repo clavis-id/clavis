@@ -26,7 +26,7 @@ func TestSignAndVerify(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Sign(%s) unexpected error: %v", alg, err)
 		}
-		obj, err := jose.ParseSigned(token, []jose.SignatureAlgorithm{jose.SignatureAlgorithm(alg)})
+		obj, err := jose.ParseSignedCompact(token, []jose.SignatureAlgorithm{jose.SignatureAlgorithm(alg)})
 		if err != nil {
 			t.Fatalf("parsing the %s token: %v", alg, err)
 		}

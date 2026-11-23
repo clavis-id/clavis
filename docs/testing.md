@@ -56,9 +56,15 @@ of the product. No change merges without the tests described here.
 
 ### Security tests
 
-- The threats in RFC 9700 (OAuth 2.0 Security Best Current Practice) are encoded as named
-  tests: open redirectors, authorization code injection and replay, PKCE downgrade, mix-up,
-  refresh token replay, token leakage through referrers, clickjacking headers, CSRF.
+- The attacks of RFC 9700 (OAuth 2.0 Security Best Current Practice), section 4, are tests
+  in `threats_test.go`, one per attack, run against the whole server: open redirects through
+  redirect URIs and logout, mix-up across tenants, authorization code injection and replay,
+  PKCE downgrade, refresh token replay, login CSRF, clients posing as users, clickjacking,
+  leakage through the Referer header, and credentials forwarded by a 307 redirect. Each test
+  also makes the legitimate request, so that it cannot pass only because nothing works, and
+  fails when the defense it names is turned off. The clickjacking, referrer and redirect tests
+  check every response of a walk through all the hosted pages, so a new page must join that
+  walk.
 - Native Go fuzzing. Current targets: issuer parsing (`internal/issuer`), configuration parsing
   (`internal/config`), ciphertext decryption (`kek`), tenant slugs and email addresses
   (`internal/app`), redirect URI validation and matching and authorization request parsing
@@ -106,8 +112,9 @@ of the product. No change merges without the tests described here.
   (`go.uber.org/goleak`, test-only), so a goroutine that outlives the tests fails the run.
 - Security-critical packages keep at least 80 percent statement coverage, enforced in CI by
   `make cover-check`. The list in the Makefile (`COVER_FLOOR_PKGS`) currently holds
-  `internal/authn/password`, `internal/issuer`, `internal/keys`, `internal/oauth`,
-  `internal/oidc` and `kek`; every new package under `internal/authn` joins it.
+  `email`, `internal/authn/password`, `internal/i18n`, `internal/issuer`, `internal/keys`,
+  `internal/oauth`, `internal/oidc`, `internal/ratelimit` and `kek`; every new package under
+  `internal/authn` joins it.
 - Every fuzz target runs for 15 seconds in CI on each pull request (`make fuzz`).
 - No test depends on the network outside servers or containers it starts itself.
 - No test depends on test execution order. Time-dependent behavior uses an injected clock or

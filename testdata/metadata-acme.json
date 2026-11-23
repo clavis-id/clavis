@@ -84,6 +84,16 @@
   "code_challenge_methods_supported": [
     "S256"
   ],
+  "prompt_values_supported": [
+    "none",
+    "login",
+    "consent",
+    "select_account"
+  ],
+  "ui_locales_supported": [
+    "en",
+    "es"
+  ],
   "authorization_response_iss_parameter_supported": true,
   "claims_parameter_supported": true,
   "request_parameter_supported": false,

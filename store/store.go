@@ -65,6 +65,14 @@ type Store interface {
 	APIResources() APIResources
 	// Grants returns the grant repository.
 	Grants() Grants
+	// Brandings returns the branding repository.
+	Brandings() Brandings
+	// EmailVerifications returns the email verification repository.
+	EmailVerifications() EmailVerifications
+	// AuditEvents returns the audit event repository.
+	AuditEvents() AuditEvents
+	// LimitCounters returns the limit counter repository.
+	LimitCounters() LimitCounters
 	// Ping reports whether the underlying database is reachable.
 	Ping(ctx context.Context) error
 }
@@ -76,9 +84,12 @@ type Tenant struct {
 	// Slug is the unique, URL-safe name used in the tenant's issuer path.
 	Slug string
 	// Name is a human-readable display name.
-	Name      string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Name string
+	// SignupEnabled lets people create their own accounts on the tenant's
+	// hosted pages (ADR 0026).
+	SignupEnabled bool
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // Tenants stores tenants.
@@ -95,6 +106,10 @@ type Tenants interface {
 	// of a page to get the next one. limit must be between 1 and
 	// MaxPageSize, otherwise List returns ErrInvalidArgument.
 	List(ctx context.Context, after uuid.UUID, limit int) ([]Tenant, error)
+	// Update stores the name, the settings and UpdatedAt of the tenant with
+	// the ID of t; the slug and CreatedAt never change. It returns
+	// ErrNotFound for an unknown tenant.
+	Update(ctx context.Context, t Tenant) error
 	// Delete removes the tenant with the given ID, or returns ErrNotFound.
 	Delete(ctx context.Context, id uuid.UUID) error
 }
@@ -298,6 +313,10 @@ type Users interface {
 	// after, in ascending ID order. Paging and limits work as in
 	// Tenants.List.
 	List(ctx context.Context, tenantID, after uuid.UUID, limit int) ([]User, error)
+	// Update stores EmailVerified, Status, Profile and UpdatedAt of the user
+	// of a tenant with the ID of u; the email address and CreatedAt never
+	// change. It returns ErrNotFound for an unknown user.
+	Update(ctx context.Context, u User) error
 	// Delete removes the user of a tenant with the given ID together with
 	// the user's credentials, or returns ErrNotFound.
 	Delete(ctx context.Context, tenantID, id uuid.UUID) error
@@ -374,8 +393,11 @@ type AuthorizationRequest struct {
 	// ResponseMode is how the response goes back to the client: query or
 	// form_post (OAuth 2.0 Form Post Response Mode).
 	ResponseMode string
-	CreatedAt    time.Time
-	ExpiresAt    time.Time
+	// UILocales is the request's ui_locales parameter, the user's preferred
+	// languages for the hosted pages, or empty (ADR 0025).
+	UILocales string
+	CreatedAt time.Time
+	ExpiresAt time.Time
 }
 
 // AuthorizationRequests stores authorization requests. Every method works
@@ -441,6 +463,10 @@ type Sessions interface {
 	// Delete removes the session of a tenant with the given ID, or returns
 	// ErrNotFound.
 	Delete(ctx context.Context, tenantID, id uuid.UUID) error
+	// DeleteByUser removes the sessions of a user of a tenant, except the
+	// session with the ID keep, and returns how many were removed. Pass the
+	// zero UUID to remove every session.
+	DeleteByUser(ctx context.Context, tenantID, userID, keep uuid.UUID) (int64, error)
 	// DeleteExpired removes the sessions of every tenant whose ExpiresAt or
 	// IdleExpiresAt is not after now, and returns how many were removed.
 	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
@@ -501,6 +527,9 @@ type AuthorizationCodes interface {
 	// session with the given ID and not redeemed yet, and returns how many
 	// were removed. Redeemed codes stay, so that replays are still detected.
 	DeleteBySession(ctx context.Context, tenantID, sessionID uuid.UUID) (int64, error)
+	// DeleteByUser removes the codes of a tenant that were issued to the
+	// user and not redeemed yet, and returns how many were removed.
+	DeleteByUser(ctx context.Context, tenantID, userID uuid.UUID) (int64, error)
 	// MoveSession moves the codes of a tenant that were issued in the session
 	// with the ID from to the session with the ID to, and returns how many it
 	// moved.
@@ -563,6 +592,10 @@ type AccessTokens interface {
 	// tenant that were issued to the client for the user and are not revoked
 	// yet, and returns how many it revoked.
 	RevokeByUserAndClient(ctx context.Context, tenantID, userID, clientID uuid.UUID, at time.Time) (int64, error)
+	// RevokeByUser revokes, at the given time, the tokens of a tenant that
+	// were issued for the user and are not revoked yet, and returns how many
+	// it revoked.
+	RevokeByUser(ctx context.Context, tenantID, userID uuid.UUID, at time.Time) (int64, error)
 	// DeleteExpired removes the tokens of every tenant whose ExpiresAt is not
 	// after now, and returns how many were removed.
 	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
@@ -648,6 +681,10 @@ type RefreshTokens interface {
 	// tenant that were issued to the client for the user and are not revoked
 	// yet, and returns how many it revoked.
 	RevokeByUserAndClient(ctx context.Context, tenantID, userID, clientID uuid.UUID, at time.Time) (int64, error)
+	// RevokeByUser revokes, at the given time, the families of a tenant that
+	// were issued for the user and are not revoked yet, and returns how many
+	// it revoked.
+	RevokeByUser(ctx context.Context, tenantID, userID uuid.UUID, at time.Time) (int64, error)
 	// DeleteExpired removes the tokens of every tenant whose ExpiresAt is not
 	// after now, then the families whose ExpiresAt or IdleExpiresAt is not
 	// after now, with any tokens they still have. It returns how many
@@ -719,4 +756,277 @@ type Grants interface {
 	// Delete removes the grant of a tenant for the user and client, or
 	// returns ErrNotFound.
 	Delete(ctx context.Context, tenantID, userID, clientID uuid.UUID) error
+}
+
+// Branding is how the hosted pages of a tenant look (ADR 0025).
+type Branding struct {
+	TenantID uuid.UUID
+	Theme    Theme
+	// LogoType is the media type of the tenant's logo, such as image/png,
+	// or empty when the tenant has no logo. LogoHash identifies the logo's
+	// content.
+	LogoType  string
+	LogoHash  string
+	UpdatedAt time.Time
+}
+
+// Theme holds the values that a tenant gives to the CSS custom properties
+// of the hosted pages. Empty values keep the defaults.
+type Theme struct {
+	// Light and Dark are the colors of the light and dark color schemes.
+	Light ThemeColors `json:"light,omitzero"`
+	Dark  ThemeColors `json:"dark,omitzero"`
+	// Radius is the corner radius in CSS pixels, or nil for the default.
+	Radius *int `json:"radius,omitzero"`
+}
+
+// ThemeColors are the colors of one color scheme, each as #rrggbb.
+type ThemeColors struct {
+	Accent     string `json:"accent,omitzero"`
+	AccentText string `json:"accent_text,omitzero"`
+	Background string `json:"background,omitzero"`
+	Surface    string `json:"surface,omitzero"`
+	Text       string `json:"text,omitzero"`
+	Muted      string `json:"muted,omitzero"`
+	Border     string `json:"border,omitzero"`
+	Error      string `json:"error,omitzero"`
+}
+
+// ThemeColor is one color of a ThemeColors, named as in its JSON form.
+type ThemeColor struct {
+	Name  string
+	Value string
+}
+
+// List returns the colors of c with their names, in a fixed order.
+func (c ThemeColors) List() []ThemeColor {
+	return []ThemeColor{
+		{"accent", c.Accent}, {"accent_text", c.AccentText}, {"background", c.Background},
+		{"surface", c.Surface}, {"text", c.Text}, {"muted", c.Muted}, {"border", c.Border}, {"error", c.Error},
+	}
+}
+
+// Set sets the color named name, as List names it, and reports whether
+// that name exists.
+func (c *ThemeColors) Set(name, value string) bool {
+	field, ok := map[string]*string{
+		"accent": &c.Accent, "accent_text": &c.AccentText, "background": &c.Background, "surface": &c.Surface,
+		"text": &c.Text, "muted": &c.Muted, "border": &c.Border, "error": &c.Error,
+	}[name]
+	if ok {
+		*field = value
+	}
+	return ok
+}
+
+// Logo is the image that a tenant's hosted pages show.
+type Logo struct {
+	// ContentType is the media type, such as image/png.
+	ContentType string
+	Data        []byte
+	// Hash identifies the content, for example in the logo's URL.
+	Hash string
+}
+
+// Brandings stores the branding of tenants, at most one per tenant. A
+// tenant without a stored branding uses the defaults.
+type Brandings interface {
+	// Get returns the branding of a tenant, without its logo's data, or
+	// ErrNotFound.
+	Get(ctx context.Context, tenantID uuid.UUID) (Branding, error)
+	// GetLogo returns the logo of a tenant, or ErrNotFound when it has
+	// none.
+	GetLogo(ctx context.Context, tenantID uuid.UUID) (Logo, error)
+	// PutTheme sets the theme of a tenant and keeps its logo. It returns
+	// ErrNotFound for an unknown tenant.
+	PutTheme(ctx context.Context, tenantID uuid.UUID, theme Theme, updatedAt time.Time) error
+	// PutLogo sets the logo of a tenant and keeps its theme. It returns
+	// ErrNotFound for an unknown tenant.
+	PutLogo(ctx context.Context, tenantID uuid.UUID, logo Logo, updatedAt time.Time) error
+	// DeleteLogo removes the logo of a tenant and keeps its theme. It
+	// returns ErrNotFound when the tenant has no logo.
+	DeleteLogo(ctx context.Context, tenantID uuid.UUID, updatedAt time.Time) error
+	// Delete removes the branding of a tenant, or returns ErrNotFound.
+	Delete(ctx context.Context, tenantID uuid.UUID) error
+}
+
+// EmailVerificationPurpose names what an email verification proves the
+// address for.
+type EmailVerificationPurpose string
+
+// Purposes of email verifications.
+const (
+	// VerifySignup proves the address of a new account (ADR 0026).
+	VerifySignup EmailVerificationPurpose = "signup"
+	// VerifyPasswordReset proves the address of an account whose password
+	// the user resets (ADR 0027).
+	VerifyPasswordReset EmailVerificationPurpose = "reset"
+)
+
+// EmailVerification is a one-time code and link sent to an email address,
+// with which a user proves to receive its mail (ADR 0026). Only hashes of
+// the code and the link token are stored. A verification belongs to the
+// browser that asked for it.
+type EmailVerification struct {
+	// ID is a random 128-bit identifier in unpadded base64url, like the ID of
+	// an authorization request.
+	ID       string
+	TenantID uuid.UUID
+	Purpose  EmailVerificationPurpose
+	// Email is the normalized address.
+	Email string
+	// CodeHash and LinkHash are the hashes of the code and of the link's
+	// token.
+	CodeHash []byte
+	LinkHash []byte
+	// BindingHash is the hash of the browser's binding cookie (ADR 0013).
+	BindingHash []byte
+	// AuthorizationRequestID is the authorization request that the user
+	// returns to afterwards, or empty.
+	AuthorizationRequestID string
+	// Attempts counts the codes submitted.
+	Attempts int
+	// VerifiedAt is when the user proved the address, or the zero time.
+	VerifiedAt time.Time
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
+}
+
+// EmailVerifications stores email verifications.
+type EmailVerifications interface {
+	// Create inserts v. It returns ErrConflict when the ID is in use, and
+	// ErrNotFound when the tenant does not exist.
+	Create(ctx context.Context, v EmailVerification) error
+	// Get returns the verification of a tenant with the given ID, or
+	// ErrNotFound. It returns expired verifications too; callers check
+	// ExpiresAt.
+	Get(ctx context.Context, tenantID uuid.UUID, id string) (EmailVerification, error)
+	// AddAttempt adds one to the attempts of the verification of a tenant
+	// with the given ID, unless it is verified, and returns the new count.
+	// Concurrent callers each get a different count. It returns ErrNotFound
+	// when there is no such verification, or when it is verified.
+	AddAttempt(ctx context.Context, tenantID uuid.UUID, id string) (int, error)
+	// MarkVerified sets VerifiedAt of the verification of a tenant with the
+	// given ID. It returns ErrNotFound when there is no such verification,
+	// or when it is verified already.
+	MarkVerified(ctx context.Context, tenantID uuid.UUID, id string, at time.Time) error
+	// Delete removes the verification of a tenant with the given ID, or
+	// returns ErrNotFound. When several callers delete the same verification
+	// at once, exactly one succeeds.
+	Delete(ctx context.Context, tenantID uuid.UUID, id string) error
+	// DeleteExpired removes the verifications of every tenant whose
+	// ExpiresAt is not after now, and returns how many were removed.
+	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
+}
+
+// AuditActor says who caused an audit event.
+type AuditActor string
+
+// Actors of audit events.
+const (
+	// ActorUser is the user of the event, acting for themself.
+	ActorUser AuditActor = "user"
+	// ActorClient is the client of the event, such as one that revokes a
+	// token.
+	ActorClient AuditActor = "client"
+	// ActorOperator is an operator, through the command line or, later, the
+	// admin API.
+	ActorOperator AuditActor = "operator"
+	// ActorAnonymous is someone not authenticated, such as a browser whose
+	// sign-in failed.
+	ActorAnonymous AuditActor = "anonymous"
+)
+
+// AuditEvent records something that happened to an account, a client or a
+// tenant (ADR 0029): who, what, when and from where, without credential
+// material.
+type AuditEvent struct {
+	// ID is a version 7 UUID, so events sort by time.
+	ID         uuid.UUID
+	TenantID   uuid.UUID
+	OccurredAt time.Time
+	// Type names what happened, such as user.signed_in.
+	Type  string
+	Actor AuditActor
+	// UserID is the user the event is about, or the zero UUID. It is not a
+	// reference: events outlive the users they are about.
+	UserID uuid.UUID
+	// ClientID is the client_id of the client the event involves, or
+	// empty.
+	ClientID string
+	// SessionID is the browser session of the event, or the zero UUID.
+	SessionID uuid.UUID
+	// IP is the address of the client of the request, and UserAgent its
+	// User-Agent header; both are empty for events without a request.
+	IP        string
+	UserAgent string
+	// Details holds what else the type of event records.
+	Details map[string]string
+}
+
+// AuditQuery selects audit events of a tenant, newest first.
+type AuditQuery struct {
+	// UserID keeps the events about one user, unless it is the zero UUID.
+	UserID uuid.UUID
+	// Type keeps the events of one type, unless it is empty.
+	Type string
+	// Before keeps the events older than the event with this ID, unless it
+	// is the zero UUID: pass the last ID of a page to get the next one.
+	Before uuid.UUID
+	// Limit is the most events to return, from 1 to MaxPageSize.
+	Limit int
+}
+
+// AuditEvents stores audit events. Events are never changed.
+type AuditEvents interface {
+	// Create inserts e. It returns ErrConflict when the ID is in use, and
+	// ErrNotFound when the tenant does not exist.
+	Create(ctx context.Context, e AuditEvent) error
+	// List returns the events of a tenant that q selects, newest first. A
+	// Limit outside [1, MaxPageSize] returns ErrInvalidArgument.
+	List(ctx context.Context, tenantID uuid.UUID, q AuditQuery) ([]AuditEvent, error)
+	// DeleteBefore removes the events of every tenant that occurred before
+	// the given time, and returns how many were removed.
+	DeleteBefore(ctx context.Context, before time.Time) (int64, error)
+}
+
+// LimitKey names a limit counter: the events of one kind for one key of a
+// tenant, such as the failed sign-ins for an email address (ADR 0030).
+type LimitKey struct {
+	TenantID uuid.UUID
+	// Kind names what the counter counts, such as sign_in.
+	Kind string
+	// Key identifies what the events are about, such as a hash of an email
+	// address.
+	Key []byte
+}
+
+// LimitCount is the state of a limit counter.
+type LimitCount struct {
+	// Count is the number of events counted since the counter started.
+	Count int
+	// EndsAt is when the counter ends. An event at or after EndsAt starts
+	// the count again.
+	EndsAt time.Time
+}
+
+// LimitCounters stores counters of events in a window of time, so that a
+// limit holds across the instances that share a store (ADR 0030).
+type LimitCounters interface {
+	// Add counts one event for k at now and returns the counter. A counter
+	// that does not exist, or that ended at or before now, starts at one and
+	// ends at now plus window. When the event brings the count to lockAt,
+	// the counter ends at now plus window instead, so that lockAt events
+	// within a window hold k for one window after the last of them.
+	// Concurrent callers each get a different count. It returns ErrNotFound
+	// when the tenant does not exist.
+	Add(ctx context.Context, k LimitKey, now time.Time, window time.Duration, lockAt int) (LimitCount, error)
+	// Get returns the counter of k, or ErrNotFound. It returns counters that
+	// ended too; callers check EndsAt.
+	Get(ctx context.Context, k LimitKey) (LimitCount, error)
+	// Delete removes the counter of k, or returns ErrNotFound.
+	Delete(ctx context.Context, k LimitKey) error
+	// DeleteExpired removes the counters of every tenant that ended at or
+	// before now, and returns how many were removed.
+	DeleteExpired(ctx context.Context, now time.Time) (int64, error)
 }

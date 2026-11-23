@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"uuid"
 
 	"clavisid.org/clavis/internal/oauth"
@@ -145,8 +146,12 @@ func CompleteConsent(ctx context.Context, d Deps, t AuthorizationTenant, c Pendi
 		slog.String("user_id", c.User.ID.String()),
 		slog.String("client_id", c.Client.ClientID),
 	}
+	event := store.AuditEvent{TenantID: t.ID, Type: EventConsentDenied, Actor: store.ActorUser,
+		UserID: c.User.ID, ClientID: c.Client.ClientID, SessionID: c.Session.ID,
+		Details: map[string]string{"scopes": strings.Join(consentScopes(r, c.Client), " ")}}
 	if !allow {
 		d.Logger.LogAttrs(ctx, slog.LevelInfo, "user denied a client", attrs...)
+		audit(ctx, d, event)
 		// RFC 6749, section 4.1.2.1.
 		return errorResponse(r.RedirectURI, r.ResponseMode, t.Issuer, r.State, &oauth.Error{
 			Code: oauth.ErrorAccessDenied, Description: "the user denied the request"}), nil
@@ -181,5 +186,7 @@ func CompleteConsent(ctx context.Context, d Deps, t AuthorizationTenant, c Pendi
 		return AuthorizationResponse{}, fmt.Errorf("storing the grant: %w", err)
 	}
 	d.Logger.LogAttrs(ctx, slog.LevelInfo, "user allowed a client", attrs...)
+	event.Type = EventConsentAllowed
+	audit(ctx, d, event)
 	return issueCode(ctx, d, t, r, c.Session)
 }

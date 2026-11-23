@@ -2,14 +2,19 @@ package config
 
 import (
 	"errors"
+	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+
+	"clavisid.org/clavis/email"
 )
 
 func writeFile(t *testing.T, content string) string {
@@ -94,6 +99,41 @@ func TestLoadListsFromFileAndEnvironment(t *testing.T) {
 	}
 	if got := len(res.Config.Keys.PreviousEncryptionKeys); got != 2 {
 		t.Errorf("previous encryption keys = %d, want 2", got)
+	}
+}
+
+func TestTrustedProxiesAndAuditRetention(t *testing.T) {
+	t.Parallel()
+
+	path := writeFile(t, "server:\n  trusted_proxies: [10.0.0.0/8, \"2001:db8::1\"]\naudit:\n  retention: 0s\n")
+	res, err := Load(path, []string{"CLAVIS_KEYS_ENCRYPTION_KEY=" + testKey})
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	proxies, err := res.Config.Server.Proxies()
+	want := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("2001:db8::1/128")}
+	if err != nil || !slices.Equal(proxies, want) {
+		t.Errorf("Proxies() = %v, %v; want %v", proxies, err, want)
+	}
+	if res.Config.Audit.Retention != 0 {
+		t.Errorf("audit retention = %s, want 0, which keeps events forever", res.Config.Audit.Retention)
+	}
+
+	res, err = Load("", []string{"CLAVIS_KEYS_ENCRYPTION_KEY=" + testKey,
+		"CLAVIS_SERVER_TRUSTED_PROXIES=192.0.2.10, 198.51.100.0/24"})
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	proxies, err = res.Config.Server.Proxies()
+	want = []netip.Prefix{netip.MustParsePrefix("192.0.2.10/32"), netip.MustParsePrefix("198.51.100.0/24")}
+	if err != nil || !slices.Equal(proxies, want) {
+		t.Errorf("Proxies() from the environment = %v, %v; want %v", proxies, err, want)
+	}
+	if res.Config.Audit.Retention != DefaultAuditRetention {
+		t.Errorf("default audit retention = %s, want %s", res.Config.Audit.Retention, DefaultAuditRetention)
+	}
+	if _, err := (Server{TrustedProxies: []string{"fe80::1%eth0"}}).Proxies(); err == nil {
+		t.Error("Proxies() accepted an address with a zone")
 	}
 }
 
@@ -185,6 +225,9 @@ issuer: http://auth.example.com
 server:
   address: "8080"
   write_timeout: 0s
+  trusted_proxies: [10.0.0.0/8, proxy.internal]
+audit:
+  retention: -1h
 database:
   driver: mysql
   dsn: ""
@@ -209,6 +252,8 @@ log:
 				"issuer:",
 				"server.address:",
 				"server.write_timeout: must be positive",
+				`server.trusted_proxies: "proxy.internal" is neither a network`,
+				"audit.retention: must not be negative",
 				"database.driver:",
 				"database.dsn:",
 				"keys.encryption_key: required",
@@ -264,6 +309,7 @@ func TestEnvKeysCoverEveryField(t *testing.T) {
 		"CLAVIS_SERVER_WRITE_TIMEOUT":            "server.write_timeout",
 		"CLAVIS_SERVER_IDLE_TIMEOUT":             "server.idle_timeout",
 		"CLAVIS_SERVER_SHUTDOWN_TIMEOUT":         "server.shutdown_timeout",
+		"CLAVIS_SERVER_TRUSTED_PROXIES":          "server.trusted_proxies",
 		"CLAVIS_DATABASE_DRIVER":                 "database.driver",
 		"CLAVIS_DATABASE_DSN":                    "database.dsn",
 		"CLAVIS_DATABASE_AUTO_MIGRATE":           "database.auto_migrate",
@@ -281,6 +327,15 @@ func TestEnvKeysCoverEveryField(t *testing.T) {
 		"CLAVIS_PASSWORDS_PBKDF2_ITERATIONS":     "passwords.pbkdf2_iterations",
 		"CLAVIS_PASSWORDS_MAX_CONCURRENT_HASHES": "passwords.max_concurrent_hashes",
 		"CLAVIS_PASSWORDS_FIPS_MIGRATE_ARGON2ID": "passwords.fips_migrate_argon2id",
+		"CLAVIS_EMAIL_DRIVER":                    "email.driver",
+		"CLAVIS_EMAIL_FROM":                      "email.from",
+		"CLAVIS_EMAIL_SMTP_HOST":                 "email.smtp.host",
+		"CLAVIS_EMAIL_SMTP_PORT":                 "email.smtp.port",
+		"CLAVIS_EMAIL_SMTP_TLS":                  "email.smtp.tls",
+		"CLAVIS_EMAIL_SMTP_USERNAME":             "email.smtp.username",
+		"CLAVIS_EMAIL_SMTP_PASSWORD":             "email.smtp.password",
+		"CLAVIS_EMAIL_SMTP_TIMEOUT":              "email.smtp.timeout",
+		"CLAVIS_AUDIT_RETENTION":                 "audit.retention",
 		"CLAVIS_TELEMETRY_TRACING_ENABLED":       "telemetry.tracing.enabled",
 		"CLAVIS_TELEMETRY_TRACING_ENDPOINT":      "telemetry.tracing.endpoint",
 		"CLAVIS_TELEMETRY_TRACING_SAMPLE_RATIO":  "telemetry.tracing.sample_ratio",
@@ -291,6 +346,73 @@ func TestEnvKeysCoverEveryField(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, envKeys(reflect.TypeFor[Config](), "")); diff != "" {
 		t.Errorf("envKeys() mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestEmail(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.DiscardHandler)
+	base := []string{"CLAVIS_KEYS_ENCRYPTION_KEY=" + testKey}
+
+	// Email is off unless a driver is chosen; the console driver is never a
+	// default (ADR 0024).
+	res, err := Load("", base)
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	if s, err := res.Config.Email.Sender(logger); s != nil || err != nil {
+		t.Errorf("Sender() without a driver = %v, %v; want none", s, err)
+	}
+
+	res, err = Load("", append(base, "CLAVIS_EMAIL_DRIVER=console"))
+	if err != nil {
+		t.Fatalf("Load() with the console driver unexpected error: %v", err)
+	}
+	if s, err := res.Config.Email.Sender(logger); err != nil {
+		t.Errorf("Sender() for the console driver error: %v", err)
+	} else if _, ok := s.(*email.Console); !ok {
+		t.Errorf("Sender() for the console driver = %T", s)
+	}
+
+	res, err = Load("", append(base, "CLAVIS_EMAIL_DRIVER=smtp", "CLAVIS_EMAIL_FROM=Clavis <no-reply@example.com>",
+		"CLAVIS_EMAIL_SMTP_HOST=smtp.example.com", "CLAVIS_EMAIL_SMTP_USERNAME=clavis",
+		"CLAVIS_EMAIL_SMTP_PASSWORD=s3cret-password"))
+	if err != nil {
+		t.Fatalf("Load() with the smtp driver unexpected error: %v", err)
+	}
+	if s, err := res.Config.Email.Sender(logger); err != nil {
+		t.Errorf("Sender() for the smtp driver error: %v", err)
+	} else if _, ok := s.(*email.SMTP); !ok {
+		t.Errorf("Sender() for the smtp driver = %T", s)
+	}
+
+	for name, tt := range map[string]struct {
+		environ []string
+		want    []string
+	}{
+		"unknown driver": {[]string{"CLAVIS_EMAIL_DRIVER=sendmail"}, []string{"email.driver"}},
+		"smtp without a host or sender": {[]string{"CLAVIS_EMAIL_DRIVER=smtp"},
+			[]string{"email.smtp.host", "email.from"}},
+		"plain text to a remote host": {[]string{"CLAVIS_EMAIL_DRIVER=smtp", "CLAVIS_EMAIL_FROM=a@example.com",
+			"CLAVIS_EMAIL_SMTP_HOST=smtp.example.com", "CLAVIS_EMAIL_SMTP_TLS=none"},
+			[]string{"email.smtp.tls: none is allowed only for a loopback host"}},
+		"password without a username": {[]string{"CLAVIS_EMAIL_DRIVER=smtp", "CLAVIS_EMAIL_FROM=a@example.com",
+			"CLAVIS_EMAIL_SMTP_HOST=smtp.example.com", "CLAVIS_EMAIL_SMTP_PASSWORD=s3cret-password"},
+			[]string{"email.smtp.username and password"}},
+	} {
+		_, err := Load("", append(append([]string(nil), base...), tt.environ...))
+		if err == nil {
+			t.Errorf("%s: Load() succeeded, want an error", name)
+			continue
+		}
+		for _, want := range tt.want {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: Load() error %q does not mention %q", name, err, want)
+			}
+		}
+		if strings.Contains(err.Error(), "s3cret-password") {
+			t.Errorf("%s: Load() error %q contains the password", name, err)
+		}
 	}
 }
 

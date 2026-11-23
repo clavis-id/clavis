@@ -101,6 +101,18 @@ func (r accessTokens) RevokeByUserAndClient(ctx context.Context, tenantID, userI
 	return n, nil
 }
 
+func (r accessTokens) RevokeByUser(ctx context.Context, tenantID, userID uuid.UUID, at time.Time) (int64, error) {
+	n, err := r.q.RevokeAccessTokensByUser(ctx, db.RevokeAccessTokensByUserParams{
+		RevokedAt: optionalTime(at),
+		TenantID:  tenantID.String(),
+		UserID:    optionalID(userID),
+	})
+	if err != nil {
+		return 0, mapError("revoking the access tokens of a user", err)
+	}
+	return n, nil
+}
+
 func (r accessTokens) Revoke(ctx context.Context, tenantID uuid.UUID, id string, at time.Time) error {
 	n, err := r.q.RevokeAccessToken(ctx, db.RevokeAccessTokenParams{
 		RevokedAt: optionalTime(at),

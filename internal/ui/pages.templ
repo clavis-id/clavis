@@ -1,49 +1,254 @@
 package ui
 
-// layout is the frame of every hosted page.
+import (
+	"strconv"
+
+	"clavisid.org/clavis/internal/i18n"
+)
+
+// layout is the frame of every hosted page: the tenant's theme and logo,
+// the title, and the language selector when the page has one. ThemeStyle
+// writes only validated values into the style element, and the page's
+// Content Security Policy allows exactly that element by its hash.
 templ layout(l Layout, title string) {
 	<!DOCTYPE html>
-	<html lang="en">
+	<html lang={ string(l.Text.Locale()) }>
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
 			<meta name="referrer" content="no-referrer"/>
 			<title>{ title }</title>
 			<link rel="stylesheet" href={ templ.SafeURL(l.Stylesheet) }/>
+			if l.theme != "" {
+				@templ.Raw("<style>" + l.theme + "</style>")
+			}
 		</head>
 		<body>
-			<main class="card">
+			<main class={ "card", templ.KV("wide", l.Wide) }>
+				if l.LogoURL != "" {
+					<img class="logo" src={ templ.SafeURL(l.LogoURL) } alt={ l.TenantName }/>
+				}
 				<h1>{ title }</h1>
 				{ children... }
+				if l.Languages != nil {
+					@languages(l)
+				}
 			</main>
 		</body>
 	</html>
 }
 
+// languages renders the language selector: one button per locale, which
+// sends the page's own request again with the chosen locale.
+templ languages(l Layout) {
+	<nav class="languages" aria-label={ l.T(i18n.LanguageLabel) }>
+		<form method={ l.Languages.Method } action={ templ.SafeURL(l.Languages.Action) }>
+			for _, f := range l.Languages.Fields {
+				<input type="hidden" name={ f.Name } value={ f.Value }/>
+			}
+			for _, locale := range i18n.Supported() {
+				if locale == l.Text.Locale() {
+					<button type="submit" class="link" lang={ string(locale) } disabled aria-current="true">{ locale.Name() }</button>
+				} else {
+					<button type="submit" class="link" name={ LocaleParam } value={ string(locale) } lang={ string(locale) }>{ locale.Name() }</button>
+				}
+			}
+		</form>
+	</nav>
+}
+
+// message renders a message whose placeholders hold markup, such as a name
+// in bold.
+templ message(parts []i18n.Part, values map[string]templ.Component) {
+	for _, part := range parts {
+		if part.Placeholder == "" {
+			{ part.Text }
+		} else if value, ok := values[part.Placeholder]; ok {
+			@value
+		} else {
+			{ "{" + part.Placeholder + "}" }
+		}
+	}
+}
+
+templ strong(s string) {
+	<strong>{ s }</strong>
+}
+
 // Login renders the password sign-in form.
 templ Login(p LoginPage) {
-	@layout(p.Layout, "Sign in") {
-		<p class="lead">to continue to <strong>{ p.ClientName }</strong></p>
+	@layout(p.Layout, p.T(i18n.LoginTitle)) {
+		<p class="lead">
+			if p.ClientName != "" {
+				@message(p.Text.Parts(i18n.LoginLead), map[string]templ.Component{"client": strong(p.ClientName)})
+			} else {
+				{ p.T(i18n.AccountLoginLead) }
+			}
+		</p>
+		if p.Notice != "" {
+			<p class="notice" role="status">{ p.Notice }</p>
+		}
+		if p.Error != "" {
+			<p class="error" role="alert">{ p.Error }</p>
+		}
+		<form method="post" action={ templ.SafeURL(p.Action) }>
+			if p.RequestID != "" {
+				<input type="hidden" name="request" value={ p.RequestID }/>
+			}
+			<label for="email">{ p.T(i18n.LoginEmail) }</label>
+			<input id="email" name="email" type="email" autocomplete="username" required autofocus value={ p.Email }/>
+			<label for="password">{ p.T(i18n.LoginPassword) }</label>
+			<input id="password" name="password" type="password" autocomplete="current-password" required/>
+			<button id="submit" type="submit">{ p.T(i18n.LoginSubmit) }</button>
+		</form>
+		if p.ResetURL != "" {
+			<p class="alternative">
+				<a id="reset" href={ templ.SafeURL(p.ResetURL) }>{ p.T(i18n.LoginForgotPassword) }</a>
+			</p>
+		}
+		if p.SignupURL != "" {
+			<p class="alternative">
+				{ p.T(i18n.LoginNoAccount) }
+				<a id="signup" href={ templ.SafeURL(p.SignupURL) }>{ p.T(i18n.LoginCreateAccount) }</a>
+			</p>
+		}
+	}
+}
+
+// Signup renders the first step of signup, which asks for the email address
+// (ADR 0026).
+templ Signup(p SignupPage) {
+	@layout(p.Layout, p.T(i18n.SignupTitle)) {
+		<p class="lead">
+			@message(p.Text.Parts(i18n.SignupLead), map[string]templ.Component{"client": strong(p.ClientName)})
+		</p>
 		if p.Error != "" {
 			<p class="error" role="alert">{ p.Error }</p>
 		}
 		<form method="post" action={ templ.SafeURL(p.Action) }>
 			<input type="hidden" name="request" value={ p.RequestID }/>
-			<label for="email">Email</label>
-			<input id="email" name="email" type="email" autocomplete="username" required autofocus value={ p.Email }/>
-			<label for="password">Password</label>
-			<input id="password" name="password" type="password" autocomplete="current-password" required/>
-			<button id="submit" type="submit">Sign in</button>
+			<label for="email">{ p.T(i18n.LoginEmail) }</label>
+			<input id="email" name="email" type="email" autocomplete="email" required autofocus value={ p.Email }/>
+			<button id="submit" type="submit">{ p.T(i18n.SignupSubmit) }</button>
 		</form>
+		<p class="alternative">
+			{ p.T(i18n.SignupHaveAccount) }
+			<a id="login" href={ templ.SafeURL(p.LoginURL) }>{ p.T(i18n.SignupSignIn) }</a>
+		</p>
+	}
+}
+
+// Verify renders the step that proves the email address: the form for the
+// code, or, for a link the user followed, a button that confirms it, so
+// that a mail scanner that fetches the link does not use it.
+templ Verify(p VerifyPage) {
+	if p.Token != "" {
+		@layout(p.Layout, p.T(i18n.ConfirmTitle)) {
+			<p class="lead">
+				@message(p.Text.Parts(pick(p.Reset, i18n.ConfirmResetLead, i18n.ConfirmLead)),
+					map[string]templ.Component{"email": strong(p.Email)})
+			</p>
+			<form method="post" action={ templ.SafeURL(p.Action) }>
+				<input type="hidden" name="verification" value={ p.VerificationID }/>
+				<input type="hidden" name="token" value={ p.Token }/>
+				<button id="submit" type="submit" autofocus>{ p.T(i18n.ConfirmSubmit) }</button>
+			</form>
+		}
+	} else {
+		@layout(p.Layout, p.T(i18n.VerifyTitle)) {
+			<p class="lead">
+				@message(p.Text.Parts(pick(p.Reset, i18n.ResetVerifyLead, i18n.VerifyLead)),
+					map[string]templ.Component{"email": strong(p.Email)})
+			</p>
+			if p.Error != "" {
+				<p class="error" role="alert">{ p.Error }</p>
+			}
+			<form method="post" action={ templ.SafeURL(p.Action) }>
+				<input type="hidden" name="verification" value={ p.VerificationID }/>
+				<label for="code">{ p.T(i18n.VerifyCode) }</label>
+				<input id="code" class="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="24" required autofocus/>
+				<button id="submit" type="submit">{ p.T(i18n.VerifySubmit) }</button>
+			</form>
+			<p class="alternative">
+				{ p.T(i18n.VerifyNoMessage) }
+				<a id="restart" href={ templ.SafeURL(p.RestartURL) }>{ p.T(i18n.VerifyRestart) }</a>
+			</p>
+		}
+	}
+}
+
+// Password renders the last step of signup, where the user chooses the
+// password of the new account. The hidden username field tells password
+// managers which account the password belongs to.
+templ Password(p PasswordPage) {
+	@layout(p.Layout, p.T(pick(p.Reset, i18n.ResetPasswordTitle, i18n.PasswordTitle))) {
+		<p class="lead">
+			@message(p.Text.Parts(i18n.PasswordLead), map[string]templ.Component{"email": strong(p.Email)})
+		</p>
+		if p.Error != "" {
+			<p class="error" role="alert">{ p.Error }</p>
+		}
+		<form method="post" action={ templ.SafeURL(p.Action) }>
+			<input type="hidden" name="verification" value={ p.VerificationID }/>
+			<input type="email" name="username" autocomplete="username" value={ p.Email } readonly hidden/>
+			<label for="password">{ p.T(i18n.LoginPassword) }</label>
+			<input id="password" name="password" type="password" autocomplete="new-password" minlength={ strconv.Itoa(p.MinLength) } required autofocus aria-describedby="password-hint"/>
+			<p id="password-hint" class="hint">{ p.T(i18n.PasswordHint, "min", strconv.Itoa(p.MinLength), "max", strconv.Itoa(p.MaxLength)) }</p>
+			<button id="submit" type="submit">{ p.T(pick(p.Reset, i18n.ResetPasswordSubmit, i18n.PasswordSubmit)) }</button>
+		</form>
+	}
+}
+
+// Reset renders the first step of a password reset, which asks for the
+// email address of the account (ADR 0027).
+templ Reset(p ResetPage) {
+	@layout(p.Layout, p.T(i18n.ResetTitle)) {
+		<p class="lead">{ p.T(i18n.ResetLead) }</p>
+		if p.Error != "" {
+			<p class="error" role="alert">{ p.Error }</p>
+		}
+		<form method="post" action={ templ.SafeURL(p.Action) }>
+			if p.RequestID != "" {
+				<input type="hidden" name="request" value={ p.RequestID }/>
+			}
+			<label for="email">{ p.T(i18n.LoginEmail) }</label>
+			<input id="email" name="email" type="email" autocomplete="username" required autofocus value={ p.Email }/>
+			<button id="submit" type="submit">{ p.T(i18n.ResetSubmit) }</button>
+		</form>
+		<p class="alternative">
+			{ p.T(i18n.ResetRemembered) }
+			<a id="login" href={ templ.SafeURL(p.LoginURL) }>{ p.T(i18n.SignupSignIn) }</a>
+		</p>
+	}
+}
+
+// PasswordChanged renders the page shown after a password reset whose
+// authorization request was gone.
+templ PasswordChanged(p PasswordChangedPage) {
+	@layout(p.Layout, p.T(i18n.PasswordChangedTitle)) {
+		<p>{ p.T(i18n.PasswordChangedBody) }</p>
+	}
+}
+
+// SignedUp renders the page shown after a signup whose authorization
+// request was gone: the user is signed in and returns to the application.
+templ SignedUp(p SignedUpPage) {
+	@layout(p.Layout, p.T(i18n.SignedUpTitle)) {
+		<p>{ p.T(i18n.SignedUpBody) }</p>
 	}
 }
 
 // Consent renders the page where the user allows or denies a client
 // (ADR 0020).
 templ Consent(p ConsentPage) {
-	@layout(p.Layout, "Allow access") {
-		<p class="lead"><strong>{ p.ClientName }</strong> wants to access the account <strong>{ p.Account }</strong>.</p>
-		<p>It asks to:</p>
+	@layout(p.Layout, p.T(i18n.ConsentTitle)) {
+		<p class="lead">
+			@message(p.Text.Parts(i18n.ConsentLead), map[string]templ.Component{
+				"client":  strong(p.ClientName),
+				"account": strong(p.Account),
+			})
+		</p>
+		<p>{ p.T(i18n.ConsentAsks) }</p>
 		<ul class="scopes">
 			for _, scope := range p.Scopes {
 				<li>{ scope }</li>
@@ -51,8 +256,8 @@ templ Consent(p ConsentPage) {
 		</ul>
 		<form method="post" action={ templ.SafeURL(p.Action) }>
 			<input type="hidden" name="request" value={ p.RequestID }/>
-			<button id="allow" type="submit" name="decision" value="allow">Allow</button>
-			<button id="deny" class="secondary" type="submit" name="decision" value="deny">Deny</button>
+			<button id="allow" type="submit" name="decision" value="allow">{ p.T(i18n.ConsentAllow) }</button>
+			<button id="deny" class="secondary" type="submit" name="decision" value="deny">{ p.T(i18n.ConsentDeny) }</button>
 		</form>
 	}
 }
@@ -63,12 +268,12 @@ templ Consent(p ConsentPage) {
 // formPostScript, which the page's Content Security Policy allows by its
 // hash.
 templ FormPost(p FormPostPage) {
-	@layout(p.Layout, "Returning to the application") {
+	@layout(p.Layout, p.T(i18n.FormPostTitle)) {
 		<form id="response" method="post" action={ templ.SafeURL(p.Action) }>
 			for _, f := range p.Fields {
 				<input type="hidden" name={ f.Name } value={ f.Value }/>
 			}
-			<button id="continue" type="submit">Continue</button>
+			<button id="continue" type="submit">{ p.T(i18n.FormPostContinue) }</button>
 		</form>
 		@templ.Raw("<script>" + formPostScript + "</script>")
 	}
@@ -77,40 +282,43 @@ templ FormPost(p FormPostPage) {
 // Logout renders the page where the user confirms signing out. To stay
 // signed in, the user closes the page.
 templ Logout(p LogoutPage) {
-	@layout(p.Layout, "Sign out") {
+	@layout(p.Layout, p.T(i18n.LogoutTitle)) {
 		if p.ClientName != "" {
-			<p class="lead"><strong>{ p.ClientName }</strong> asks you to sign out.</p>
+			<p class="lead">
+				@message(p.Text.Parts(i18n.LogoutLead), map[string]templ.Component{"client": strong(p.ClientName)})
+			</p>
 		}
 		if p.Account != "" {
-			<p>You are signed in as <strong>{ p.Account }</strong>.</p>
+			<p>
+				@message(p.Text.Parts(i18n.LogoutAccount), map[string]templ.Component{"account": strong(p.Account)})
+			</p>
 		}
-		@logoutProblem(p.Problem)
+		@logoutProblem(p.Layout, p.Problem)
 		<form method="post" action={ templ.SafeURL(p.Action) }>
 			for _, f := range p.Fields {
 				<input type="hidden" name={ f.Name } value={ f.Value }/>
 			}
-			<button id="logout" type="submit" autofocus>Sign out</button>
+			<button id="logout" type="submit" autofocus>{ p.T(i18n.LogoutSubmit) }</button>
 		</form>
-		<p>To stay signed in, close this page.</p>
+		<p>{ p.T(i18n.LogoutStay) }</p>
 	}
 }
 
 // SignedOut renders the page shown after the session ended, when the
 // browser does not return to an application.
 templ SignedOut(p SignedOutPage) {
-	@layout(p.Layout, "You are signed out") {
-		@logoutProblem(p.Problem)
-		<p>You can close this page.</p>
+	@layout(p.Layout, p.T(i18n.SignedOutTitle)) {
+		@logoutProblem(p.Layout, p.Problem)
+		<p>{ p.T(i18n.SignedOutClose) }</p>
 	}
 }
 
 // logoutProblem explains why the browser stays at Clavis after signing out.
-templ logoutProblem(problem string) {
+// The problem itself is fixed English text about the request's parameters,
+// meant for the application's developers.
+templ logoutProblem(l Layout, problem string) {
 	if problem != "" {
-		<p class="error" role="alert">
-			The application's sign-out request cannot be completed as sent ({ problem }), so you stay on
-			this site after signing out.
-		</p>
+		<p class="error" role="alert">{ l.T(i18n.LogoutProblem, "problem", problem) }</p>
 	}
 }
 
@@ -118,5 +326,125 @@ templ logoutProblem(problem string) {
 templ Error(p ErrorPage) {
 	@layout(p.Layout, p.Title) {
 		<p>{ p.Message }</p>
+	}
+}
+
+// accountNav links the account pages to each other and signs the user out.
+templ accountNav(l Layout, n AccountNav) {
+	<nav class="account" aria-label={ l.T(i18n.AccountNavLabel) }>
+		@navLink(n.ProfileURL, l.T(i18n.AccountNavProfile), n.Current == n.ProfileURL)
+		@navLink(n.PasswordURL, l.T(i18n.AccountNavPassword), n.Current == n.PasswordURL)
+		@navLink(n.ApplicationsURL, l.T(i18n.AccountNavApplications), n.Current == n.ApplicationsURL)
+		<form method="post" action={ templ.SafeURL(n.LogoutURL) }>
+			<button id="sign-out" class="link" type="submit">{ l.T(i18n.AccountSignOut) }</button>
+		</form>
+	</nav>
+}
+
+templ navLink(href, text string, current bool) {
+	if current {
+		<a href={ templ.SafeURL(href) } aria-current="page">{ text }</a>
+	} else {
+		<a href={ templ.SafeURL(href) }>{ text }</a>
+	}
+}
+
+// pageMessages renders the notice and the errors of an account page.
+templ pageMessages(notice string, errors []string) {
+	if notice != "" {
+		<p class="notice" role="status">{ notice }</p>
+	}
+	if len(errors) > 0 {
+		<ul class="error" role="alert">
+			for _, e := range errors {
+				<li>{ e }</li>
+			}
+		</ul>
+	}
+}
+
+// field renders a labeled input of the profile form, with a hint unless it
+// is empty.
+templ field(f ProfileField) {
+	<div class={ "field", templ.KV("full", f.Full) }>
+		<label for={ f.Name }>{ f.Label }</label>
+		if f.Lines {
+			<textarea id={ f.Name } name={ f.Name } rows="3" autocomplete={ f.Autocomplete }>{ f.Value }</textarea>
+		} else if f.Hint != "" {
+			<input id={ f.Name } name={ f.Name } type={ f.Type } autocomplete={ f.Autocomplete } value={ f.Value } aria-describedby={ f.Name + "-hint" }/>
+			<p id={ f.Name + "-hint" } class="hint">{ f.Hint }</p>
+		} else {
+			<input id={ f.Name } name={ f.Name } type={ f.Type } autocomplete={ f.Autocomplete } value={ f.Value }/>
+		}
+	</div>
+}
+
+// Account renders the profile of the signed-in user (ADR 0028).
+templ Account(p AccountPage) {
+	@layout(p.Layout, p.T(i18n.AccountTitle)) {
+		@accountNav(p.Layout, p.Nav)
+		<p class="lead">
+			@message(p.Text.Parts(i18n.LogoutAccount), map[string]templ.Component{"account": strong(p.Email)})
+		</p>
+		@pageMessages(p.Notice, p.Errors)
+		<form method="post" action={ templ.SafeURL(p.Action) }>
+			for _, section := range p.Sections {
+				<fieldset>
+					<legend>{ section.Title }</legend>
+					for _, f := range section.Fields {
+						@field(f)
+					}
+				</fieldset>
+			}
+			<button id="save" type="submit">{ p.T(i18n.AccountSave) }</button>
+		</form>
+	}
+}
+
+// AccountPassword renders the form that changes the password of the
+// signed-in user.
+templ AccountPassword(p AccountPasswordPage) {
+	@layout(p.Layout, p.T(i18n.AccountPasswordTitle)) {
+		@accountNav(p.Layout, p.Nav)
+		@pageMessages(p.Notice, p.Errors)
+		<form method="post" action={ templ.SafeURL(p.Action) }>
+			<input type="email" name="username" autocomplete="username" value={ p.Email } readonly hidden/>
+			<label for="current-password">{ p.T(i18n.AccountCurrentPassword) }</label>
+			<input id="current-password" name="current_password" type="password" autocomplete="current-password" required/>
+			<label for="new-password">{ p.T(i18n.AccountNewPassword) }</label>
+			<input id="new-password" name="new_password" type="password" autocomplete="new-password" minlength={ strconv.Itoa(p.MinLength) } required aria-describedby="new-password-hint"/>
+			<p id="new-password-hint" class="hint">{ p.T(i18n.PasswordHint, "min", strconv.Itoa(p.MinLength), "max", strconv.Itoa(p.MaxLength)) }</p>
+			<button id="submit" type="submit">{ p.T(i18n.ResetPasswordSubmit) }</button>
+		</form>
+	}
+}
+
+// AccountApplications renders the applications that the signed-in user
+// allowed, each with a button that removes its access (ADR 0020).
+templ AccountApplications(p AccountApplicationsPage) {
+	@layout(p.Layout, p.T(i18n.AccountApplicationsTitle)) {
+		@accountNav(p.Layout, p.Nav)
+		@pageMessages(p.Notice, nil)
+		if len(p.Applications) == 0 {
+			<p>{ p.T(i18n.AccountApplicationsNone) }</p>
+		} else {
+			<p class="lead">{ p.T(i18n.AccountApplicationsLead) }</p>
+			<ul class="applications">
+				for _, a := range p.Applications {
+					<li>
+						<strong>{ a.Name }</strong>
+						<ul class="scopes">
+							for _, scope := range a.Scopes {
+								<li>{ scope }</li>
+							}
+						</ul>
+						<form method="post" action={ templ.SafeURL(p.Action) }>
+							<input type="hidden" name="client_id" value={ a.ClientID }/>
+							<button class="secondary" type="submit">{ p.T(i18n.AccountRemoveAccess) }</button>
+						</form>
+					</li>
+				}
+			</ul>
+		}
 	}
 }
