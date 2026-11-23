@@ -3,11 +3,6 @@
 # ignoreUntil date and remove it as soon as a fixed version exists.
 
 [[IgnoredVulns]]
-id = "GO-2026-5932"
-ignoreUntil = 2027-01-14
-reason = "golang.org/x/crypto/openpgp is deprecated and will never be fixed. GoReleaser links it only through its ko pipe, and .goreleaser.yaml defines no ko builds, so the code never runs."
-
-[[IgnoredVulns]]
-id = "GO-2026-6225"
-ignoreUntil = 2027-01-14
-reason = "docker-credential-acr-env has no fixed version. GoReleaser links it only through its ko pipe, for Azure Container Registry credentials. Clavis builds images with dockers_v2 and pushes only to ghcr.io, so the code never runs."
+id = "GO-2026-6905"
+ignoreUntil = 2027-02-23
+reason = "github.com/blakesmith/ar has no fixed version. GoReleaser links it only through its nfpm pipe, which builds Debian packages, and .goreleaser.yaml defines no nfpms, so the code never runs. The vulnerable Reader.Read reads archives, nfpm only writes them, and govulncheck finds no call to it."
