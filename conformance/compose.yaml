@@ -45,7 +45,7 @@ services:
       - server
 
   clavis:
-    image: gcr.io/distroless/static-debian13:nonroot@sha256:aafe993665bf6200db38a02c11a9351e782a84b6a45e7f33b6695638c88e3931
+    image: gcr.io/distroless/static-debian13:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5
     command: ["/clavis", "serve"]
     volumes:
       # A Linux build of the current commit, written by run.sh.
@@ -60,7 +60,7 @@ services:
   # Terminates TLS for Clavis with a certificate from Caddy's internal CA. The
   # suite reaches the issuer https://clavis.test through this alias.
   clavis-tls:
-    image: caddy:2.11@sha256:4e2425f6009577e7c651010f16679c28f7d12df3e7b1914f941a7a3370746b3c
+    image: caddy:2.11@sha256:4851e54a46b206517c574821bb5cc67f170d2156041e9fbc4c9193b45e84a75b
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
     networks:
